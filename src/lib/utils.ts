@@ -3,8 +3,14 @@ import {
   englishDataset,
   englishRecommendedTransformers,
 } from "obscenity";
+import { type ClassValue, clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 
 import type { User } from "@prisma/client";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
 
 export function formatName(fullName: User["name"] | undefined): string {
   if (!fullName) return "Anonymous User";
