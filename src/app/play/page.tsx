@@ -4,10 +4,25 @@ import { useState } from "react";
 import { GameBoard } from "../../components/game/game-board";
 import { GameOptions } from "../../components/game/game-options";
 import { OpponentSearchModal } from "../../components/game/opponent-search-modal";
+import { useGameStore } from "@/stores/game-store";
 
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const { gameMode, setStatus } = useGameStore();
+
+  const handleStartGame = () => {
+    if (gameMode === 'online') {
+      setIsSearchOpen(true);
+      // Simulate finding match after 3s
+      setTimeout(() => {
+        setIsSearchOpen(false);
+        setStatus("in-progress");
+      }, 3000);
+    } else if (gameMode === 'computer') {
+      setStatus("in-progress");
+    }
+  };
 
   return (
     <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
@@ -22,7 +37,7 @@ export default function PlayPage() {
 
         {/* Right Panel - Game Options */}
         <div className="w-full max-w-sm flex-none">
-          <GameOptions onStartGame={() => setIsSearchOpen(true)} />
+          <GameOptions onStartGame={handleStartGame} />
         </div>
       </div>
 
@@ -33,4 +48,3 @@ export default function PlayPage() {
     </main>
   );
 }
-
