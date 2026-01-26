@@ -9,7 +9,7 @@ import { ReactNode, useState } from "react";
 
 const config = getDefaultConfig({
   appName: "Chessdict",
-  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "YOUR_PROJECT_ID",
+  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "4e8929e0682855581f1430d41829e205", // Fallback to hardcoded demo ID if env fails
   chains: [mainnet, sepolia, polygon, optimism, arbitrum],
   ssr: true,
 });
