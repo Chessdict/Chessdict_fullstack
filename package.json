@@ -1,9 +1,9 @@
 {
-  "name": "nextjs",
+  "name": "chessdict-app",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -16,26 +16,35 @@
     "@auth/prisma-adapter": "^2.7.4",
     "@prisma/client": "6.3.0",
     "@prisma/extension-accelerate": "^1.2.1",
+    "@rainbow-me/rainbowkit": "^2.2.9",
+    "@tanstack/react-query": "^5.90.8",
+    "chess.js": "^1.4.0",
+    "framer-motion": "^12.23.24",
     "nanoid": "^5.1.6",
-    "next": "15.1.5",
+    "next": "16.0.3",
     "next-auth": "^5.0.0-beta.25",
     "obscenity": "0.4.3",
-    "react": "19.0.0",
-    "react-dom": "19.0.0",
-    "zod": "^4.3.5"
+    "react": "19.2.0",
+    "react-chessboard": "^5.8.4",
+    "react-dom": "19.2.0",
+    "viem": "^2.39.0",
+    "wagmi": "^2.19.4",
+    "zod": "^4.3.5",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "3.2.0",
-    "@types/node": "22.10.7",
-    "@types/react": "19.0.7",
-    "@types/react-dom": "19.0.3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
     "eslint": "9.18.0",
-    "eslint-config-next": "15.1.5",
+    "eslint-config-next": "16.0.3",
     "postcss": "8.5.1",
     "prisma": "6.3.0",
-    "tailwindcss": "3.4.17",
+    "tailwindcss": "^4",
     "tsx": "4.19.2",
-    "typescript": "5.7.3"
+    "typescript": "^5"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
