@@ -1,15 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GameBoard } from "../../components/game/game-board";
 import { GameOptions } from "../../components/game/game-options";
 import { OpponentSearchModal } from "../../components/game/opponent-search-modal";
 import { useGameStore } from "@/stores/game-store";
-
+import { useSocket } from '@/hooks/useSocket';
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { gameMode, setStatus } = useGameStore();
+  const { socket, isConnected } = useSocket();
+
+
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('message', (data) => {
+      console.log(data);
+    });
+
+    return () => {
+      socket.off('message');
+    };
+  }, [socket]);
+
 
   const handleStartGame = () => {
     if (gameMode === 'online') {
