@@ -36,6 +36,7 @@ export default function PlayPage() {
       }, 3000);
     } else if (gameMode === 'computer') {
       setStatus("in-progress");
+      console.log("computer")
     }
   };
 
