@@ -1,21 +1,12 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 interface OpponentSearchModalProps {
     isOpen: boolean;
     onClose: () => void;
 }
-
-const mockOpponents = [
-    { id: 1, name: "Ezeugwu Romanus", address: "CTYZ..ZgXe", avatar: "/images/king_pin.svg" }, // using placeholder avatar
-    { id: 2, name: "Ezeugwu Romanus", address: "CTYZ..2gXs", avatar: "/images/king_pin.svg" },
-    { id: 3, name: "Ezeugwu Romanus", address: "CTYZ..2gXe", avatar: "/images/king_pin.svg" },
-    { id: 4, name: "Ezeugwu Romanus", address: "CTYZ..2gXe", avatar: "/images/king_pin.svg" },
-    { id: 5, name: "Ezeugwu Romanus", address: "CTYZ..2gXs", avatar: "/images/king_pin.svg" },
-];
 
 export function OpponentSearchModal({ isOpen, onClose }: OpponentSearchModalProps) {
     // Prevent scrolling when modal is open
@@ -52,7 +43,7 @@ export function OpponentSearchModal({ isOpen, onClose }: OpponentSearchModalProp
                     >
                         {/* Header */}
                         <div className="relative flex items-center justify-center border-b border-white/5 p-6">
-                            <h2 className="text-lg font-medium text-white">Search for opponents</h2>
+                            <h2 className="text-lg font-medium text-white">Searching for Opponent</h2>
                             <button
                                 onClick={onClose}
                                 className="absolute right-6 top-1/2 -translate-y-1/2 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white transition-colors"
@@ -72,48 +63,19 @@ export function OpponentSearchModal({ isOpen, onClose }: OpponentSearchModalProp
                                     <line x1="6" y1="6" x2="18" y2="18" />
                                 </svg>
                             </button>
-                            <button
-                                className="absolute left-6 top-1/2 -translate-y-1/2 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white transition-colors"
-                            >
-                                {/* Help Icon placeholder if needed */}
-                                <span className="flex h-5 w-5 items-center justify-center rounded-full border border-current text-xs">?</span>
-                            </button>
                         </div>
 
                         {/* Content */}
-                        <div className="flex flex-col p-2">
-                            <div className="flex justify-center py-4">
-                                <div className="animate-spin text-white">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                        <div className="flex flex-col p-8">
+                            <div className="flex flex-col items-center justify-center gap-6 py-8">
+                                <div className="relative h-20 w-20">
+                                    <div className="absolute inset-0 rounded-full border-4 border-white/5" />
+                                    <div className="absolute inset-0 rounded-full border-4 border-t-white animate-spin" />
                                 </div>
-                            </div>
-
-                            <div className="flex max-h-[300px] flex-col gap-1 overflow-y-auto px-2 pb-4">
-                                {mockOpponents.map((opponent, index) => (
-                                    <button
-                                        key={`${opponent.id}-${index}`}
-                                        className="flex items-center gap-3 rounded-2xl p-3 text-left transition-colors hover:bg-white/5"
-                                    >
-                                        <div className="relative h-10 w-10 overflow-hidden rounded-full bg-red-400">
-                                            {/* Avatar placeholder - colored bg if image fails */}
-                                            <Image
-                                                src={opponent.avatar}
-                                                alt={opponent.name}
-                                                fill
-                                                className="object-cover"
-                                                onError={(e) => {
-                                                    // Fallback logic could go here, but purely CSS/div based fallback is safer for now if image missing
-                                                    const target = e.target as HTMLImageElement;
-                                                    target.style.display = 'none';
-                                                }}
-                                            />
-                                        </div>
-                                        <div className="flex flex-col">
-                                            <span className="text-sm font-medium text-white">{opponent.name}</span>
-                                            <span className="text-xs text-white/40">{opponent.address}</span>
-                                        </div>
-                                    </button>
-                                ))}
+                                <div className="text-center">
+                                    <p className="text-white font-medium">Matching you with an opponent...</p>
+                                    <p className="text-white/40 text-sm mt-1">This usually takes a few seconds</p>
+                                </div>
                             </div>
                         </div>
                     </motion.div>

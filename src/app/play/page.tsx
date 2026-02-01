@@ -8,11 +8,15 @@ import { useGameStore } from "@/stores/game-store";
 import { useSocket } from '@/hooks/useSocket';
 import { useAccount } from "wagmi";
 import { loginWithWallet } from "../actions";
+import { searchUsers } from "@/app/actions";
+import { ChallengeModal } from "@/components/game/challenge-modal";
 import { toast } from "sonner";
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { gameMode, setStatus, setRoomId, setPlayerColor, setOpponent } = useGameStore();
+  const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
+
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
 
@@ -43,20 +47,22 @@ export default function PlayPage() {
     });
 
     socket.on('challengeReceived', (data: { from: string }) => {
-      toast(`Incoming challenge from ${data.from.slice(0, 6)}...`, {
-        action: {
-          label: 'Accept',
-          onClick: () => {
-            socket.emit('acceptChallenge', { opponentId: data.from, userId: address });
-          },
-        },
-        duration: 10000,
-      });
+      setIncomingChallenge(data.from);
+    });
+
+    socket.on('challengeDeclined', (data: { from: string }) => {
+      toast.error(`Challenge declined by ${data.from.slice(0, 6)}...`);
+    });
+
+    socket.on('challengeError', (data: { error: string }) => {
+      toast.error(data.error);
     });
 
     return () => {
       socket.off('matchFound');
       socket.off('challengeReceived');
+      socket.off('challengeDeclined');
+      socket.off('challengeError');
     };
   }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address]);
 
@@ -85,6 +91,19 @@ export default function PlayPage() {
 
       {/* Main Content */}
       <div className="container relative mx-auto flex flex-1 flex-col items-start gap-12 px-6 pt-32 pb-6 lg:flex-row lg:justify-center">
+        {incomingChallenge && (
+          <ChallengeModal
+            from={incomingChallenge}
+            onAccept={() => {
+              socket?.emit('acceptChallenge', { opponentId: incomingChallenge, userId: address });
+              setIncomingChallenge(null);
+            }}
+            onDecline={() => {
+              socket?.emit('declineChallenge', { toUserId: incomingChallenge, fromUserId: address });
+              setIncomingChallenge(null);
+            }}
+          />
+        )}
         {/* Left Panel - Chess Board */}
         <div className="w-full max-w-[720px] flex-none">
           <GameBoard />

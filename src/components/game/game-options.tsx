@@ -6,7 +6,8 @@ import { useGameStore } from "@/stores/game-store";
 import Image from "next/image";
 import { GlassButton } from "../glass-button";
 import { GlassBg } from "../glass-bg";
-import { searchUsers } from "@/app/actions";
+import { searchUsers, getRecentOpponents } from "@/app/actions";
+import { useEffect } from "react";
 import { toast } from "sonner";
 
 type Tab = "new-game" | "games" | "players";
@@ -24,10 +25,7 @@ interface Opponent {
   avatar?: string;
 }
 
-const mockOpponents = [
-  { id: 1, name: "Ezeugwu Romanus", address: "CTYZ..ZgXe", avatar: "/images/king_pin.svg" },
-  { id: 2, name: "Ezeugwu Romanus", address: "CTYZ..2gXs", avatar: "/images/king_pin.svg" },
-];
+
 
 const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: string; setTimeControl: (value: string) => void }) => (
   <div className="relative">
@@ -57,6 +55,39 @@ export function GameOptions({ onStartGame, socket, userId }: GameOptionsProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [recentOpponents, setRecentOpponents] = useState<any[]>([]);
+  const [onlineStatus, setOnlineStatus] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (userId) {
+      getRecentOpponents(userId).then(res => {
+        if (res && res.success) setRecentOpponents(res.opponents || []);
+      });
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const interval = setInterval(() => {
+      const idsToCheck = [
+        ...searchResults.map(u => u.walletAddress),
+        ...recentOpponents.map(u => u.walletAddress)
+      ];
+      if (idsToCheck.length > 0) {
+        socket.emit("checkStatus", { userIds: idsToCheck });
+      }
+    }, 5000);
+
+    socket.on("statusUpdate", ({ statusMap }: { statusMap: Record<string, string> }) => {
+      setOnlineStatus(prev => ({ ...prev, ...statusMap }));
+    });
+
+    return () => {
+      clearInterval(interval);
+      socket.off("statusUpdate");
+    };
+  }, [socket, searchResults, recentOpponents]);
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
@@ -259,7 +290,13 @@ export function GameOptions({ onStartGame, socket, userId }: GameOptionsProps) {
                     onClick={() => setSelectedOpponent(user)}
                     className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10"
                   >
-                    <div className="h-10 w-10 flex items-center justify-center rounded-full bg-white/10 text-xs font-bold uppercase">{user.walletAddress.slice(2, 4)}</div>
+                    <div className="relative h-10 w-10 flex items-center justify-center rounded-full bg-white/10 text-xs font-bold uppercase">
+                      {user.walletAddress.slice(2, 4)}
+                      <div className={cn(
+                        "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#121212]",
+                        onlineStatus[user.walletAddress] === "online" ? "bg-green-500" : "bg-gray-500"
+                      )} />
+                    </div>
                     <span className="text-sm text-white truncate">{user.walletAddress}</span>
                   </button>
                 ))}
@@ -268,21 +305,31 @@ export function GameOptions({ onStartGame, socket, userId }: GameOptionsProps) {
 
             <div className="space-y-2">
               <p className="text-sm text-white/60">Recent Opponents</p>
-              {mockOpponents.map(opp => (
+              {recentOpponents.length > 0 ? recentOpponents.map(opp => (
                 <button
                   key={opp.id}
-                  onClick={() => setSelectedOpponent({ id: opp.id, walletAddress: opp.address, name: opp.name, avatar: opp.avatar })}
+                  onClick={() => setSelectedOpponent(opp)}
                   className="flex w-full items-center gap-3 rounded-2xl p-3 text-left transition hover:bg-white/5"
                 >
-                  <div className="h-10 w-10 overflow-hidden rounded-full bg-white/10">
-                    <Image src={opp.avatar} alt={opp.name} width={40} height={40} className="object-cover" />
+                  <div className="relative h-10 w-10 overflow-hidden rounded-full bg-white/10 flex items-center justify-center text-xs font-bold bg-linear-to-br from-white/10 to-white/5">
+                    {opp.avatar ? (
+                      <Image src={opp.avatar} alt={opp.walletAddress} width={40} height={40} className="object-cover" />
+                    ) : (
+                      opp.walletAddress.slice(2, 4).toUpperCase()
+                    )}
+                    <div className={cn(
+                      "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#121212]",
+                      onlineStatus[opp.walletAddress] === "online" ? "bg-green-500" : "bg-gray-500"
+                    )} />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm text-white">{opp.name}</span>
-                    <span className="text-xs text-white/40">{opp.address}</span>
+                    <span className="text-sm text-white">{opp.walletAddress.slice(0, 8)}...</span>
+                    <span className="text-xs text-white/40">{onlineStatus[opp.walletAddress] || "offline"}</span>
                   </div>
                 </button>
-              ))}
+              )) : (
+                <div className="py-4 text-center text-xs text-white/20 italic">No recent opponents found</div>
+              )}
             </div>
           </div>
         )}

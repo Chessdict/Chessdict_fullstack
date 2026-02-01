@@ -115,3 +115,77 @@ export async function searchUsers(query: string) {
     return { success: false, error: "Failed to search users" };
   }
 }
+export async function getRecentOpponents(walletAddress: string) {
+  if (!walletAddress)
+    return { success: false, error: "Wallet address is required" };
+
+  try {
+    const user = await (prisma.user as any).findUnique({
+      where: { walletAddress },
+      select: { id: true },
+    });
+
+    if (!user) return { success: true, opponents: [] };
+
+    const games = await (prisma as any).game.findMany({
+      where: {
+        OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      include: {
+        whitePlayer: true,
+        blackPlayer: true,
+      },
+    });
+
+    const opponentsMap = new Map();
+    games.forEach((game) => {
+      const white = game.whitePlayer;
+      const black = game.blackPlayer;
+      if (white && white.walletAddress !== walletAddress) {
+        opponentsMap.set(white.walletAddress, white);
+      }
+      if (black && black.walletAddress !== walletAddress) {
+        opponentsMap.set(black.walletAddress, black);
+      }
+    });
+
+    return { success: true, opponents: Array.from(opponentsMap.values()) };
+  } catch (error) {
+    console.error("Error fetching recent opponents:", error);
+    return { success: false, error: "Failed to fetch recent opponents" };
+  }
+}
+
+export async function createGame(
+  whiteAddress: string,
+  blackAddress: string,
+  fen: string = "start",
+) {
+  try {
+    const white = await (prisma.user as any).findUnique({
+      where: { walletAddress: whiteAddress },
+    });
+    const black = await (prisma.user as any).findUnique({
+      where: { walletAddress: blackAddress },
+    });
+
+    if (!white || !black)
+      return { success: false, error: "One or both players not found" };
+
+    const game = await (prisma as any).game.create({
+      data: {
+        whitePlayerId: white.id,
+        blackPlayerId: black.id,
+        fen: fen,
+        status: "IN_PROGRESS",
+      },
+    });
+
+    return { success: true, gameId: game.id };
+  } catch (error) {
+    console.error("Error creating game:", error);
+    return { success: false, error: "Failed to create game" };
+  }
+}
