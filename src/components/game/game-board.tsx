@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Chess, Move } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useGameStore } from "@/stores/game-store";
 import { getBestMove } from "@/lib/chess-ai";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
+import { ResignConfirmModal } from "./resign-confirm-modal";
 
 export function GameBoard() {
   const {
@@ -27,6 +28,7 @@ export function GameBoard() {
   } = useGameStore();
 
   const [ping, setPing] = useState<number>(0);
+  const [showResignModal, setShowResignModal] = useState(false);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
@@ -243,6 +245,26 @@ export function GameBoard() {
     console.log("[CLIENT] Resign button state check:", { status, gameMode, roomId, address, socketConnected: socket?.connected });
   }, [status, gameMode, roomId, address, socket?.connected]);
 
+  // Handle resign action
+  const handleResign = useCallback(() => {
+    console.log("[CLIENT] handleResign called");
+    console.log("[CLIENT] Emitting resign event:", { roomId, userId: address, socketConnected: socket?.connected });
+
+    if (!socket) {
+      console.error("[CLIENT] Socket is not available!");
+      return;
+    }
+
+    if (!roomId) {
+      console.error("[CLIENT] Room ID is not available!");
+      return;
+    }
+
+    socket.emit("resign", { roomId, userId: address });
+    console.log("[CLIENT] Resign event emitted successfully");
+    setShowResignModal(false);
+  }, [socket, roomId, address]);
+
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
   const playerTurnCode = effectiveColor === 'black' ? 'b' : 'w';
@@ -358,11 +380,8 @@ export function GameBoard() {
           {status === 'in-progress' && ['online', 'friend'].includes(gameMode || '') && (
             <button
               onClick={() => {
-                console.log("[CLIENT] Resign button clicked!");
-                if (confirm("Are you sure you want to resign? This will count as a loss.")) {
-                  console.log("[CLIENT] Emitting resign event:", { roomId, userId: address, socketConnected: socket?.connected });
-                  socket?.emit("resign", { roomId, userId: address });
-                }
+                console.log("[CLIENT] Resign button clicked - opening modal");
+                setShowResignModal(true);
               }}
               className="flex items-center gap-1 text-[10px] font-bold text-red-500/80 hover:text-red-400 uppercase tracking-widest px-2 py-1 hover:bg-red-500/10 rounded transition-all"
             >
@@ -387,6 +406,12 @@ export function GameBoard() {
         </div>
       </div>
 
+      {/* Resign Confirmation Modal */}
+      <ResignConfirmModal
+        isOpen={showResignModal}
+        onConfirm={handleResign}
+        onCancel={() => setShowResignModal(false)}
+      />
     </div>
   );
 }
