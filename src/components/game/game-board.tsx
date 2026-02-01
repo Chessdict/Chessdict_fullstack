@@ -20,8 +20,13 @@ export function GameBoard() {
     addMove,
     clearMoves,
     setOpponentConnected,
+
+    gameOver,
+    setGameOver,
     reset: resetStore
   } = useGameStore();
+
+  const [ping, setPing] = useState<number>(0);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
@@ -54,11 +59,11 @@ export function GameBoard() {
           piece: result.piece,
           timestamp: Date.now(),
         });
-        console.log("INTERNAL: Move success", { move, turn: game.turn(), fen: game.fen() });
+
         return result;
       }
     } catch (e) {
-      console.error("INTERNAL: Move error", e);
+      console.error(e);
     }
     return null;
   }, [game, syncState, addMove]);
@@ -70,7 +75,6 @@ export function GameBoard() {
       syncState();
       setLastMove(null);
       clearMoves();
-      console.log("GAME: Board reset to start position");
     }
   }, [status, game, syncState, clearMoves]);
 
@@ -84,11 +88,9 @@ export function GameBoard() {
     const botTurnCode = myColor === 'white' ? 'b' : 'w';
 
     if (turn === botTurnCode) {
-      console.log("BOT: Bot thinking...");
       const timeoutId = setTimeout(() => {
         const move = getBestMove(new Chess(game.fen()), difficulty);
         if (move) {
-          console.log("BOT: Bot making move", move);
           safeMove(move);
         }
       }, 600);
@@ -104,7 +106,6 @@ export function GameBoard() {
     // Explicitly join the room to ensure we receive opponent moves
     // This handles cases where socket reconnects or component remounts
     const joinRoom = () => {
-      console.log("NETWORK: Joining room", roomId);
       socket.emit("joinRoom", { roomId });
     };
 
@@ -125,7 +126,6 @@ export function GameBoard() {
     if (!socket || !isMultiplayer || !roomId) return;
 
     const handleOpponentMove = (move: any) => {
-      console.log("NETWORK: Received opponent move", move);
       safeMove(move);
     };
 
@@ -133,34 +133,62 @@ export function GameBoard() {
     return () => { socket.off('opponentMove', handleOpponentMove); };
   }, [socket, gameMode, roomId, safeMove]);
 
-  // Track opponent connection status
+  // Track opponent connection status and Game Over events
   useEffect(() => {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
     if (!socket || !isMultiplayer || !roomId) return;
 
     const handleOpponentJoined = () => {
-      console.log("NETWORK: Opponent joined the room");
       setOpponentConnected(true);
     };
 
     const handleOpponentLeft = () => {
-      console.log("NETWORK: Opponent left the room");
       setOpponentConnected(false);
     };
+
+    const handleGameOver = ({ winner, reason }: { winner: "white" | "black" | "draw" | "opponent"; reason: any }) => {
+      console.log("[CLIENT] gameOver event received:", { winner, reason });
+      setGameOver(winner, reason);
+      setStatus("finished");
+    };
+
+    const handleResignError = ({ error }: { error: string }) => {
+      console.error("[CLIENT] resignError event received:", error);
+      alert(`Failed to resign: ${error}`);
+    };
+
+    const handlePong = (data: { timestamp: number }) => {
+      const now = Date.now();
+      const rtt = now - data.timestamp;
+      setPing(rtt);
+    };
+
+    // Ping interval
+    const pingInterval = setInterval(() => {
+      socket.emit("ping");
+    }, 5000);
 
     // Set connected when we have an opponent
     if (opponent) {
       setOpponentConnected(true);
     }
 
+    console.log("[CLIENT] Setting up socket listeners for room:", roomId);
     socket.on('opponentJoined', handleOpponentJoined);
     socket.on('opponentLeft', handleOpponentLeft);
+    socket.on('gameOver', handleGameOver);
+    socket.on('pong', handlePong);
+    socket.on('resignError', handleResignError);
 
     return () => {
+      clearInterval(pingInterval);
       socket.off('opponentJoined', handleOpponentJoined);
       socket.off('opponentLeft', handleOpponentLeft);
+      socket.off('gameOver', handleGameOver);
+      socket.off('pong', handlePong);
+      socket.off('resignError', handleResignError);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus]);
 
   // Primary Move Handler for Chessboard
   const onDrop = useCallback((source: string, target: string) => {
@@ -179,10 +207,7 @@ export function GameBoard() {
     const turn = game.turn();
     const myTurnCode = myColor === 'black' ? 'b' : 'w';
 
-    console.log("ACTION: Drag drop detected", { source, target, turn, myTurnCode, myColor });
-
     if (turn !== myTurnCode) {
-      console.warn(`ACTION: Not your turn. Current turn: ${turn}, You: ${myTurnCode}`);
       return false;
     }
 
@@ -191,13 +216,11 @@ export function GameBoard() {
 
     if (result) {
       if (isMultiplayer && roomId) {
-        console.log("NETWORK: Emitting move", moveData);
         socket?.emit("movePiece", { roomId, move: moveData });
       }
       return true;
     }
 
-    console.warn("ACTION: Illegal move rejected", moveData);
     return false;
   }, [game, status, playerColor, gameMode, roomId, socket, safeMove]);
 
@@ -212,33 +235,18 @@ export function GameBoard() {
   useEffect(() => {
     if (playerColor) {
       setBoardKey(prev => prev + 1);
-      console.log("BOARD: Color set, forcing remount. Color:", playerColor);
     }
   }, [playerColor]);
+
+  // Debug: Log state for resign button visibility
+  useEffect(() => {
+    console.log("[CLIENT] Resign button state check:", { status, gameMode, roomId, address, socketConnected: socket?.connected });
+  }, [status, gameMode, roomId, address, socket?.connected]);
 
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
   const playerTurnCode = effectiveColor === 'black' ? 'b' : 'w';
   const isMyTurn = currentTurn === playerTurnCode;
-
-  // Debug Hook: expose game instance for console troubleshooting
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      (window as any).game = game;
-    }
-  }, [game]);
-
-  // Debug: Log orientation changes
-  useEffect(() => {
-    console.log("BOARD DEBUG:", {
-      playerColor,
-      effectiveColor,
-      orientation,
-      gameMode,
-      status,
-      roomId
-    });
-  }, [playerColor, effectiveColor, orientation, gameMode, status, roomId]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -260,6 +268,12 @@ export function GameBoard() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {['online', 'friend'].includes(gameMode || '') && (
+            <div className="flex items-center gap-2 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
+              <div className={`h-2 w-2 rounded-full ${ping < 100 ? 'bg-green-500' : ping < 300 ? 'bg-yellow-500' : 'bg-red-500'}`} />
+              <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
+            </div>
+          )}
           <div className="text-xl font-mono text-white/90 tabular-nums bg-black/40 px-3 py-1 rounded-lg border border-white/10">10:00</div>
         </div>
       </div>
@@ -292,6 +306,34 @@ export function GameBoard() {
               </div>
             </div>
           )}
+
+          {gameOver && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in zoom-in-95 duration-300">
+              <div className="bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
+                <div className={`mx-auto h-16 w-16 flex items-center justify-center rounded-full mb-4 ${gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                  {gameOver.winner === playerColor || gameOver.winner === 'opponent' ? (
+                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                  ) : (
+                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  )}
+                </div>
+                <h2 className="text-2xl font-black text-white mb-2">
+                  {(gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
+                </h2>
+                <p className="text-white/60 mb-6 capitalize">
+                  {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
+                    gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
+                      gameOver.reason}
+                </p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="w-full py-3 rounded-xl bg-white text-black font-bold hover:bg-gray-200 transition-colors"
+                >
+                  Play Again
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -313,7 +355,22 @@ export function GameBoard() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {status === 'in-progress' && (
+          {status === 'in-progress' && ['online', 'friend'].includes(gameMode || '') && (
+            <button
+              onClick={() => {
+                console.log("[CLIENT] Resign button clicked!");
+                if (confirm("Are you sure you want to resign? This will count as a loss.")) {
+                  console.log("[CLIENT] Emitting resign event:", { roomId, userId: address, socketConnected: socket?.connected });
+                  socket?.emit("resign", { roomId, userId: address });
+                }
+              }}
+              className="flex items-center gap-1 text-[10px] font-bold text-red-500/80 hover:text-red-400 uppercase tracking-widest px-2 py-1 hover:bg-red-500/10 rounded transition-all"
+            >
+              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>
+              Resign
+            </button>
+          )}
+          {status === 'in-progress' && gameMode === 'computer' && (
             <button
               onClick={() => {
                 if (confirm("Reset current board? (Local only)")) {

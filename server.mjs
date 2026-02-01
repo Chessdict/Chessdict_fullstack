@@ -27,6 +27,7 @@ app.prepare().then(() => {
   });
 
   const userSocketMap = new Map(); // userId -> socketId
+  const activeGames = new Map(); // socketId -> roomId
   const matchmakingQueue = [];
 
   const checkForMatch = async () => {
@@ -65,8 +66,14 @@ app.prepare().then(() => {
           // Join rooms
           const s1 = io.sockets.sockets.get(p1.socketId);
           const s2 = io.sockets.sockets.get(p2.socketId);
-          if (s1) s1.join(roomId);
-          if (s2) s2.join(roomId);
+          if (s1) {
+            s1.join(roomId);
+            activeGames.set(s1.id, roomId);
+          }
+          if (s2) {
+            s2.join(roomId);
+            activeGames.set(s2.id, roomId);
+          }
 
           console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId}`);
         }
@@ -98,8 +105,8 @@ app.prepare().then(() => {
 
     socket.on("joinRoom", ({ roomId }) => {
       socket.join(roomId);
+      activeGames.set(socket.id, roomId);
       console.log(`Socket ${socket.id} joined room ${roomId}`);
-      // Notify other players in the room that someone joined
       socket.to(roomId).emit("opponentJoined", { socketId: socket.id });
     });
 
@@ -140,6 +147,90 @@ app.prepare().then(() => {
       socket.emit("statusUpdate", { statusMap });
     });
 
+    socket.on("ping", () => {
+      socket.emit("pong", { timestamp: Date.now() });
+    });
+
+    socket.on("resign", async ({ roomId, userId }) => {
+      console.log(`[SERVER] Resignation received from ${userId} in room ${roomId}`);
+      console.log(`[SERVER] Socket ${socket.id} rooms:`, Array.from(socket.rooms));
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        console.log(`[SERVER] Game found:`, game ? { id: game.id, status: game.status, whitePlayerId: game.whitePlayerId, blackPlayerId: game.blackPlayerId } : null);
+        if (!game) {
+          console.error(`Game not found for roomId: ${roomId}`);
+          socket.emit("resignError", { error: "Game not found" });
+          return;
+        }
+
+        if (game.status !== "IN_PROGRESS") {
+          console.log(`Game ${roomId} is not in progress, status: ${game.status}`);
+          socket.emit("resignError", { error: "Game is not in progress" });
+          return;
+        }
+
+        // Determine winner
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+        console.log(`[SERVER] Players - White: ${whitePlayer?.walletAddress}, Black: ${blackPlayer?.walletAddress}, Resigning userId: ${userId}`);
+
+        let winnerId = null;
+        let winnerColor = null;
+
+        if (whitePlayer?.walletAddress === userId) {
+          winnerId = game.blackPlayerId;
+          winnerColor = "black";
+        } else if (blackPlayer?.walletAddress === userId) {
+          winnerId = game.whitePlayerId;
+          winnerColor = "white";
+        }
+
+        if (!winnerId) {
+          console.error(`Could not determine winner for resign. userId: ${userId}, white: ${whitePlayer?.walletAddress}, black: ${blackPlayer?.walletAddress}`);
+          socket.emit("resignError", { error: "Could not determine winner" });
+          return;
+        }
+
+        // Update game in database
+        await prisma.game.update({
+          where: { id: roomId },
+          data: {
+            status: "COMPLETED",
+            winnerId: winnerId
+          }
+        });
+
+        console.log(`[SERVER] Game ${roomId} ended by resignation. Winner: ${winnerColor}`);
+
+        // Emit gameOver to all players in the room
+        const roomSockets = io.sockets.adapter.rooms.get(roomId);
+        console.log(`[SERVER] Emitting gameOver to room ${roomId}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
+
+        // Also emit directly to both players via their socket IDs for reliability
+        const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
+        const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
+        console.log(`[SERVER] Direct socket IDs - White: ${whiteSocketId}, Black: ${blackSocketId}`);
+
+        const gameOverPayload = { winner: winnerColor, reason: "resignation" };
+
+        // Emit to room (backup)
+        io.to(roomId).emit("gameOver", gameOverPayload);
+
+        // Also emit directly to both player sockets
+        if (whiteSocketId) {
+          io.to(whiteSocketId).emit("gameOver", gameOverPayload);
+        }
+        if (blackSocketId) {
+          io.to(blackSocketId).emit("gameOver", gameOverPayload);
+        }
+
+        console.log(`[SERVER] gameOver event emitted successfully`);
+      } catch (error) {
+        console.error("Error processing resignation:", error);
+        socket.emit("resignError", { error: "Server error processing resignation" });
+      }
+    });
+
     socket.on("acceptChallenge", async ({ opponentId, userId: myId }) => {
       const targetSocketId = userSocketMap.get(opponentId);
 
@@ -165,6 +256,8 @@ app.prepare().then(() => {
             if (s1 && s2) {
               s1.join(roomId);
               s2.join(roomId);
+              activeGames.set(s1.id, roomId);
+              activeGames.set(s2.id, roomId);
 
               io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId });
               io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId });
@@ -180,14 +273,7 @@ app.prepare().then(() => {
     socket.on("disconnect", () => {
       console.log("Client disconnected:", socket.id);
 
-      // Remove from userSocketMap
-      for (const [uid, sid] of userSocketMap.entries()) {
-        if (sid === socket.id) {
-          userSocketMap.delete(uid);
-          console.log(`User ${uid} removed from map`);
-          break;
-        }
-      }
+      // (Moved userSocketMap cleanup to end to allow forfeit processing)
 
       // Remove from queue if present
       const index = matchmakingQueue.findIndex(p => p.socketId === socket.id);
@@ -195,8 +281,70 @@ app.prepare().then(() => {
         matchmakingQueue.splice(index, 1);
       }
       // Remove from socket map
+      const activeRoomId = activeGames.get(socket.id);
+      if (activeRoomId) {
+        console.log(`Socket ${socket.id} disconnected from active room ${activeRoomId}`);
+
+        // Capture user ID synchronously before cleanup
+        let disconnectedUserId = null;
+        for (const [uid, sid] of userSocketMap.entries()) {
+          if (sid === socket.id) {
+            disconnectedUserId = uid;
+            break;
+          }
+        }
+
+        // Emit to room first
+        io.to(activeRoomId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
+
+        // Also emit directly to all sockets in the room for reliability
+        const roomSockets = io.sockets.adapter.rooms.get(activeRoomId);
+        if (roomSockets) {
+          roomSockets.forEach(socketId => {
+            if (socketId !== socket.id) {
+              io.to(socketId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
+            }
+          });
+        }
+
+        (async () => {
+          try {
+            const game = await prisma.game.findUnique({ where: { id: activeRoomId } });
+            if (game && game.status === "IN_PROGRESS") {
+              if (disconnectedUserId) {
+                const whiteUser = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+                const blackUser = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+
+                let winnerId = null;
+                if (whiteUser?.walletAddress === disconnectedUserId) winnerId = game.blackPlayerId;
+                else if (blackUser?.walletAddress === disconnectedUserId) winnerId = game.whitePlayerId;
+
+                if (winnerId) {
+                  await prisma.game.update({
+                    where: { id: activeRoomId },
+                    data: { status: "COMPLETED", winnerId }
+                  });
+                }
+              }
+            }
+          } catch (e) {
+            console.error("Error handling disconnect forfeit:", e);
+          }
+        })();
+
+        activeGames.delete(socket.id);
+      }
+
       if (userId) {
         userSocketMap.delete(userId);
+      } else {
+        for (const [uid, sid] of userSocketMap.entries()) {
+          if (sid === socket.id) {
+            userSocketMap.delete(uid);
+            console.log(`User ${uid} removed from map (cleanup)`);
+            break;
+          }
+        }
       }
     });
   });

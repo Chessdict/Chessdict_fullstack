@@ -8,12 +8,12 @@ export type Player = {
 export type GameStatus = "waiting" | "matched" | "in-progress" | "finished";
 
 export type MoveRecord = {
-  san: string;        // Standard algebraic notation (e.g., "e4", "Nf3")
-  from: string;       // Source square
-  to: string;         // Target square
-  color: "w" | "b";   // Which player made the move
-  piece: string;      // Piece type
-  timestamp: number;  // When the move was made
+  san: string; // Standard algebraic notation (e.g., "e4", "Nf3")
+  from: string; // Source square
+  to: string; // Target square
+  color: "w" | "b"; // Which player made the move
+  piece: string; // Piece type
+  timestamp: number; // When the move was made
 };
 
 type GameState = {
@@ -40,6 +40,26 @@ type GameState = {
   // Connection status
   isOpponentConnected: boolean;
   setOpponentConnected: (connected: boolean) => void;
+  gameOver: {
+    winner: "white" | "black" | "draw" | "opponent" | null;
+    reason:
+      | "checkmate"
+      | "stalemate"
+      | "resignation"
+      | "disconnection"
+      | "draw"
+      | null;
+  } | null;
+  setGameOver: (
+    winner: "white" | "black" | "draw" | "opponent" | null,
+    reason:
+      | "checkmate"
+      | "stalemate"
+      | "resignation"
+      | "disconnection"
+      | "draw"
+      | null,
+  ) => void;
   reset: () => void;
 };
 
@@ -51,7 +71,9 @@ const initialState = {
   player: undefined,
   opponent: undefined,
   moves: [] as MoveRecord[],
+
   isOpponentConnected: false,
+  gameOver: null,
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -67,6 +89,14 @@ export const useGameStore = create<GameState>((set) => ({
   addMove: (move) => set((state) => ({ moves: [...state.moves, move] })),
   clearMoves: () => set({ moves: [] }),
   setOpponentConnected: (connected) => set({ isOpponentConnected: connected }),
+  setGameOver: (winner, reason) => set({ gameOver: { winner, reason } }),
   reset: () =>
-    set({ ...initialState, roomId: undefined, playerColor: undefined, moves: [], isOpponentConnected: false }),
+    set({
+      ...initialState,
+      roomId: undefined,
+      playerColor: undefined,
+      moves: [],
+      isOpponentConnected: false,
+      gameOver: null,
+    }),
 }));
