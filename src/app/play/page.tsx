@@ -6,12 +6,31 @@ import { GameOptions } from "../../components/game/game-options";
 import { OpponentSearchModal } from "../../components/game/opponent-search-modal";
 import { useGameStore } from "@/stores/game-store";
 import { useSocket } from '@/hooks/useSocket';
+import { useAccount } from "wagmi";
+import { loginWithWallet } from "../actions";
+import { toast } from "sonner";
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { gameMode, setStatus } = useGameStore();
-  const { socket, isConnected } = useSocket();
 
+  const { socket, isConnected: isSocketConnected } = useSocket();
+  const { address, isConnected } = useAccount();
+
+
+  useEffect(() => {
+    if (isConnected && address) {
+      loginWithWallet(address)
+        .then((result) => {
+          if (result.success) {
+            console.log("Logged in with wallet:", result.user);
+          } else {
+            console.error("Login failed:", result.error);
+          }
+        })
+        .catch((err) => console.error("Login error:", err));
+    }
+  }, [isConnected, address]);
 
   useEffect(() => {
     if (!socket) return;
@@ -27,6 +46,11 @@ export default function PlayPage() {
 
 
   const handleStartGame = () => {
+    if (!isConnected) {
+      toast.error("Please connect your wallet to play!");
+      return;
+    }
+
     if (gameMode === 'online') {
       setIsSearchOpen(true);
       // Simulate finding match after 3s

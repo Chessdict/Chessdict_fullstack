@@ -6,6 +6,28 @@ import { containsProfanity } from "@/lib/utils";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+export async function loginWithWallet(walletAddress: string) {
+  if (!walletAddress) {
+    throw new Error("Wallet address is required");
+  }
+
+  try {
+    const user = await prisma.user.upsert({
+      where: {
+        walletAddress: walletAddress,
+      },
+      update: {},
+      create: {
+        walletAddress: walletAddress,
+      },
+    });
+    return { success: true, user };
+  } catch (error) {
+    console.error("Error logging in with wallet:", error);
+    return { success: false, error: "Failed to login with wallet" };
+  }
+}
+
 export async function publishPost(formData: FormData) {
   const session = await auth();
   if (!session?.user) {
@@ -24,6 +46,13 @@ export async function publishPost(formData: FormData) {
     throw new Error("Content contains profanity");
   }
 
+  // NOTE: Post creation logic is disabled/broken as Post model was removed.
+  // We should likely remove/refactor this, but for now just commenting it out to fix build
+  // or leaving as is if it won't be called.
+  // Given user asked to remove posts, this function is now deprecated.
+  throw new Error("Post functionality is deprecated");
+
+  /*
   const post = await prisma.post.upsert({
     where: {
       id: parseInt(postId ?? "-1"),
@@ -51,6 +80,7 @@ export async function publishPost(formData: FormData) {
   revalidatePath(`/posts/${post.id}`);
   revalidatePath("/posts");
   redirect(`/posts/${post.id}`);
+  */
 }
 
 export async function saveDraft(formData: FormData) {
@@ -58,44 +88,6 @@ export async function saveDraft(formData: FormData) {
   if (!session?.user) {
     redirect("/");
   }
-
-  const title = formData.get("title") as string;
-  const content = formData.get("content") as string;
-  const postId = formData.get("postId") as string;
-
-  if (!title?.trim()) {
-    throw new Error("Title is required");
-  }
-
-  if (containsProfanity(content)) {
-    throw new Error("Content contains profanity");
-  }
-
-  const post = await prisma.post.upsert({
-    where: {
-      id: parseInt(postId ?? "-1"),
-      author: {
-        email: session.user.email!,
-      },
-    },
-    update: {
-      title: title.trim(),
-      content: content?.trim(),
-      published: false,
-    },
-    create: {
-      title: title.trim(),
-      content: content?.trim(),
-      published: false,
-      author: {
-        connect: {
-          email: session.user.email!,
-        },
-      },
-    },
-  });
-
-  revalidatePath(`/posts/${post.id}`);
-  revalidatePath("/posts");
-  redirect(`/posts/${post.id}`);
+  // Deprecated as Post model was removed
+  throw new Error("Post functionality is deprecated");
 }
