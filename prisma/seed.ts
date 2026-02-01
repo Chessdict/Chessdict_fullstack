@@ -1,44 +1,34 @@
-import { PrismaClient, Prisma } from '@prisma/client'
+import { PrismaClient, Prisma } from "@prisma/client";
 
-const prisma = new PrismaClient()
+const prisma = new PrismaClient();
 
 const userData: Prisma.UserCreateInput[] = [
   {
-    name: 'Alice',
-    email: 'alice@prisma.io',
-    posts: {
-      create: [
-        {
-          title: 'Join the Prisma Discord',
-          content: 'https://pris.ly/discord',
-          published: true,
-        },
-        {
-          title: 'Prisma on YouTube',
-          content: 'https://pris.ly/youtube',
-        },
-      ],
-    },
+    walletAddress: "0x1234567890123456789012345678901234567890",
   },
   {
-    name: 'Bob',
-    email: 'bob@prisma.io',
-    posts: {
-      create: [
-        {
-          title: 'Follow Prisma on Twitter',
-          content: 'https://www.twitter.com/prisma',
-          published: true,
-        },
-      ],
-    },
-  }
-]
+    walletAddress: "0x0987654321098765432109876543210987654321",
+  },
+];
 
 export async function main() {
+  console.log("Start seeding...");
   for (const u of userData) {
-    await prisma.user.create({ data: u })
+    const user = await prisma.user.upsert({
+      where: { walletAddress: u.walletAddress },
+      update: {},
+      create: u,
+    });
+    console.log(`Created user with id: ${user.id}`);
   }
+  console.log("Seeding finished.");
 }
 
 main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

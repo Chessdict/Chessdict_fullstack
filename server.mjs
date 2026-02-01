@@ -108,6 +108,16 @@ app.prepare().then(() => {
 
     socket.on("disconnect", () => {
       console.log("Client disconnected:", socket.id);
+
+      // Remove from userSocketMap
+      for (const [uid, sid] of userSocketMap.entries()) {
+        if (sid === socket.id) {
+          userSocketMap.delete(uid);
+          console.log(`User ${uid} removed from map`);
+          break;
+        }
+      }
+
       // Remove from queue if present
       const index = matchmakingQueue.findIndex(p => p.socketId === socket.id);
       if (index !== -1) {
