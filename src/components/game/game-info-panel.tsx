@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useGameStore } from "@/stores/game-store";
 import { cn } from "@/lib/utils";
+import { useSocket } from "@/hooks/useSocket";
+import { useAccount } from "wagmi";
+import { ResignConfirmModal } from "./resign-confirm-modal";
 
 interface GameInfoPanelProps {
   isSocketConnected: boolean;
@@ -17,11 +20,36 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     playerColor,
     moves,
     isOpponentConnected,
+    roomId,
     setStatus,
     reset,
   } = useGameStore();
 
+  const { address } = useAccount();
+  const { socket } = useSocket(address ?? undefined);
+  const [showResignModal, setShowResignModal] = useState(false);
+
   const movesEndRef = useRef<HTMLDivElement>(null);
+
+  // Handle resign action
+  const handleResign = useCallback(() => {
+    console.log("[INFO-PANEL] handleResign called");
+    console.log("[INFO-PANEL] Emitting resign event:", { roomId, userId: address, socketConnected: socket?.connected });
+
+    if (!socket) {
+      console.error("[INFO-PANEL] Socket is not available!");
+      return;
+    }
+
+    if (!roomId) {
+      console.error("[INFO-PANEL] Room ID is not available!");
+      return;
+    }
+
+    socket.emit("resign", { roomId, userId: address });
+    console.log("[INFO-PANEL] Resign event emitted successfully");
+    setShowResignModal(false);
+  }, [socket, roomId, address]);
 
   // Auto-scroll to latest move
   useEffect(() => {
@@ -184,9 +212,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
             </button>
             <button
               onClick={() => {
-                if (confirm("Are you sure you want to resign?")) {
-                  setStatus("finished");
-                }
+                console.log("[INFO-PANEL] Resign button clicked - opening modal");
+                setShowResignModal(true);
               }}
               className="flex items-center justify-center gap-2 rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 transition hover:bg-red-500/20"
             >
@@ -214,6 +241,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
         </svg>
         Back to Menu
       </button>
+
+      {/* Resign Confirmation Modal */}
+      <ResignConfirmModal
+        isOpen={showResignModal}
+        onConfirm={handleResign}
+        onCancel={() => setShowResignModal(false)}
+      />
     </div>
   );
 }

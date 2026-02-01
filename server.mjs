@@ -294,23 +294,29 @@ app.prepare().then(() => {
           }
         }
 
-        // Emit to room first
-        io.to(activeRoomId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
-
-        // Also emit directly to all sockets in the room for reliability
-        const roomSockets = io.sockets.adapter.rooms.get(activeRoomId);
-        if (roomSockets) {
-          roomSockets.forEach(socketId => {
-            if (socketId !== socket.id) {
-              io.to(socketId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
-            }
-          });
-        }
-
+        // Handle disconnect forfeit - check game status FIRST before emitting
         (async () => {
           try {
             const game = await prisma.game.findUnique({ where: { id: activeRoomId } });
+
+            // Only process if game exists and is still IN_PROGRESS
             if (game && game.status === "IN_PROGRESS") {
+              console.log(`[SERVER] Game ${activeRoomId} is still in progress, processing disconnect forfeit`);
+
+              // Emit gameOver to room
+              io.to(activeRoomId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
+
+              // Also emit directly to all sockets in the room for reliability
+              const roomSockets = io.sockets.adapter.rooms.get(activeRoomId);
+              if (roomSockets) {
+                roomSockets.forEach(socketId => {
+                  if (socketId !== socket.id) {
+                    io.to(socketId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
+                  }
+                });
+              }
+
+              // Update game in database
               if (disconnectedUserId) {
                 const whiteUser = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
                 const blackUser = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
@@ -324,8 +330,11 @@ app.prepare().then(() => {
                     where: { id: activeRoomId },
                     data: { status: "COMPLETED", winnerId }
                   });
+                  console.log(`[SERVER] Game ${activeRoomId} marked as COMPLETED due to disconnect`);
                 }
               }
+            } else {
+              console.log(`[SERVER] Game ${activeRoomId} is not in progress (status: ${game?.status}), skipping disconnect forfeit`);
             }
           } catch (e) {
             console.error("Error handling disconnect forfeit:", e);
