@@ -83,7 +83,30 @@ export function GameBoard() {
     }
   }, [fen, status, gameMode, playerColor, difficulty, game, safeMove]);
 
-  // Network Logic
+  // Join room when entering multiplayer game
+  useEffect(() => {
+    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+    if (!socket || !isMultiplayer || !roomId) return;
+
+    // Explicitly join the room to ensure we receive opponent moves
+    // This handles cases where socket reconnects or component remounts
+    const joinRoom = () => {
+      console.log("NETWORK: Joining room", roomId);
+      socket.emit("joinRoom", { roomId });
+    };
+
+    // Join immediately
+    joinRoom();
+
+    // Rejoin on reconnection
+    socket.on("connect", joinRoom);
+
+    return () => {
+      socket.off("connect", joinRoom);
+    };
+  }, [socket, gameMode, roomId]);
+
+  // Network Logic - Listen for opponent moves
   useEffect(() => {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
     if (!socket || !isMultiplayer || !roomId) return;
@@ -209,8 +232,9 @@ export function GameBoard() {
               position: fen,
               boardOrientation: orientation,
               allowDragging: status === 'in-progress' && !!effectiveColor,
-              darkSquareStyle: { backgroundColor: "#2D2D2D" },
-              lightSquareStyle: { backgroundColor: "#3D3D3D" },
+              boardStyle: { borderRadius: '4px' },
+              darkSquareStyle: { backgroundColor: "#B58863" },
+              lightSquareStyle: { backgroundColor: "#F0D9B5" },
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
                 if (!sourceSquare || !targetSquare) return false;
                 return onDrop(sourceSquare, targetSquare);

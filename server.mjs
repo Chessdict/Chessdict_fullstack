@@ -96,6 +96,11 @@ app.prepare().then(() => {
       }
     });
 
+    socket.on("joinRoom", ({ roomId }) => {
+      socket.join(roomId);
+      console.log(`Socket ${socket.id} joined room ${roomId}`);
+    });
+
     socket.on("movePiece", ({ roomId, move }) => {
       console.log(`Move in ${roomId}:`, move);
       socket.to(roomId).emit("opponentMove", move);
