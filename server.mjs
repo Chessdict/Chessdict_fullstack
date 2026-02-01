@@ -231,6 +231,64 @@ app.prepare().then(() => {
       }
     });
 
+    socket.on("gameComplete", async ({ roomId, winner, reason }) => {
+      console.log(`[SERVER] Game complete received for room ${roomId}: winner=${winner}, reason=${reason}`);
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game) {
+          console.error(`[SERVER] Game not found for roomId: ${roomId}`);
+          return;
+        }
+
+        if (game.status !== "IN_PROGRESS") {
+          console.log(`[SERVER] Game ${roomId} is not in progress, status: ${game.status}`);
+          return;
+        }
+
+        // Determine winner ID
+        let winnerId = null;
+        if (winner === "white") {
+          winnerId = game.whitePlayerId;
+        } else if (winner === "black") {
+          winnerId = game.blackPlayerId;
+        }
+        // For draw, winnerId remains null
+
+        // Update game in database
+        await prisma.game.update({
+          where: { id: roomId },
+          data: {
+            status: "COMPLETED",
+            winnerId: winnerId
+          }
+        });
+
+        console.log(`[SERVER] Game ${roomId} marked as COMPLETED. Winner: ${winner}, Reason: ${reason}`);
+
+        // Emit gameOver to both players
+        const gameOverPayload = { winner, reason };
+        io.to(roomId).emit("gameOver", gameOverPayload);
+
+        // Also emit directly to both player sockets for reliability
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+
+        const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
+        const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
+
+        if (whiteSocketId) {
+          io.to(whiteSocketId).emit("gameOver", gameOverPayload);
+        }
+        if (blackSocketId) {
+          io.to(blackSocketId).emit("gameOver", gameOverPayload);
+        }
+
+        console.log(`[SERVER] gameOver event emitted for game completion`);
+      } catch (error) {
+        console.error("Error processing game completion:", error);
+      }
+    });
+
     socket.on("acceptChallenge", async ({ opponentId, userId: myId }) => {
       const targetSocketId = userSocketMap.get(opponentId);
 

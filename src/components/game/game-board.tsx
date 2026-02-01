@@ -100,6 +100,44 @@ export function GameBoard() {
     }
   }, [fen, status, gameMode, playerColor, difficulty, game, safeMove]);
 
+  // Check for game over (checkmate, stalemate, draw) after each move
+  useEffect(() => {
+    if (status !== "in-progress") return;
+    if (!game.isGameOver()) return;
+
+    let winner: "white" | "black" | "draw" | null = null;
+    let reason: "checkmate" | "stalemate" | "draw" | null = null;
+
+    if (game.isCheckmate()) {
+      // The player whose turn it is has been checkmated (they lost)
+      const loserColor = game.turn(); // 'w' or 'b'
+      winner = loserColor === 'w' ? 'black' : 'white';
+      reason = "checkmate";
+      console.log(`[CLIENT] Checkmate detected! Winner: ${winner}`);
+    } else if (game.isStalemate()) {
+      winner = "draw";
+      reason = "stalemate";
+      console.log("[CLIENT] Stalemate detected!");
+    } else if (game.isDraw()) {
+      winner = "draw";
+      reason = "draw";
+      console.log("[CLIENT] Draw detected!");
+    }
+
+    if (winner && reason) {
+      // For multiplayer games, notify the server
+      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+      if (isMultiplayer && socket && roomId) {
+        console.log("[CLIENT] Emitting gameComplete event:", { roomId, winner, reason });
+        socket.emit("gameComplete", { roomId, winner, reason });
+      }
+
+      // Update local state
+      setGameOver(winner, reason);
+      setStatus("finished");
+    }
+  }, [fen, status, game, gameMode, socket, roomId, setGameOver, setStatus]);
+
   // Join room when entering multiplayer game
   useEffect(() => {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
