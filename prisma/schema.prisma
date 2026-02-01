@@ -15,11 +15,7 @@ datasource db {
 
 model User {
   id            Int       @id @default(autoincrement())
-  name          String?
-  email         String    @unique
-  emailVerified DateTime?
-  image         String?
-  posts         Post[]
+  walletAddress String    @unique
   accounts      Account[]
   sessions      Session[]
 
@@ -58,15 +54,5 @@ model Session {
   updatedAt DateTime @updatedAt
 }
 
-model Post {
-  id        Int     @id @default(autoincrement())
-  title     String
-  content   String?
-  published Boolean @default(false)
-  authorId  Int
-  author    User    @relation(fields: [authorId], references: [id])
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
 
