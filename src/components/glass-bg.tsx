@@ -12,9 +12,6 @@ interface GlassBgProps {
     strokeWidth?: number; // allow tweaking stroke width
 }
 
-// GlassButton now renders an inline SVG pill border (adapted from btn-bg.svg) without hardcoded label paths.
-// The SVG scales to the provided height while preserving aspect ratio; width is auto via flex/minWidth.
-// Children are layered above the SVG. Optional glow uses the original Gaussian blur filter region.
 export function GlassBg({
     children,
     onClick,
@@ -32,15 +29,17 @@ export function GlassBg({
     const intrinsicHeight = 60;
     const aspectRatio = intrinsicWidth / intrinsicHeight;
 
+    const Component = onClick ? "button" : "div";
+
     return (
-        <button
-            type="button"
+        <Component
+            {...(Component === "button" ? { type: "button" } : {})}
             onClick={onClick}
             style={{
                 height: heightValue,
                 minWidth: minWidthValue,
             }}
-            className={`group relative inline-flex items-center justify-start rounded-full text-sm tracking-wide text-white ${className}`}
+            className={`group relative inline-flex items-center justify-start rounded-full text-sm tracking-wide text-white ${onClick ? "cursor-pointer" : "cursor-default"} ${className}`}
         >
             {/* Decorative SVG border/background */}
             <svg
@@ -108,7 +107,7 @@ export function GlassBg({
             <span className="relative z-10 select-none">
                 {children}
             </span>
-        </button>
+        </Component>
     );
 }
 

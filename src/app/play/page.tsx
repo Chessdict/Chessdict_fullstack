@@ -15,7 +15,7 @@ import { toast } from "sonner";
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const { gameMode, setStatus, setRoomId, setPlayerColor, setOpponent } = useGameStore();
+  const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer } = useGameStore();
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
   const [pendingMatch, setPendingMatch] = useState<{ roomId: string, color: "white" | "black", opponent: string } | null>(null);
 
@@ -40,9 +40,10 @@ export default function PlayPage() {
     if (!socket) return;
 
     socket.on('matchFound', (data: { roomId: string, color: "white" | "black", opponent: string }) => {
+      console.log("MATCH FOUND EVENT:", data);
       setPendingMatch(data);
       setIsSearchOpen(false);
-      toast.success(`Match found! Waiting for confirmation...`);
+      toast.success(`Match found! You are ${data.color}`);
     });
 
     socket.on('challengeReceived', (data: { from: string }) => {
@@ -79,6 +80,7 @@ export default function PlayPage() {
       setIsSearchOpen(true);
       socket?.emit("joinQueue", { userId: address });
     } else if (gameMode === 'computer') {
+      setPlayerColor("white");
       setStatus("in-progress");
       console.log("computer mode started");
     }
@@ -109,9 +111,17 @@ export default function PlayPage() {
             opponent={pendingMatch.opponent}
             color={pendingMatch.color}
             onAccept={() => {
+              console.log("ACCEPTING MATCH:", {
+                roomId: pendingMatch.roomId,
+                color: pendingMatch.color,
+                opponent: pendingMatch.opponent
+              });
               setRoomId(pendingMatch.roomId);
               setPlayerColor(pendingMatch.color);
               setOpponent({ address: pendingMatch.opponent, rating: 1200 });
+              setPlayer({ address: address!, rating: 1200 });
+              // Ensure gameMode is set to online if it was null (e.g. from a challenge)
+              if (!gameMode) setGameMode("online");
               setStatus("in-progress");
               setPendingMatch(null);
             }}
