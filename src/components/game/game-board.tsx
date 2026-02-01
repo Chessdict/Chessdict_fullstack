@@ -123,7 +123,14 @@ export function GameBoard() {
               {gameMode === 'computer' ? 'Stockfish (Bot)' : gameMode === 'online' ? (opponent?.address.slice(0, 6) + '...' + opponent?.address.slice(-4)) : 'Waiting...'}
             </span>
             <span className="text-xs text-white/40">
-              {status === 'in-progress' ? 'Thinking...' : status === 'waiting' ? '...' : ''}
+              {status === 'in-progress' && (
+                (playerColor === 'white' && game.turn() === 'b') ||
+                (playerColor === 'black' && game.turn() === 'w')
+              ) ? 'Thinking...' : ''}
+              {status === 'in-progress' && (
+                (playerColor === 'white' && game.turn() === 'w') ||
+                (playerColor === 'black' && game.turn() === 'b')
+              ) ? 'Waiting for your move' : ''}
             </span>
           </div>
         </div>
@@ -172,8 +179,13 @@ export function GameBoard() {
             <div className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-green-500 ring-2 ring-black" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-medium text-white">You (Player)</span>
-            <span className="text-xs text-white/40">Online</span>
+            <span className="text-sm font-medium text-white">You ({playerColor || 'Player'})</span>
+            <span className="text-xs text-white/40">
+              {status === 'in-progress' && (
+                (playerColor === 'white' && game.turn() === 'w') ||
+                (playerColor === 'black' && game.turn() === 'b')
+              ) ? 'Your turn to move' : 'Watching'}
+            </span>
           </div>
         </div>
         <div className="flex items-center gap-2 rounded-lg bg-black/40 px-3 py-1.5 text-sm font-variant-numeric font-medium text-white/90 ring-1 ring-white/10">

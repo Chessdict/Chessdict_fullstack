@@ -10,12 +10,14 @@ import { useAccount } from "wagmi";
 import { loginWithWallet } from "../actions";
 import { searchUsers } from "@/app/actions";
 import { ChallengeModal } from "@/components/game/challenge-modal";
+import { MatchFoundModal } from "@/components/game/match-found-modal";
 import { toast } from "sonner";
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { gameMode, setStatus, setRoomId, setPlayerColor, setOpponent } = useGameStore();
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
+  const [pendingMatch, setPendingMatch] = useState<{ roomId: string, color: "white" | "black", opponent: string } | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
@@ -38,12 +40,9 @@ export default function PlayPage() {
     if (!socket) return;
 
     socket.on('matchFound', (data: { roomId: string, color: "white" | "black", opponent: string }) => {
-      setRoomId(data.roomId);
-      setPlayerColor(data.color);
-      setOpponent({ address: data.opponent, rating: 1200 });
+      setPendingMatch(data);
       setIsSearchOpen(false);
-      setStatus("in-progress");
-      toast.success(`Match found! You are playing as ${data.color}`);
+      toast.success(`Match found! Waiting for confirmation...`);
     });
 
     socket.on('challengeReceived', (data: { from: string }) => {
@@ -101,6 +100,20 @@ export default function PlayPage() {
             onDecline={() => {
               socket?.emit('declineChallenge', { toUserId: incomingChallenge, fromUserId: address });
               setIncomingChallenge(null);
+            }}
+          />
+        )}
+
+        {pendingMatch && (
+          <MatchFoundModal
+            opponent={pendingMatch.opponent}
+            color={pendingMatch.color}
+            onAccept={() => {
+              setRoomId(pendingMatch.roomId);
+              setPlayerColor(pendingMatch.color);
+              setOpponent({ address: pendingMatch.opponent, rating: 1200 });
+              setStatus("in-progress");
+              setPendingMatch(null);
             }}
           />
         )}
