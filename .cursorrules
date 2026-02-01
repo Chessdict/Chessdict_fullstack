@@ -1,0 +1,47 @@
+# Engineering Principles & Guidelines
+
+This project follows strict engineering principles to ensure maintainability, scalability, and code quality.
+
+## Core Principles
+
+### 1. KISS (Keep It Simple, Stupid) 💋
+- **Simplicity over complexity**: Always choose the simplest solution that satisfies the requirements.
+- **Avoid over-engineering**: Do not build features "just in case". Solve the immediate problem.
+- **Readable code**: Code should be self-explanatory. If it requires a paragraph of comments, it might be too complex.
+
+### 2. DRY (Don't Repeat Yourself)  DRY 🌵
+- **Component Reusability**: Extract common UI patterns into reusable components (e.g., `src/components/ui/`).
+- **Logic Extraction**: Move shared logic into custom hooks (`src/hooks/`) or utility functions (`src/lib/utils.ts`).
+- **Single Source of Truth**: Data should exist in one place. Use state management or database as the source of truth, not duplicate local states.
+
+### 3. YAGNI (You Aren't Gonna Need It) 🔮
+- Implement only what is necessary for the current feature set.
+- Do not anticipate future requirements that haven't been defined.
+
+## Technical Standards
+
+### Stack specifics
+- **Next.js**: Use the **App Router** (`src/app/`) pattern.
+- **Server Actions**: Prefer Server Actions (`src/app/actions.ts` or co-located) for backend logic/mutations over API routes.
+- **Prisma**: Use strict typed queries. Update `schema.prisma` and run `db push` for changes.
+- **Tailwind CSS**: Use utility classes. Avoid custom CSS unless absolutely necessary (use `globals.css` sparingly).
+- **Radix UI / Shadcn**: Use Radix UI primitives (via Shadcn components) as the primary UI building blocks. Accessible, headless components are preferred.
+- **Shadcn UI**: Use standard Shadcn components. Do not reinvent the wheel for standard UI elements (Modals, Toasts, Inputs).
+
+### Coding Style
+- **Validation**: Use **Zod** for all schema validations (API inputs, form data, env variables).
+- **TypeScript**: ALL code must be strictly typed. Avoid `any`.
+- **Functional Components**: Use React Functional Components with Hooks.
+- **File Naming**: Use `kebab-case` for file names (e.g., `user-profile.tsx`).
+- **Imports**: Use absolute imports (`@/components/...`) over relative paths (`../../`).
+
+## Workflow
+1. **Plan**: Understand the requirement. Check existing tools/components.
+2. **Implement**: Write code following the principles above.
+3. **Verify**: Ensure it builds, runs, and meets the requirement.
+4. **Refactor**: Clean up. Ensure KISS/DRY are applied.
+
+## Specific Directives
+- **Authentication**: Use the Wallet-Based authentication flow. `walletAddress` is the primary identifier.
+- **State Management**: Use `zustand` for global client state (e.g., `game-store.ts`).
+- **Notifications**: Use `sonner` (`toast("Message")`) for user feedback. Do not use `alert()`.

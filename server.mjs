@@ -18,10 +18,7 @@ app.prepare().then(() => {
 
   const io = new Server(httpServer, {
     cors: {
-      origin:
-        process.env.NODE_ENV === "production"
-          ? false
-          : ["http://localhost:3000"],
+      origin: "*",
       methods: ["GET", "POST"],
     },
   });

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useGameStore } from "@/stores/game-store";
+import { getBestMove } from "@/lib/chess-ai";
 
 export function GameBoard() {
   const {
@@ -26,41 +27,24 @@ export function GameBoard() {
   useEffect(() => {
     if (status !== "in-progress" || gameMode !== "computer" || game.turn() !== "b") return;
 
-    const makeComputerMove = () => {
-      const possibleMoves = game.moves();
-      if (game.isGameOver() || game.isDraw() || possibleMoves.length === 0) {
-        // Game over logic could go here
-        return;
+    // Use Minimax AI
+    // Wrap in timeout to prevent UI blocking
+    const timeoutId = setTimeout(() => {
+      const move = getBestMove(new Chess(game.fen()), difficulty);
+      if (move) {
+        setGame((prev) => {
+          const copy = new Chess(prev.fen());
+          try {
+            copy.move(move);
+          } catch (e) {
+            console.error(e);
+          }
+          return copy;
+        });
       }
+    }, 500); // Small delay for realism
 
-      // Simple AI based on difficulty
-      let move;
-      if (difficulty === "easy") {
-        // Random move
-        const randomIndex = Math.floor(Math.random() * possibleMoves.length);
-        move = possibleMoves[randomIndex];
-      } else {
-        // Slightly smarter - capture if possible, otherwise greedy/random
-        const captures = game.moves({ verbose: true }).filter(m => m.flags.includes('c') || m.flags.includes('e'));
-        if (captures.length > 0 && Math.random() > 0.3) {
-          move = captures[Math.floor(Math.random() * captures.length)].san;
-        } else {
-          const randomIndex = Math.floor(Math.random() * possibleMoves.length);
-          move = possibleMoves[randomIndex];
-        }
-      }
-
-      setGame((prev) => {
-        const copy = new Chess(prev.fen());
-        try {
-          copy.move(move);
-        } catch (e) { console.error(e) }
-        return copy;
-      });
-    };
-
-    const timer = setTimeout(makeComputerMove, 500 + Math.random() * 1000);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(timeoutId);
   }, [game, gameMode, status, difficulty]);
 
   function onDrop({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string }) {
@@ -116,7 +100,7 @@ export function GameBoard() {
         <div className="h-full w-full overflow-hidden rounded bg-[#1a1816] shadow-2xl">
           <Chessboard
             position={game.fen()}
-            onPieceDrop={(source, target) => onDrop({ sourceSquare: source, targetSquare: target })}
+            onPieceDrop={(source: string, target: string) => onDrop({ sourceSquare: source, targetSquare: target })}
             boardWidth={720}
             customBoardStyle={{
               borderRadius: '4px',
