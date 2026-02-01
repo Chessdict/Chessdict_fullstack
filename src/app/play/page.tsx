@@ -12,11 +12,9 @@ import { toast } from "sonner";
 
 export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const { gameMode, setStatus } = useGameStore();
-
-  const { socket, isConnected: isSocketConnected } = useSocket();
+  const { gameMode, setStatus, setRoomId, setPlayerColor, setOpponent } = useGameStore();
   const { address, isConnected } = useAccount();
-
+  const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
 
   useEffect(() => {
     if (isConnected && address) {
@@ -35,15 +33,32 @@ export default function PlayPage() {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('message', (data) => {
-      console.log(data);
+    socket.on('matchFound', (data: { roomId: string, color: "white" | "black", opponent: string }) => {
+      setRoomId(data.roomId);
+      setPlayerColor(data.color);
+      setOpponent({ address: data.opponent, rating: 1200 });
+      setIsSearchOpen(false);
+      setStatus("in-progress");
+      toast.success(`Match found! You are playing as ${data.color}`);
+    });
+
+    socket.on('challengeReceived', (data: { from: string }) => {
+      toast(`Incoming challenge from ${data.from.slice(0, 6)}...`, {
+        action: {
+          label: 'Accept',
+          onClick: () => {
+            socket.emit('acceptChallenge', { opponentId: data.from, userId: address });
+          },
+        },
+        duration: 10000,
+      });
     });
 
     return () => {
-      socket.off('message');
+      socket.off('matchFound');
+      socket.off('challengeReceived');
     };
-  }, [socket]);
-
+  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address]);
 
   const handleStartGame = () => {
     if (!isConnected) {
@@ -52,15 +67,15 @@ export default function PlayPage() {
     }
 
     if (gameMode === 'online') {
+      if (!isSocketConnected) {
+        toast.error("Socket not connected. Please try again.");
+        return;
+      }
       setIsSearchOpen(true);
-      // Simulate finding match after 3s
-      setTimeout(() => {
-        setIsSearchOpen(false);
-        setStatus("in-progress");
-      }, 3000);
+      socket?.emit("joinQueue", { userId: address });
     } else if (gameMode === 'computer') {
       setStatus("in-progress");
-      console.log("computer")
+      console.log("computer mode started");
     }
   };
 
@@ -77,7 +92,7 @@ export default function PlayPage() {
 
         {/* Right Panel - Game Options */}
         <div className="w-full max-w-sm flex-none">
-          <GameOptions onStartGame={handleStartGame} />
+          <GameOptions onStartGame={handleStartGame} socket={socket} userId={address ?? undefined} />
         </div>
       </div>
 

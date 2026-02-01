@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import io, { Socket } from "socket.io-client";
 
-export const useSocket = () => {
+export const useSocket = (userId?: string) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    const socketInstance = io("http://localhost:3000", {
+    const socketInstance = io({
       path: "/socket.io",
+      query: userId ? { userId } : {},
     });
 
     socketInstance.on("connect", () => {

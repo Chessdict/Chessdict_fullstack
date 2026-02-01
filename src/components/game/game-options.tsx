@@ -6,19 +6,27 @@ import { useGameStore } from "@/stores/game-store";
 import Image from "next/image";
 import { GlassButton } from "../glass-button";
 import { GlassBg } from "../glass-bg";
+import { searchUsers } from "@/app/actions";
+import { toast } from "sonner";
 
 type Tab = "new-game" | "games" | "players";
 
 interface GameOptionsProps {
   onStartGame: () => void;
+  socket: any;
+  userId?: string;
+}
+
+interface Opponent {
+  id: any;
+  walletAddress: string;
+  name?: string;
+  avatar?: string;
 }
 
 const mockOpponents = [
-  { id: 1, name: "Ezeugwu Romanus", address: "CTYZ..ZgXe", avatar: "/images/king_pin.svg" }, // using placeholder avatar
+  { id: 1, name: "Ezeugwu Romanus", address: "CTYZ..ZgXe", avatar: "/images/king_pin.svg" },
   { id: 2, name: "Ezeugwu Romanus", address: "CTYZ..2gXs", avatar: "/images/king_pin.svg" },
-  { id: 3, name: "Ezeugwu Romanus", address: "CTYZ..2gXe", avatar: "/images/king_pin.svg" },
-  { id: 4, name: "Ezeugwu Romanus", address: "CTYZ..2gXe", avatar: "/images/king_pin.svg" },
-  { id: 5, name: "Ezeugwu Romanus", address: "CTYZ..2gXs", avatar: "/images/king_pin.svg" },
 ];
 
 const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: string; setTimeControl: (value: string) => void }) => (
@@ -40,12 +48,31 @@ const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: stri
   </div>
 )
 
-export function GameOptions({ onStartGame }: GameOptionsProps) {
+export function GameOptions({ onStartGame, socket, userId }: GameOptionsProps) {
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
   const [timeControl, setTimeControl] = useState("10");
   const { gameMode, setGameMode } = useGameStore();
-  const [selectedOpponent, setSelectedOpponent] = useState<{ id: number, name: string, address: string, avatar: string } | null>(null);
+  const [selectedOpponent, setSelectedOpponent] = useState<Opponent | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  const handleSearch = async (query: string) => {
+    setSearchQuery(query);
+    if (query.length < 3) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    const result = await searchUsers(query);
+    setIsSearching(false);
+
+    if (result.success) {
+      setSearchResults(result.users || []);
+    }
+  };
 
   if (view === "home") {
     const gameModes = [
@@ -71,12 +98,12 @@ export function GameOptions({ onStartGame }: GameOptionsProps) {
         onClick: () => {
           setGameMode("friend");
           setView("setup");
-        }, // TODO: Implement friend flow
+        },
       },
       {
         id: "tournament",
         title: "Tournament",
-        onClick: () => { }, // TODO: Implement tournament flow
+        onClick: () => { },
       },
     ];
 
@@ -104,7 +131,6 @@ export function GameOptions({ onStartGame }: GameOptionsProps) {
 
   return (
     <div className="flex flex-col gap-6 rounded-[32px] border border-white/10 bg-[#0A0A0A]/40 p-6 backdrop-blur-xl transition-all duration-300">
-      {/* Header */}
       <div className="relative flex items-center justify-between border-b border-white/10 pb-4">
         {gameMode === "online" || gameMode === "friend" ? (
           <div className="flex items-center gap-6">
@@ -140,7 +166,6 @@ export function GameOptions({ onStartGame }: GameOptionsProps) {
           <div className="text-base font-medium text-white">Play vs Computer</div>
         )}
 
-        {/* Back button */}
         <button
           onClick={() => {
             setView("home");
@@ -155,7 +180,6 @@ export function GameOptions({ onStartGame }: GameOptionsProps) {
         </button>
       </div>
 
-      {/* Content */}
       <div className="min-h-[200px]">
         {gameMode === "computer" && (
           <div className="flex flex-col gap-6">
@@ -194,7 +218,6 @@ export function GameOptions({ onStartGame }: GameOptionsProps) {
         {gameMode === "online" && activeTab === "new-game" && (
           <div className="flex flex-col gap-6">
             <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
-
             <button
               onClick={onStartGame}
               className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95"
@@ -207,173 +230,103 @@ export function GameOptions({ onStartGame }: GameOptionsProps) {
           </div>
         )}
 
-        {gameMode === "online" && activeTab === "games" && (
-          <div className="flex items-center justify-center py-10 text-white/40">
-            No active games
-          </div>
-        )}
+        {gameMode === "online" && activeTab === "games" && <div className="py-10 text-center text-white/40">No active games</div>}
+        {gameMode === "online" && activeTab === "players" && <div className="py-10 text-center text-white/40">No players online</div>}
 
-        {gameMode === "online" && activeTab === "players" && (
-          <div className="flex items-center justify-center py-10 text-white/40">
-            No players online
-          </div>
-        )}
-
-        {
-          gameMode === "friend" && activeTab === "new-game" && !selectedOpponent && (
-            <div>
-              <div className="flex flex-col items-start justify-center pb-10 text-white/40 gap-y-5">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setView("home");
-                      setGameMode(null);
-                    }}
-                    className="cursor-pointer">
-                    <Image
-                      src="/icons/left-arrow.svg"
-                      alt="left-arrow"
-                      width={24}
-                      height={24}
-                      className=""
-                    />
-                  </button>
-                  <p className="text-lg font-medium text-white">Play A Friend</p>
+        {gameMode === "friend" && activeTab === "new-game" && !selectedOpponent && (
+          <div className="flex flex-col gap-6">
+            <div className="w-full">
+              <GlassBg className="" height={50}>
+                <div className="flex items-center gap-2.5 rounded-full p-5">
+                  <Image src="/icons/search-icon.svg" alt="search" width={18} height={18} />
+                  <input
+                    type="text"
+                    placeholder="Search wallet address..."
+                    value={searchQuery}
+                    onChange={(e) => handleSearch(e.target.value)}
+                    className="w-full bg-transparent text-xs text-white outline-none"
+                  />
                 </div>
+              </GlassBg>
+            </div>
 
-                <div className="w-full">
-                  <GlassBg
-                    className=""
-                    height={50}
+            {searchResults.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm text-white/60">Search Results</p>
+                {searchResults.map(user => (
+                  <button
+                    key={user.id}
+                    onClick={() => setSelectedOpponent(user)}
+                    className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10"
                   >
-                    <div className="w-full flex items-center gap-2.5 rounded-full p-5">
-                      <Image
-                        src="/icons/search-icon.svg"
-                        alt="search-icon"
-                        width={18}
-                        height={18}
-                        className=""
-                      />
-
-                      <input
-                        type="text"
-                        placeholder="Search username..."
-                        className="w-full text-xs font-light text-white outline-0"
-                      />
-                    </div>
-                  </GlassBg>
-                </div>
-
-                <div className="w-full space-y-1">
-                  <p className="text-sm font-normal">Recent Opponents</p>
-                  <div className="flex max-h-[300px] flex-col gap-1 overflow-y-auto pb-4">
-                    {mockOpponents.map((opponent, index) => (
-                      <button
-                        key={`${opponent.id}-${index}`}
-                        onClick={() => {
-                          setSelectedOpponent(opponent);
-                        }}
-                        className="flex items-center gap-3 rounded-2xl pt-3 pb-3 pr-3 text-left transition-colors hover:bg-white/5 hover:cursor-pointer"
-                      >
-                        <div className="relative h-10 w-10 overflow-hidden rounded-full bg-red-400">
-                          {/* Avatar placeholder - colored bg if image fails */}
-                          <Image
-                            src={opponent.avatar}
-                            alt={opponent.name}
-                            fill
-                            className="object-cover"
-                            onError={(e) => {
-                              // Fallback logic could go here, but purely CSS/div based fallback is safer for now if image missing
-                              const target = e.target as HTMLImageElement;
-                              target.style.display = 'none';
-                            }}
-                          />
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium text-white">{opponent.name}</span>
-                          <span className="text-xs text-white/40">{opponent.address}</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )
-        }
-
-        {
-          gameMode === "friend" && activeTab === "new-game" && selectedOpponent && (
-            <div>
-              <div className="flex flex-col items-start justify-center pb-10 text-white/40 gap-y-5">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setSelectedOpponent(null);
-                    }}
-                    className="cursor-pointer">
-                    <Image
-                      src="/icons/left-arrow.svg"
-                      alt="left-arrow"
-                      width={24}
-                      height={24}
-                      className=""
-                    />
+                    <div className="h-10 w-10 flex items-center justify-center rounded-full bg-white/10 text-xs font-bold uppercase">{user.walletAddress.slice(2, 4)}</div>
+                    <span className="text-sm text-white truncate">{user.walletAddress}</span>
                   </button>
-                </div>
+                ))}
+              </div>
+            )}
 
-                <div
-                  className="w-full flex flex-col items-center justify-center gap-4 rounded-2xl pt-3 pb-3 pr-3 text-left"
+            <div className="space-y-2">
+              <p className="text-sm text-white/60">Recent Opponents</p>
+              {mockOpponents.map(opp => (
+                <button
+                  key={opp.id}
+                  onClick={() => setSelectedOpponent({ id: opp.id, walletAddress: opp.address, name: opp.name, avatar: opp.avatar })}
+                  className="flex w-full items-center gap-3 rounded-2xl p-3 text-left transition hover:bg-white/5"
                 >
-                  <div className="w-full flex flex-col items-center justify-center gap-3">
-                    <div className="relative h-30 w-30 overflow-hidden rounded-full bg-red-400">
-                      {/* Avatar placeholder - colored bg if image fails */}
-                      <Image
-                        src={selectedOpponent.avatar}
-                        alt={selectedOpponent.name}
-                        width={120}
-                        height={120}
-                        className="object-cover w-full h-full"
-                        onError={(e) => {
-                          // Fallback logic could go here, but purely CSS/div based fallback is safer for now if image missing
-                          const target = e.target as HTMLImageElement;
-                          target.style.display = 'none';
-                        }}
-                      />
-                    </div>
-                    <div className="flex flex-col text-white text-center">
-                      <span className="text-lg font-medium">{selectedOpponent.name}</span>
-                      <span className="text-xs font-light">{selectedOpponent.address}</span>
-                    </div>
+                  <div className="h-10 w-10 overflow-hidden rounded-full bg-white/10">
+                    <Image src={opp.avatar} alt={opp.name} width={40} height={40} className="object-cover" />
                   </div>
-
-                  <div className="w-full">
-                    <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
+                  <div className="flex flex-col">
+                    <span className="text-sm text-white">{opp.name}</span>
+                    <span className="text-xs text-white/40">{opp.address}</span>
                   </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-                  <div className="w-full flex flex-col items-center gap-5">
-                    <GlassButton className="hover:cursor-pointer w-full">Send challenge</GlassButton>
-                    <button
-                      className="flex items-center gap-2 font-sm text-white hover:cursor-pointer"
-                    >
-                      <Image
-                        src="/icons/clipboard-icon.svg"
-                        alt="clipboard-icon"
-                        width={24}
-                        height={24}
-                        className=""
-                      />
-                      Copy link
-                    </button>
-                  </div>
-
-                </div>
+        {gameMode === "friend" && activeTab === "new-game" && selectedOpponent && (
+          <div className="flex flex-col items-center gap-6">
+            <div className="relative">
+              <button onClick={() => setSelectedOpponent(null)} className="absolute -left-12 top-0 mt-4 h-10 w-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10">
+                <Image src="/icons/left-arrow.svg" alt="back" width={24} height={24} />
+              </button>
+              <div className="h-32 w-32 overflow-hidden rounded-full border-4 border-white/10 bg-red-400 flex items-center justify-center text-4xl font-bold uppercase">
+                {selectedOpponent.avatar ? (
+                  <Image src={selectedOpponent.avatar} alt="avatar" width={128} height={128} className="object-cover" />
+                ) : (
+                  selectedOpponent.walletAddress.slice(2, 4)
+                )}
               </div>
             </div>
-          )
-        }
+
+            <div className="text-center">
+              <h3 className="text-lg font-medium text-white">{selectedOpponent.name || "Opponent"}</h3>
+              <p className="text-xs text-white/40">{selectedOpponent.walletAddress}</p>
+            </div>
+
+            <div className="w-full">
+              <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
+            </div>
+
+            <GlassButton
+              className="w-full"
+              onClick={() => {
+                if (!socket || !userId) {
+                  toast.error("Please connect your wallet first");
+                  return;
+                }
+                socket.emit("sendChallenge", { toUserId: selectedOpponent.walletAddress, fromUserId: userId });
+                toast.success(`Challenge sent to ${selectedOpponent.walletAddress.slice(0, 8)}...`);
+              }}
+            >
+              Send challenge
+            </GlassButton>
+          </div>
+        )}
       </div>
     </div>
   );
 }
-

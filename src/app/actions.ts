@@ -91,3 +91,27 @@ export async function saveDraft(formData: FormData) {
   // Deprecated as Post model was removed
   throw new Error("Post functionality is deprecated");
 }
+
+export async function searchUsers(query: string) {
+  if (!query || query.length < 3) return { success: true, users: [] };
+
+  try {
+    const users = await prisma.user.findMany({
+      where: {
+        walletAddress: {
+          contains: query,
+          mode: "insensitive",
+        },
+      },
+      take: 10,
+      select: {
+        id: true,
+        walletAddress: true,
+      },
+    });
+    return { success: true, users };
+  } catch (error) {
+    console.error("Error searching users:", error);
+    return { success: false, error: "Failed to search users" };
+  }
+}

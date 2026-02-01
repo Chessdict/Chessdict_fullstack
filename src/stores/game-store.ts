@@ -20,6 +20,10 @@ type GameState = {
   setStakeAmount: (amount: number) => void;
   setPlayer: (player: Player) => void;
   setOpponent: (opponent: Player) => void;
+  roomId?: string;
+  playerColor?: "white" | "black";
+  setRoomId: (id: string) => void;
+  setPlayerColor: (color: "white" | "black") => void;
   reset: () => void;
 };
 
@@ -40,5 +44,8 @@ export const useGameStore = create<GameState>((set) => ({
   setStakeAmount: (amount) => set({ stakeAmount: amount }),
   setPlayer: (player) => set({ player }),
   setOpponent: (opponent) => set({ opponent }),
-  reset: () => set(initialState),
+  setRoomId: (roomId) => set({ roomId }),
+  setPlayerColor: (playerColor) => set({ playerColor }),
+  reset: () =>
+    set({ ...initialState, roomId: undefined, playerColor: undefined }),
 }));

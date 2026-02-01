@@ -5,14 +5,22 @@ import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useGameStore } from "@/stores/game-store";
 import { getBestMove } from "@/lib/chess-ai";
+import { useSocket } from "@/hooks/useSocket";
+import { useAccount } from "wagmi";
 
 export function GameBoard() {
   const {
     gameMode,
     status,
     difficulty,
-    setStatus
+    setStatus,
+    roomId,
+    playerColor,
+    opponent
   } = useGameStore();
+
+  const { address } = useAccount();
+  const { socket } = useSocket(address ?? undefined);
 
   const [game, setGame] = useState(new Chess());
 
@@ -47,11 +55,38 @@ export function GameBoard() {
     return () => clearTimeout(timeoutId);
   }, [game, gameMode, status, difficulty]);
 
+  // Network opponent moves
+  useEffect(() => {
+    if (!socket || gameMode !== 'online' || !roomId) return;
+
+    socket.on('opponentMove', (move: any) => {
+      setGame((prev) => {
+        const copy = new Chess(prev.fen());
+        try {
+          copy.move(move);
+        } catch (e) {
+          console.error(e);
+        }
+        return copy;
+      });
+    });
+
+    return () => {
+      socket.off('opponentMove');
+    };
+  }, [socket, gameMode, roomId]);
+
   function onDrop({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string }) {
     if (status !== "in-progress") return false;
+    if (game.isGameOver()) return false;
 
-    // Only allow moving white pieces in vs computer/online (assuming player is white for now)
-    if (game.turn() !== 'w') return false;
+    // Check if it's our turn
+    const turn = game.turn();
+    if (gameMode === 'computer' && turn !== 'w') return false;
+    if (gameMode === 'online') {
+      const expectedColor = playerColor === 'white' ? 'w' : 'b';
+      if (turn !== expectedColor) return false;
+    }
 
     try {
       const gameCopy = new Chess(game.fen());
@@ -64,6 +99,11 @@ export function GameBoard() {
       if (move === null) return false;
 
       setGame(gameCopy);
+
+      if (gameMode === 'online' && roomId) {
+        socket?.emit("movePiece", { roomId, move: { from: sourceSquare, to: targetSquare, promotion: "q" } });
+      }
+
       return true;
     } catch (error) {
       return false;
@@ -80,7 +120,7 @@ export function GameBoard() {
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-medium text-white">
-              {gameMode === 'computer' ? 'Stockfish (Bot)' : gameMode === 'online' ? 'Opponent' : 'Waiting...'}
+              {gameMode === 'computer' ? 'Stockfish (Bot)' : gameMode === 'online' ? (opponent?.address.slice(0, 6) + '...' + opponent?.address.slice(-4)) : 'Waiting...'}
             </span>
             <span className="text-xs text-white/40">
               {status === 'in-progress' ? 'Thinking...' : status === 'waiting' ? '...' : ''}
@@ -99,6 +139,7 @@ export function GameBoard() {
       <div className="relative mx-auto w-full aspect-square">
         <div className="h-full w-full overflow-hidden rounded bg-[#1a1816] shadow-2xl">
           <Chessboard
+            // @ts-ignore
             position={game.fen()}
             onPieceDrop={(source: string, target: string) => onDrop({ sourceSquare: source, targetSquare: target })}
             boardWidth={720}
@@ -107,7 +148,11 @@ export function GameBoard() {
             }}
             customDarkSquareStyle={{ backgroundColor: "#B58863" }}
             customLightSquareStyle={{ backgroundColor: "#F0D9B5" }}
-            arePiecesDraggable={status === 'in-progress' && game.turn() === 'w'}
+            boardOrientation={playerColor || "white"}
+            arePiecesDraggable={
+              status === 'in-progress' &&
+              (gameMode === 'computer' ? game.turn() === 'w' : game.turn() === (playerColor === 'white' ? 'w' : 'b'))
+            }
           />
         </div>
         {status === "waiting" && (
