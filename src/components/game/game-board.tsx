@@ -17,6 +17,9 @@ export function GameBoard() {
     playerColor,
     opponent,
     setStatus,
+    addMove,
+    clearMoves,
+    setOpponentConnected,
     reset: resetStore
   } = useGameStore();
 
@@ -42,6 +45,15 @@ export function GameBoard() {
       if (result) {
         syncState();
         setLastMove(result);
+        // Record move in store for move history display
+        addMove({
+          san: result.san,
+          from: result.from,
+          to: result.to,
+          color: result.color,
+          piece: result.piece,
+          timestamp: Date.now(),
+        });
         console.log("INTERNAL: Move success", { move, turn: game.turn(), fen: game.fen() });
         return result;
       }
@@ -49,7 +61,7 @@ export function GameBoard() {
       console.error("INTERNAL: Move error", e);
     }
     return null;
-  }, [game, syncState]);
+  }, [game, syncState, addMove]);
 
   // Handle Game Initialization / Resets
   useEffect(() => {
@@ -57,9 +69,10 @@ export function GameBoard() {
       game.reset();
       syncState();
       setLastMove(null);
+      clearMoves();
       console.log("GAME: Board reset to start position");
     }
-  }, [status, game, syncState]);
+  }, [status, game, syncState, clearMoves]);
 
   // Bot Logic
   useEffect(() => {
@@ -119,6 +132,35 @@ export function GameBoard() {
     socket.on('opponentMove', handleOpponentMove);
     return () => { socket.off('opponentMove', handleOpponentMove); };
   }, [socket, gameMode, roomId, safeMove]);
+
+  // Track opponent connection status
+  useEffect(() => {
+    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+    if (!socket || !isMultiplayer || !roomId) return;
+
+    const handleOpponentJoined = () => {
+      console.log("NETWORK: Opponent joined the room");
+      setOpponentConnected(true);
+    };
+
+    const handleOpponentLeft = () => {
+      console.log("NETWORK: Opponent left the room");
+      setOpponentConnected(false);
+    };
+
+    // Set connected when we have an opponent
+    if (opponent) {
+      setOpponentConnected(true);
+    }
+
+    socket.on('opponentJoined', handleOpponentJoined);
+    socket.on('opponentLeft', handleOpponentLeft);
+
+    return () => {
+      socket.off('opponentJoined', handleOpponentJoined);
+      socket.off('opponentLeft', handleOpponentLeft);
+    };
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected]);
 
   // Primary Move Handler for Chessboard
   const onDrop = useCallback((source: string, target: string) => {

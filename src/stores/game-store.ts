@@ -7,6 +7,15 @@ export type Player = {
 
 export type GameStatus = "waiting" | "matched" | "in-progress" | "finished";
 
+export type MoveRecord = {
+  san: string;        // Standard algebraic notation (e.g., "e4", "Nf3")
+  from: string;       // Source square
+  to: string;         // Target square
+  color: "w" | "b";   // Which player made the move
+  piece: string;      // Piece type
+  timestamp: number;  // When the move was made
+};
+
 type GameState = {
   status: GameStatus;
   gameMode: "online" | "computer" | "friend" | null;
@@ -24,6 +33,13 @@ type GameState = {
   playerColor?: "white" | "black";
   setRoomId: (id: string) => void;
   setPlayerColor: (color: "white" | "black") => void;
+  // Move history
+  moves: MoveRecord[];
+  addMove: (move: MoveRecord) => void;
+  clearMoves: () => void;
+  // Connection status
+  isOpponentConnected: boolean;
+  setOpponentConnected: (connected: boolean) => void;
   reset: () => void;
 };
 
@@ -34,6 +50,8 @@ const initialState = {
   stakeAmount: 0,
   player: undefined,
   opponent: undefined,
+  moves: [] as MoveRecord[],
+  isOpponentConnected: false,
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -46,6 +64,9 @@ export const useGameStore = create<GameState>((set) => ({
   setOpponent: (opponent) => set({ opponent }),
   setRoomId: (roomId) => set({ roomId }),
   setPlayerColor: (playerColor) => set({ playerColor }),
+  addMove: (move) => set((state) => ({ moves: [...state.moves, move] })),
+  clearMoves: () => set({ moves: [] }),
+  setOpponentConnected: (connected) => set({ isOpponentConnected: connected }),
   reset: () =>
-    set({ ...initialState, roomId: undefined, playerColor: undefined }),
+    set({ ...initialState, roomId: undefined, playerColor: undefined, moves: [], isOpponentConnected: false }),
 }));

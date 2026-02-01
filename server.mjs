@@ -99,6 +99,14 @@ app.prepare().then(() => {
     socket.on("joinRoom", ({ roomId }) => {
       socket.join(roomId);
       console.log(`Socket ${socket.id} joined room ${roomId}`);
+      // Notify other players in the room that someone joined
+      socket.to(roomId).emit("opponentJoined", { socketId: socket.id });
+    });
+
+    socket.on("leaveRoom", ({ roomId }) => {
+      socket.leave(roomId);
+      console.log(`Socket ${socket.id} left room ${roomId}`);
+      socket.to(roomId).emit("opponentLeft", { socketId: socket.id });
     });
 
     socket.on("movePiece", ({ roomId, move }) => {

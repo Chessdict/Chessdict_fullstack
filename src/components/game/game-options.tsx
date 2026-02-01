@@ -1,14 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useGameStore } from "@/stores/game-store";
 import Image from "next/image";
 import { GlassButton } from "../glass-button";
 import { GlassBg } from "../glass-bg";
 import { searchUsers, getRecentOpponents } from "@/app/actions";
-import { useEffect } from "react";
 import { toast } from "sonner";
+import { GameInfoPanel } from "./game-info-panel";
 
 type Tab = "new-game" | "games" | "players";
 
@@ -16,6 +16,7 @@ interface GameOptionsProps {
   onStartGame: () => void;
   socket: any;
   userId?: string;
+  isSocketConnected?: boolean;
 }
 
 interface Opponent {
@@ -46,11 +47,12 @@ const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: stri
   </div>
 )
 
-export function GameOptions({ onStartGame, socket, userId }: GameOptionsProps) {
+export function GameOptions({ onStartGame, socket, userId, isSocketConnected = false }: GameOptionsProps) {
+  // All hooks must be called before any early returns
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
   const [timeControl, setTimeControl] = useState("10");
-  const { gameMode, setGameMode } = useGameStore();
+  const { gameMode, setGameMode, status } = useGameStore();
   const [selectedOpponent, setSelectedOpponent] = useState<Opponent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -104,6 +106,11 @@ export function GameOptions({ onStartGame, socket, userId }: GameOptionsProps) {
       setSearchResults(result.users || []);
     }
   };
+
+  // Show GameInfoPanel when game is active (after all hooks)
+  if (status === "in-progress" || status === "matched") {
+    return <GameInfoPanel isSocketConnected={isSocketConnected} />;
+  }
 
   if (view === "home") {
     const gameModes = [

@@ -134,7 +134,7 @@ export default function PlayPage() {
 
         {/* Right Panel - Game Options */}
         <div className="w-full max-w-sm flex-none">
-          <GameOptions onStartGame={handleStartGame} socket={socket} userId={address ?? undefined} />
+          <GameOptions onStartGame={handleStartGame} socket={socket} userId={address ?? undefined} isSocketConnected={isSocketConnected} />
         </div>
       </div>
 
