@@ -289,6 +289,59 @@ app.prepare().then(() => {
       }
     });
 
+    socket.on("gameTimeout", async ({ roomId, loser }) => {
+      console.log(`[SERVER] Timeout received for room ${roomId}: loser=${loser}`);
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game) {
+          console.error(`[SERVER] Game not found for roomId: ${roomId}`);
+          return;
+        }
+
+        if (game.status !== "IN_PROGRESS") {
+          console.log(`[SERVER] Game ${roomId} is not in progress, status: ${game.status}`);
+          return;
+        }
+
+        // Determine winner ID (opposite of loser)
+        const winnerId = loser === "white" ? game.blackPlayerId : game.whitePlayerId;
+        const winnerColor = loser === "white" ? "black" : "white";
+
+        // Update game in database
+        await prisma.game.update({
+          where: { id: roomId },
+          data: {
+            status: "COMPLETED",
+            winnerId: winnerId
+          }
+        });
+
+        console.log(`[SERVER] Game ${roomId} marked as COMPLETED due to timeout. Winner: ${winnerColor}`);
+
+        // Emit gameOver to both players
+        const gameOverPayload = { winner: winnerColor, reason: "timeout" };
+        io.to(roomId).emit("gameOver", gameOverPayload);
+
+        // Also emit directly to both player sockets for reliability
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+
+        const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
+        const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
+
+        if (whiteSocketId) {
+          io.to(whiteSocketId).emit("gameOver", gameOverPayload);
+        }
+        if (blackSocketId) {
+          io.to(blackSocketId).emit("gameOver", gameOverPayload);
+        }
+
+        console.log(`[SERVER] gameOver event emitted for timeout`);
+      } catch (error) {
+        console.error("Error processing game timeout:", error);
+      }
+    });
+
     socket.on("acceptChallenge", async ({ opponentId, userId: myId }) => {
       const targetSocketId = userSocketMap.get(opponentId);
 

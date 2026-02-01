@@ -40,6 +40,16 @@ type GameState = {
   // Connection status
   isOpponentConnected: boolean;
   setOpponentConnected: (connected: boolean) => void;
+  // Timer state
+  initialTime: number; // in seconds (default 600 = 10 minutes)
+  whiteTime: number; // remaining time for white in seconds
+  blackTime: number; // remaining time for black in seconds
+  setInitialTime: (time: number) => void;
+  setWhiteTime: (time: number) => void;
+  setBlackTime: (time: number) => void;
+  decrementWhiteTime: () => void;
+  decrementBlackTime: () => void;
+  resetTimers: () => void;
   gameOver: {
     winner: "white" | "black" | "draw" | "opponent" | null;
     reason:
@@ -47,6 +57,7 @@ type GameState = {
       | "stalemate"
       | "resignation"
       | "disconnection"
+      | "timeout"
       | "draw"
       | null;
   } | null;
@@ -57,11 +68,14 @@ type GameState = {
       | "stalemate"
       | "resignation"
       | "disconnection"
+      | "timeout"
       | "draw"
       | null,
   ) => void;
   reset: () => void;
 };
+
+const DEFAULT_TIME = 600; // 10 minutes in seconds
 
 const initialState = {
   status: "waiting" as GameStatus,
@@ -71,8 +85,11 @@ const initialState = {
   player: undefined,
   opponent: undefined,
   moves: [] as MoveRecord[],
-
   isOpponentConnected: false,
+  // Timer
+  initialTime: DEFAULT_TIME,
+  whiteTime: DEFAULT_TIME,
+  blackTime: DEFAULT_TIME,
   gameOver: null,
 };
 
@@ -89,6 +106,13 @@ export const useGameStore = create<GameState>((set) => ({
   addMove: (move) => set((state) => ({ moves: [...state.moves, move] })),
   clearMoves: () => set({ moves: [] }),
   setOpponentConnected: (connected) => set({ isOpponentConnected: connected }),
+  // Timer functions
+  setInitialTime: (time) => set({ initialTime: time, whiteTime: time, blackTime: time }),
+  setWhiteTime: (time) => set({ whiteTime: time }),
+  setBlackTime: (time) => set({ blackTime: time }),
+  decrementWhiteTime: () => set((state) => ({ whiteTime: Math.max(0, state.whiteTime - 1) })),
+  decrementBlackTime: () => set((state) => ({ blackTime: Math.max(0, state.blackTime - 1) })),
+  resetTimers: () => set((state) => ({ whiteTime: state.initialTime, blackTime: state.initialTime })),
   setGameOver: (winner, reason) => set({ gameOver: { winner, reason } }),
   reset: () =>
     set({
@@ -97,6 +121,8 @@ export const useGameStore = create<GameState>((set) => ({
       playerColor: undefined,
       moves: [],
       isOpponentConnected: false,
+      whiteTime: DEFAULT_TIME,
+      blackTime: DEFAULT_TIME,
       gameOver: null,
     }),
 }));

@@ -9,6 +9,13 @@ import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 
+// Helper to format time as MM:SS
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 export function GameBoard() {
   const {
     gameMode,
@@ -21,7 +28,12 @@ export function GameBoard() {
     addMove,
     clearMoves,
     setOpponentConnected,
-
+    // Timer state
+    whiteTime,
+    blackTime,
+    decrementWhiteTime,
+    decrementBlackTime,
+    resetTimers,
     gameOver,
     setGameOver,
     reset: resetStore
@@ -77,8 +89,51 @@ export function GameBoard() {
       syncState();
       setLastMove(null);
       clearMoves();
+      resetTimers();
     }
-  }, [status, game, syncState, clearMoves]);
+  }, [status, game, syncState, clearMoves, resetTimers]);
+
+  // Timer countdown logic
+  useEffect(() => {
+    if (status !== "in-progress") return;
+    if (gameOver) return;
+
+    const currentTurnForTimer = game.turn(); // 'w' or 'b'
+
+    const interval = setInterval(() => {
+      if (currentTurnForTimer === 'w') {
+        decrementWhiteTime();
+      } else {
+        decrementBlackTime();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [status, gameOver, game, fen, decrementWhiteTime, decrementBlackTime]);
+
+  // Handle timeout (time runs out)
+  useEffect(() => {
+    if (status !== "in-progress") return;
+    if (gameOver) return;
+
+    const currentTurnForTimer = game.turn();
+    const timeoutPlayer = currentTurnForTimer === 'w' ? whiteTime : blackTime;
+
+    if (timeoutPlayer <= 0) {
+      const winner = currentTurnForTimer === 'w' ? 'black' : 'white';
+      console.log(`[CLIENT] Timeout! ${winner} wins`);
+
+      // For multiplayer games, notify the server
+      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+      if (isMultiplayer && socket && roomId) {
+        console.log("[CLIENT] Emitting timeout event:", { roomId, winner });
+        socket.emit("gameTimeout", { roomId, loser: currentTurnForTimer === 'w' ? 'white' : 'black' });
+      }
+
+      setGameOver(winner, "timeout");
+      setStatus("finished");
+    }
+  }, [whiteTime, blackTime, status, gameOver, game, gameMode, socket, roomId, setGameOver, setStatus]);
 
   // Bot Logic
   useEffect(() => {
@@ -334,7 +389,14 @@ export function GameBoard() {
               <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
             </div>
           )}
-          <div className="text-xl font-mono text-white/90 tabular-nums bg-black/40 px-3 py-1 rounded-lg border border-white/10">10:00</div>
+          {/* Opponent's timer */}
+          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${
+            !isMyTurn && status === 'in-progress'
+              ? 'bg-red-500/20 border-red-500/30 text-red-400'
+              : 'bg-black/40 border-white/10 text-white/90'
+          } ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
+            {formatTime(playerColor === 'white' ? blackTime : whiteTime)}
+          </div>
         </div>
       </div>
 
@@ -383,6 +445,7 @@ export function GameBoard() {
                 <p className="text-white/60 mb-6 capitalize">
                   {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
                     gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
+                    gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
                       gameOver.reason}
                 </p>
                 <button
@@ -440,7 +503,14 @@ export function GameBoard() {
               Force Reset
             </button>
           )}
-          <div className="text-xl font-mono text-white/90 tabular-nums bg-black/40 px-3 py-1 rounded-lg border border-white/10">10:00</div>
+          {/* Player's timer */}
+          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${
+            isMyTurn && status === 'in-progress'
+              ? 'bg-blue-500/20 border-blue-500/30 text-blue-400'
+              : 'bg-black/40 border-white/10 text-white/90'
+          } ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
+            {formatTime(playerColor === 'white' ? whiteTime : blackTime)}
+          </div>
         </div>
       </div>
 
