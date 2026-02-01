@@ -29,6 +29,7 @@ app.prepare().then(() => {
   const userSocketMap = new Map(); // userId -> socketId
   const activeGames = new Map(); // socketId -> roomId
   const matchmakingQueue = [];
+  const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
 
   const checkForMatch = async () => {
     if (matchmakingQueue.length >= 2) {
@@ -202,6 +203,10 @@ app.prepare().then(() => {
 
         console.log(`[SERVER] Game ${roomId} ended by resignation. Winner: ${winnerColor}`);
 
+        // Mark game as recently completed to prevent false disconnect forfeits
+        recentlyCompletedGames.add(roomId);
+        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
+
         // Emit gameOver to all players in the room
         const roomSockets = io.sockets.adapter.rooms.get(roomId);
         console.log(`[SERVER] Emitting gameOver to room ${roomId}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
@@ -265,6 +270,10 @@ app.prepare().then(() => {
 
         console.log(`[SERVER] Game ${roomId} marked as COMPLETED. Winner: ${winner}, Reason: ${reason}`);
 
+        // Mark game as recently completed to prevent false disconnect forfeits
+        recentlyCompletedGames.add(roomId);
+        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
+
         // Emit gameOver to both players
         const gameOverPayload = { winner, reason };
         io.to(roomId).emit("gameOver", gameOverPayload);
@@ -317,6 +326,10 @@ app.prepare().then(() => {
         });
 
         console.log(`[SERVER] Game ${roomId} marked as COMPLETED due to timeout. Winner: ${winnerColor}`);
+
+        // Mark game as recently completed to prevent false disconnect forfeits
+        recentlyCompletedGames.add(roomId);
+        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to both players
         const gameOverPayload = { winner: winnerColor, reason: "timeout" };
@@ -408,6 +421,12 @@ app.prepare().then(() => {
         // Handle disconnect forfeit - check game status FIRST before emitting
         (async () => {
           try {
+            // Skip if this game was recently completed (prevents race condition with gameComplete)
+            if (recentlyCompletedGames.has(activeRoomId)) {
+              console.log(`[SERVER] Game ${activeRoomId} was recently completed, skipping disconnect forfeit`);
+              return;
+            }
+
             const game = await prisma.game.findUnique({ where: { id: activeRoomId } });
 
             // Only process if game exists and is still IN_PROGRESS
