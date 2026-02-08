@@ -140,7 +140,7 @@ export async function getRecentOpponents(walletAddress: string) {
     });
 
     const opponentsMap = new Map();
-    games.forEach((game) => {
+    games.forEach((game: any) => {
       const white = game.whitePlayer;
       const black = game.blackPlayer;
       if (white && white.walletAddress !== walletAddress) {
