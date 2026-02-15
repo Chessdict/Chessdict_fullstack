@@ -4,65 +4,130 @@ import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ConnectWallet } from "./connect-wallet";
+import { Menu } from "lucide-react";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
 
 const navItems = [
   { href: "/play", label: "Play" },
-  { href: "#leaderboard", label: "Leaderboard" },
-  { href: "#community", label: "Community" },
-  { href: "#blog", label: "Blog" },
-  { href: "#whitepaper", label: "Whitepaper" },
+  // { href: "#leaderboard", label: "Leaderboard" },
+  // { href: "#community", label: "Community" },
+  // { href: "#blog", label: "Blog" },
+  // { href: "#whitepaper", label: "Whitepaper" },
 ];
 
 export function Navbar() {
   return (
-    <header className="pointer-events-none fixed inset-x-0 top-6 z-30 flex justify-center px-4">
-      <motion.nav
-        className="pointer-events-auto nav-glass relative flex h-[86px] w-full max-w-6xl items-center justify-between rounded-full px-8"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
-      >
-        <svg aria-hidden="true" className="absolute inset-0 h-full w-full" fill="none">
-          <defs>
-            <linearGradient id="navGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(255,255,255,0.30)" />
-              <stop offset="40%" stopColor="rgba(255,255,255,0.95)" />
-              <stop offset="60%" stopColor="rgba(255,255,255,0.14)" />
-            </linearGradient>
-          </defs>
-          <rect
-            x={0.5}
-            y={0.5}
-            width="calc(100% - 1px)"
-            height="calc(100% - 1px)"
-            rx={43}
-            stroke="url(#navGradient)"
-            strokeWidth={1}
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
+    <header className="w-full">
+      {/* Desktop Navbar */}
+      <div className="pointer-events-none fixed inset-x-0 top-6 z-30 justify-center px-4 hidden md:flex">
+        <motion.nav
+          className="pointer-events-auto nav-glass relative flex h-[86px] w-full max-w-6xl items-center justify-between rounded-full px-8"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
+        >
+          <svg aria-hidden="true" className="absolute inset-0 h-full w-full" fill="none">
+            <defs>
+              <linearGradient id="navGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(255,255,255,0.30)" />
+                <stop offset="40%" stopColor="rgba(255,255,255,0.95)" />
+                <stop offset="60%" stopColor="rgba(255,255,255,0.14)" />
+              </linearGradient>
+            </defs>
+            <rect
+              x={0.5}
+              y={0.5}
+              width="calc(100% - 1px)"
+              height="calc(100% - 1px)"
+              rx={43}
+              stroke="url(#navGradient)"
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
 
-        <Link href="/">
-          <Image
-            alt="Chessdict logo"
-            className="relative h-20 w-auto sm:h-22"
-            height={248}
-            priority
-            src="/logo.svg"
-            width={200}
-          />
-        </Link>
+          <Link href="/">
+            <Image
+              alt="Chessdict logo"
+              className="relative h-20 w-auto sm:h-22"
+              height={248}
+              priority
+              src="/logo.svg"
+              width={200}
+            />
+          </Link>
 
-        <div className="relative flex items-center gap-8 text-sm font-medium text-white/70">
-          {navItems.map((item) => (
-            <Link key={item.href} href={item.href} className="transition hover:text-white">
-              {item.label}
-            </Link>
-          ))}
-        </div>
+          <div className="relative flex items-start gap-8 text-sm font-medium text-white/70">
+            {navItems.map((item) => (
+              <Link key={item.href} href={item.href} className="transition hover:text-white">
+                {item.label}
+              </Link>
+            ))}
+          </div>
 
-        <ConnectWallet />
-      </motion.nav>
+          <ConnectWallet />
+        </motion.nav>
+      </div>
+
+      {/* Mobile Navbar */}
+      <div className="pointer-events-none fixed inset-x-0 top-6 z-30 flex justify-center md:hidden">
+        <motion.nav
+          className="pointer-events-auto nav-glass relative flex h-[50px] w-full items-center justify-between rounded-full"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
+        >
+          <div className="z-20 w-full">
+            <Sheet>
+              <SheetTrigger asChild>
+                <button className="w-full flex justify-between items-center gap-2 pr-5">
+                  <Link href="/">
+                    <Image
+                      alt="Chessdict logo"
+                      className="relative h-20 w-auto sm:h-22"
+                      height={248}
+                      priority
+                      src="/logo.svg"
+                      width={200}
+                    />
+                  </Link>
+                  <Menu />
+                </button>
+              </SheetTrigger>
+              <SheetContent>
+                <div className="w-full px-4 py-20 space-y-4">
+                  <div className="w-full relative flex items-start gap-8 text-sm font-medium text-white/70">
+                    {navItems.map((item) => (
+                      <SheetClose asChild key={item.href}>
+                        <Link
+                          href={item.href}
+                          className="w-full transition hover:text-white text-center border py-4 rounded-lg hover:border-gray-500 duration-300"
+                        >
+                          {item.label}
+                        </Link>
+                      </SheetClose>
+                    ))}
+                  </div>
+                  <SheetClose asChild>
+                    <div className="border flex justify-center rounded-lg">
+                      <ConnectWallet />
+                    </div>
+                  </SheetClose>
+                </div>
+              </SheetContent>
+            </Sheet>
+          </div>
+        </motion.nav>
+      </div>
     </header>
   );
 }
