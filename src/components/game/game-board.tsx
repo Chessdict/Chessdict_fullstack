@@ -53,6 +53,10 @@ export function GameBoard() {
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
 
+  // State for move highlighting
+  const [moveSquares, setMoveSquares] = useState<Record<string, React.CSSProperties>>({});
+  const [sourceSquare, setSourceSquare] = useState<string | null>(null);
+
   // Helper to sync the state with the game instance
   const syncState = useCallback(() => {
     setFen(game.fen());
@@ -74,6 +78,10 @@ export function GameBoard() {
           timestamp: Date.now(),
         });
 
+        // Clear highlights after move
+        setMoveSquares({});
+        setSourceSquare(null);
+
         return result;
       }
     } catch (e) {
@@ -90,6 +98,8 @@ export function GameBoard() {
       setLastMove(null);
       clearMoves();
       resetTimers();
+      setMoveSquares({});
+      setSourceSquare(null);
     }
   }, [status, game, syncState, clearMoves, resetTimers]);
 
@@ -285,7 +295,131 @@ export function GameBoard() {
     };
   }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus]);
 
-  // Primary Move Handler for Chessboard
+  // Calculate and style possible moves
+  const getMoveOptions = (square: string) => {
+    // Only allow selecting if it's the player's turn and color
+    const turn = game.turn();
+    const piece = game.get(square as any);
+
+    // Check if it's our piece
+    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+    const myColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
+
+    // In multiplayer, must be assigned color. In computer, default is white.
+    // Also must be turn of the piece (white/black)
+    if (!piece || piece.color !== turn) {
+      return false;
+    }
+
+    // Must be our color in multiplayer or computer mode
+    const myTurnCode = myColor === 'black' ? 'b' : 'w';
+    if (piece.color !== myTurnCode) {
+      return false;
+    }
+
+    const moves = game.moves({
+      square: square as any,
+      verbose: true,
+    });
+
+    if (moves.length === 0) {
+      setMoveSquares({});
+      return false;
+    }
+
+    const newSquares: Record<string, React.CSSProperties> = {};
+    const sourcePiece = game.get(square as any); // Capture piece for stable color comparison
+    const sourceColor = sourcePiece?.color;
+
+    moves.map((move: any) => {
+      const targetPiece = game.get(move.to);
+      newSquares[move.to] = {
+        background:
+          targetPiece && targetPiece.color !== sourceColor
+            ? "radial-gradient(circle, rgba(0,0,0,.1) 85%, transparent 85%)"
+            : "radial-gradient(circle, rgba(0,0,0,.1) 25%, transparent 25%)",
+        borderRadius: "50%",
+      };
+      return move;
+    });
+
+    // Also highlight the source square
+    newSquares[square] = {
+      background: "rgba(255, 255, 0, 0.4)",
+    };
+
+    setMoveSquares(newSquares);
+    return true;
+  }
+
+  // Handle square clicks for click-to-move and highlighting
+  const onSquareClick = ({ square }: { square: string }) => {
+    if (status !== "in-progress") return;
+
+    // If we already have a selected piece
+    if (sourceSquare) {
+      // If clicking the same square, deselect
+      if (sourceSquare === square) {
+        setSourceSquare(null);
+        setMoveSquares({});
+        return;
+      }
+
+      // Attempt to move
+      const moveData = {
+        from: sourceSquare,
+        to: square,
+        promotion: "q", // always promote to queen for simplicity
+      };
+
+      try {
+        const move = game.move(moveData); // Validates and executes if valid
+
+        if (move) {
+          // Move was valid (game.move modifies state locally)
+          // Undo local move to use safeMove which handles sync and side effects logic
+          game.undo();
+
+          const result = safeMove(moveData); // Use our wrapper
+
+          if (result && (gameMode === 'online' || gameMode === 'friend') && roomId) {
+            socket?.emit("movePiece", { roomId, move: moveData });
+          }
+          return;
+        }
+      } catch (e) {
+        // move failed, fall through to piece selection logic
+      }
+
+      // If move was invalid (or threw), check if we clicked on another one of our pieces
+      const piece = game.get(square as any);
+      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+      const myColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
+      const myTurnCode = myColor === 'black' ? 'b' : 'w';
+
+      if (piece && piece.color === myTurnCode) {
+        // Switch selection
+        setSourceSquare(square);
+        getMoveOptions(square);
+        return;
+      }
+
+      // Invalid move and not clicking our own piece -> Deselect
+      setSourceSquare(null);
+      setMoveSquares({});
+      return;
+    }
+
+    // No piece selected yet, try to select
+    if (getMoveOptions(square)) {
+      setSourceSquare(square);
+    } else {
+      setSourceSquare(null);
+      setMoveSquares({});
+    }
+  };
+
+  // Primary Move Handler for Chessboard (Drag and Drop)
   const onDrop = useCallback((source: string, target: string) => {
     if (status !== "in-progress") return false;
     if (game.isGameOver()) return false;
@@ -390,18 +524,17 @@ export function GameBoard() {
             </div>
           )}
           {/* Opponent's timer */}
-          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${
-            !isMyTurn && status === 'in-progress'
-              ? 'bg-red-500/20 border-red-500/30 text-red-400'
-              : 'bg-black/40 border-white/10 text-white/90'
-          } ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
+          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${!isMyTurn && status === 'in-progress'
+            ? 'bg-red-500/20 border-red-500/30 text-red-400'
+            : 'bg-black/40 border-white/10 text-white/90'
+            } ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
             {formatTime(playerColor === 'white' ? blackTime : whiteTime)}
           </div>
         </div>
       </div>
 
       {/* Main Board Container */}
-      <div className="relative group mx-auto w-full max-w-[720px] aspect-square transition-transform duration-500">
+      <div className="relative group mx-auto w-full max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
         <div className="absolute -inset-1 bg-linear-to-r from-blue-600/20 to-purple-600/20 rounded-xl blur-lg group-hover:opacity-100 opacity-50 transition-opacity" />
         <div className="relative h-full w-full overflow-hidden rounded-xl border border-white/10 shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] bg-[#1a1816]">
           <Chessboard
@@ -413,6 +546,8 @@ export function GameBoard() {
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
+              squareStyles: moveSquares,
+              onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
                 if (!sourceSquare || !targetSquare) return false;
                 return onDrop(sourceSquare, targetSquare);
@@ -421,11 +556,11 @@ export function GameBoard() {
           />
 
           {status === "waiting" && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-500">
-              <div className="text-center space-y-4">
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 animate-in fade-in duration-500">
+              {/* <div className="text-center space-y-4">
                 <div className="h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
                 <p className="text-white/60 font-medium">Initialize game options to start</p>
-              </div>
+              </div> */}
             </div>
           )}
 
@@ -445,8 +580,8 @@ export function GameBoard() {
                 <p className="text-white/60 mb-6 capitalize">
                   {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
                     gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
-                    gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
-                      gameOver.reason}
+                      gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
+                        gameOver.reason}
                 </p>
                 <button
                   onClick={() => window.location.reload()}
@@ -504,11 +639,10 @@ export function GameBoard() {
             </button>
           )}
           {/* Player's timer */}
-          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${
-            isMyTurn && status === 'in-progress'
-              ? 'bg-blue-500/20 border-blue-500/30 text-blue-400'
-              : 'bg-black/40 border-white/10 text-white/90'
-          } ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
+          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${isMyTurn && status === 'in-progress'
+            ? 'bg-blue-500/20 border-blue-500/30 text-blue-400'
+            : 'bg-black/40 border-white/10 text-white/90'
+            } ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
             {formatTime(playerColor === 'white' ? whiteTime : blackTime)}
           </div>
         </div>
