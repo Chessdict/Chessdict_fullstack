@@ -1,0 +1,5 @@
+/out
+/lib
+/node_modules
+.env
+/cache
