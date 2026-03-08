@@ -25,6 +25,13 @@ model User {
   gamesAsWhite Game[] @relation("GamesAsWhite")
   gamesAsBlack Game[] @relation("GamesAsBlack")
   gamesWon     Game[] @relation("GamesWon")
+
+  // Tournament relations
+  createdTournaments  Tournament[]            @relation("TournamentCreator")
+  tournamentEntries   TournamentParticipant[]
+  tournamentMatchesW  TournamentMatch[]       @relation("TournamentMatchWhite")
+  tournamentMatchesB  TournamentMatch[]       @relation("TournamentMatchBlack")
+  tournamentMatchWins TournamentMatch[]       @relation("TournamentMatchWinner")
 }
 
 model Account {
@@ -74,6 +81,8 @@ model Game {
   
   wagerAmount   Float?
   
+  tournamentMatch TournamentMatch?
+
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 }
@@ -86,5 +95,94 @@ enum GameStatus {
   DRAW
 }
 
+// ─── Tournament Models ───
 
+model Tournament {
+  id             String           @id @default(uuid())
+  name           String
+  status         TournamentStatus @default(PENDING)
+  timeControl    Int              // minutes per player
+  entryFee       Float            @default(0)
+  prizePool      Float            @default(0)
+  maxPlayers     Int
+  currentRound   Int              @default(0)
 
+  // On-chain fields (maps to Chessdict.sol GameTournament)
+  onChainGameId  Int?             @unique // contract gameId counter
+  token          String?          // ERC20 token address used for staking
+  isSponsored    Boolean          @default(false)
+  sponsoredAmount Float           @default(0) // additional prize from sponsor
+  sponsorAddress String?          // wallet of the sponsor (if sponsored)
+
+  creatorId Int
+  creator   User @relation("TournamentCreator", fields: [creatorId], references: [id])
+
+  participants TournamentParticipant[]
+  matches      TournamentMatch[]
+
+  startsAt  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TournamentParticipant {
+  id           String   @id @default(uuid())
+  tournamentId String
+  userId       Int
+  seed         Int?
+  eliminated   Boolean  @default(false)
+  placement    Int?     // final ranking (1 = winner)
+  points       Float    @default(0) // round-robin points (win=1, draw=0.5)
+  wins         Int      @default(0)
+  draws        Int      @default(0)
+  losses       Int      @default(0)
+  joinedAt     DateTime @default(now())
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@unique([tournamentId, userId])
+}
+
+model TournamentMatch {
+  id           String              @id @default(uuid())
+  tournamentId String
+  round        Int
+  matchIndex   Int                 // position within the round (0-based)
+  status       TournamentMatchStatus @default(PENDING)
+
+  whitePlayerId Int?
+  blackPlayerId Int?
+  winnerId      Int?
+
+  whitePlayer User? @relation("TournamentMatchWhite", fields: [whitePlayerId], references: [id])
+  blackPlayer User? @relation("TournamentMatchBlack", fields: [blackPlayerId], references: [id])
+  winner      User? @relation("TournamentMatchWinner", fields: [winnerId], references: [id])
+
+  isDraw Boolean @default(false)
+
+  gameId String? @unique
+  game   Game?   @relation(fields: [gameId], references: [id])
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tournamentId, round, matchIndex])
+}
+
+enum TournamentStatus {
+  PENDING      // created, waiting for players
+  READY        // enough players, about to start
+  IN_PROGRESS  // matches being played
+  COMPLETED    // all rounds finished
+  CANCELLED
+}
+
+enum TournamentMatchStatus {
+  PENDING     // not yet started
+  IN_PROGRESS
+  COMPLETED
+  BYE         // auto-advance (odd bracket)
+}

@@ -177,7 +177,7 @@ contract Chessdict {
         emit FeesCollected(token, reciever, amount);
     }
 
-    // functions for creating and joiing games
+    // functions for creating and joining games
     //FOR 1 V 1 GAMES
 
     function createGameSingle(address token, uint256 stake) external tokenSupported(token) returns (uint256) {
@@ -271,7 +271,7 @@ contract Chessdict {
             IERC20(game.token).safeTransfer(game.player2, game.stake);
             emit PrizeClaimedSingle(_gameId, address(this), game.stake * 2, 0);
             // Mark game as inactive
-            idToGamesSingle[_gameId].isActive = false;
+            idToGamesSingle[_gameId].isActive = false; // @todo, redundant check, earlier check makes sure it's already inactive, remove for gas efficiency 
             game.totalPrize = 0;
             return;
         }
@@ -282,7 +282,7 @@ contract Chessdict {
 
         // Transfer prize to winner
         IERC20(game.token).safeTransfer(game.winner, prizeAfterFee);
-        game.isActive = false;
+        game.isActive = false; // @todo remove redundant check
         game.totalPrize = 0;
 
         emit PrizeClaimedSingle(_gameId, game.winner, prizeAfterFee, fee);
@@ -419,7 +419,7 @@ contract Chessdict {
 
         //check if msg.sender is in players list
         bool hasJoined = false;
-
+        // @audit arbitary array length loop, no cap on no_ of participants can cause OOG.
         for (uint256 i = 0; i < game.players.length; i++) {
             if (game.players[i] == msg.sender) {
                 hasJoined = true;
@@ -440,6 +440,7 @@ contract Chessdict {
         emit GameTournamentJoined(_gameId, msg.sender, game.totalStakes);
 
         //ensures all have joined before activating the game or start time has been reached
+        // @audit game.stake % game.totalPrize should be 0, to avoid going over total prize 
         if (game.totalStakes + game.sponsoredAmount >= game.totalPrize || game.startTimeStamp <= block.timestamp) {
             //@audit check should require that greater than two players have joined atleast if not it's not a tournament anymore.
             game.isActive = true;
@@ -482,6 +483,7 @@ contract Chessdict {
         //check if msg.sender is in players list and has joined
         bool isPlayer = false;
         uint256 playerIndex = 0;
+        // @audit can be dosed if a malicous actor joins with thousands of addresses to make this loop very large
         for (uint256 i = 0; i < game.players.length; i++) {
             if (game.players[i] == msg.sender) {
                 isPlayer = true;

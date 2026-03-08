@@ -9,6 +9,7 @@ import { GlassBg } from "../glass-bg";
 import { searchUsers, getRecentOpponents } from "@/app/actions";
 import { toast } from "sonner";
 import { GameInfoPanel } from "./game-info-panel";
+import { TournamentPanel } from "../tournament/tournament-panel";
 
 type Tab = "new-game" | "games" | "players";
 
@@ -141,7 +142,10 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
       {
         id: "tournament",
         title: "Tournament",
-        onClick: () => { },
+        onClick: () => {
+          setGameMode("tournament");
+          setView("setup");
+        },
       },
     ];
 
@@ -170,7 +174,9 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   return (
     <div className="flex flex-col gap-6 rounded-[32px] border border-white/10 bg-[#0A0A0A]/40 p-6 backdrop-blur-xl transition-all duration-300">
       <div className="relative flex items-center justify-between border-b border-white/10 pb-4">
-        {gameMode === "online" || gameMode === "friend" ? (
+        {gameMode === "tournament" ? (
+          <div className="text-base font-medium text-white">Tournament</div>
+        ) : gameMode === "online" || gameMode === "friend" ? (
           <div className="flex items-center gap-6">
             <button
               onClick={() => setActiveTab("new-game")}
@@ -219,6 +225,10 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
       </div>
 
       <div className="min-h-[200px]">
+        {gameMode === "tournament" && (
+          <TournamentPanel />
+        )}
+
         {gameMode === "computer" && (
           <div className="flex flex-col gap-6">
             <div className="flex flex-col gap-3">

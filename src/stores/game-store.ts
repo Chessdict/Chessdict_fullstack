@@ -18,12 +18,12 @@ export type MoveRecord = {
 
 type GameState = {
   status: GameStatus;
-  gameMode: "online" | "computer" | "friend" | null;
+  gameMode: "online" | "computer" | "friend" | "tournament" | null;
   difficulty: "easy" | "medium" | "hard";
   stakeAmount: number;
   player?: Player;
   opponent?: Player;
-  setGameMode: (mode: "online" | "computer" | "friend" | null) => void;
+  setGameMode: (mode: "online" | "computer" | "friend" | "tournament" | null) => void;
   setDifficulty: (difficulty: "easy" | "medium" | "hard") => void;
   setStatus: (status: GameStatus) => void;
   setStakeAmount: (amount: number) => void;
@@ -79,7 +79,7 @@ const DEFAULT_TIME = 600; // 10 minutes in seconds
 
 const initialState = {
   status: "waiting" as GameStatus,
-  gameMode: null as "online" | "computer" | "friend" | null,
+  gameMode: null as "online" | "computer" | "friend" | "tournament" | null,
   difficulty: "medium" as "easy" | "medium" | "hard",
   stakeAmount: 0,
   player: undefined,

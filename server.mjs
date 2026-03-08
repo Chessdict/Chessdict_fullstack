@@ -31,6 +31,497 @@ app.prepare().then(() => {
   const matchmakingQueue = [];
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
 
+  // ─── Tournament Management ───
+  const activeTournaments = new Map(); // tournamentId -> tournament state
+  const playerTournamentMap = new Map(); // walletAddress -> tournamentId (tracks which tournament a player is in)
+
+  function generateRoundRobinSchedule(playerUserIds) {
+    const players = [...playerUserIds];
+    const isOdd = players.length % 2 !== 0;
+    if (isOdd) players.push(null); // bye placeholder
+
+    const n = players.length;
+    const rounds = [];
+    const fixed = players[0];
+    const rotating = players.slice(1);
+
+    for (let r = 0; r < n - 1; r++) {
+      const round = [];
+      const current = [fixed, ...rotating];
+
+      for (let i = 0; i < n / 2; i++) {
+        const p1 = current[i];
+        const p2 = current[n - 1 - i];
+        if (p1 !== null && p2 !== null) {
+          // Alternate colors each round for fairness
+          if (r % 2 === 0) {
+            round.push({ whiteId: p1, blackId: p2 });
+          } else {
+            round.push({ whiteId: p2, blackId: p1 });
+          }
+        }
+      }
+      rounds.push(round);
+      // Rotate: move last to front
+      rotating.unshift(rotating.pop());
+    }
+
+    return rounds;
+  }
+
+  function getTournamentStandings(state) {
+    return [...state.participants]
+      .sort((a, b) => b.points - a.points || b.wins - a.wins)
+      .map((p, i) => ({
+        rank: i + 1,
+        walletAddress: p.walletAddress,
+        userId: p.userId,
+        points: p.points,
+        wins: p.wins,
+        draws: p.draws,
+        losses: p.losses,
+      }));
+  }
+
+  async function startTournament(tournamentId) {
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        participants: {
+          include: { user: { select: { id: true, walletAddress: true } } },
+        },
+      },
+    });
+
+    if (!tournament || (tournament.status !== "READY" && tournament.status !== "PENDING")) {
+      console.log(`[TOURNAMENT] Cannot start tournament ${tournamentId}, status: ${tournament?.status}`);
+      return;
+    }
+
+    if (tournament.participants.length < 3) {
+      console.log(`[TOURNAMENT] Not enough players for tournament ${tournamentId}`);
+      return;
+    }
+
+    const playerUserIds = tournament.participants.map((p) => p.userId);
+    const schedule = generateRoundRobinSchedule(playerUserIds);
+
+    // Create all tournament matches in DB upfront
+    for (let r = 0; r < schedule.length; r++) {
+      for (let m = 0; m < schedule[r].length; m++) {
+        const match = schedule[r][m];
+        await prisma.tournamentMatch.create({
+          data: {
+            tournamentId,
+            round: r + 1,
+            matchIndex: m,
+            whitePlayerId: match.whiteId,
+            blackPlayerId: match.blackId,
+            status: "PENDING",
+          },
+        });
+      }
+    }
+
+    // Update tournament status
+    await prisma.tournament.update({
+      where: { id: tournamentId },
+      data: { status: "IN_PROGRESS", currentRound: 0 },
+    });
+
+    // Build in-memory state
+    const tournamentState = {
+      id: tournamentId,
+      participants: tournament.participants.map((p) => ({
+        participantDbId: p.id,
+        userId: p.userId,
+        walletAddress: p.user.walletAddress,
+        points: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+      })),
+      schedule,
+      currentRound: 0,
+      totalRounds: schedule.length,
+      timeControl: tournament.timeControl,
+      roundGames: new Map(), // gameId -> { whiteId, blackId, status }
+      roundTimer: null,
+      breakTimer: null,
+      roundEndTime: null,
+    };
+
+    activeTournaments.set(tournamentId, tournamentState);
+
+    // Track all players
+    for (const p of tournamentState.participants) {
+      playerTournamentMap.set(p.walletAddress, tournamentId);
+    }
+
+    const roomName = `tournament:${tournamentId}`;
+    console.log(`[TOURNAMENT] Starting tournament ${tournamentId} with ${tournamentState.participants.length} players, ${tournamentState.totalRounds} rounds`);
+
+    io.to(roomName).emit("tournament:starting", {
+      tournamentId,
+      totalRounds: tournamentState.totalRounds,
+      totalPlayers: tournamentState.participants.length,
+      timeControl: tournament.timeControl,
+      startsIn: 10,
+      standings: getTournamentStandings(tournamentState),
+    });
+
+    // Start first round after 10 seconds
+    setTimeout(() => startTournamentRound(tournamentId), 10000);
+  }
+
+  async function startTournamentRound(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    state.currentRound++;
+    const roundIndex = state.currentRound - 1;
+
+    if (roundIndex >= state.schedule.length) {
+      await completeTournament(tournamentId);
+      return;
+    }
+
+    const roundPairings = state.schedule[roundIndex];
+    state.roundGames = new Map();
+
+    // Update tournament current round in DB
+    await prisma.tournament.update({
+      where: { id: tournamentId },
+      data: { currentRound: state.currentRound },
+    });
+
+    const roomName = `tournament:${tournamentId}`;
+
+    // Create games for this round
+    for (const pairing of roundPairings) {
+      const game = await prisma.game.create({
+        data: {
+          whitePlayerId: pairing.whiteId,
+          blackPlayerId: pairing.blackId,
+          fen: "start",
+          status: "IN_PROGRESS",
+        },
+      });
+
+      // Update tournament match in DB
+      await prisma.tournamentMatch.updateMany({
+        where: {
+          tournamentId,
+          round: state.currentRound,
+          whitePlayerId: pairing.whiteId,
+          blackPlayerId: pairing.blackId,
+        },
+        data: { gameId: game.id, status: "IN_PROGRESS" },
+      });
+
+      state.roundGames.set(game.id, {
+        whiteId: pairing.whiteId,
+        blackId: pairing.blackId,
+        status: "playing",
+      });
+
+      // Get players and pair them via sockets
+      const whitePlayer = state.participants.find((p) => p.userId === pairing.whiteId);
+      const blackPlayer = state.participants.find((p) => p.userId === pairing.blackId);
+
+      if (whitePlayer && blackPlayer) {
+        const whiteSocketId = userSocketMap.get(whitePlayer.walletAddress);
+        const blackSocketId = userSocketMap.get(blackPlayer.walletAddress);
+
+        // Join both sockets to the game room for move relay
+        if (whiteSocketId) {
+          const ws = io.sockets.sockets.get(whiteSocketId);
+          if (ws) ws.join(game.id);
+        }
+        if (blackSocketId) {
+          const bs = io.sockets.sockets.get(blackSocketId);
+          if (bs) bs.join(game.id);
+        }
+
+        // Notify each player of their game
+        if (whiteSocketId) {
+          io.to(whiteSocketId).emit("tournament:gameStart", {
+            tournamentId,
+            gameId: game.id,
+            color: "white",
+            opponentAddress: blackPlayer.walletAddress,
+            round: state.currentRound,
+            totalRounds: state.totalRounds,
+            timeControl: state.timeControl,
+          });
+        }
+        if (blackSocketId) {
+          io.to(blackSocketId).emit("tournament:gameStart", {
+            tournamentId,
+            gameId: game.id,
+            color: "black",
+            opponentAddress: whitePlayer.walletAddress,
+            round: state.currentRound,
+            totalRounds: state.totalRounds,
+            timeControl: state.timeControl,
+          });
+        }
+      }
+    }
+
+    // Handle byes (odd number of players)
+    const playingUserIds = new Set();
+    for (const pairing of roundPairings) {
+      playingUserIds.add(pairing.whiteId);
+      playingUserIds.add(pairing.blackId);
+    }
+
+    for (const p of state.participants) {
+      if (!playingUserIds.has(p.userId)) {
+        const socketId = userSocketMap.get(p.walletAddress);
+        if (socketId) {
+          io.to(socketId).emit("tournament:bye", {
+            tournamentId,
+            round: state.currentRound,
+            totalRounds: state.totalRounds,
+          });
+        }
+        // Bye = 1 point (win)
+        p.points += 1;
+        p.wins += 1;
+        await prisma.tournamentParticipant.updateMany({
+          where: { tournamentId, userId: p.userId },
+          data: { points: p.points, wins: p.wins },
+        });
+      }
+    }
+
+    // Set round timing
+    const roundDurationMs = state.timeControl * 60 * 1000;
+    state.roundEndTime = Date.now() + roundDurationMs;
+
+    // Emit round start
+    io.to(roomName).emit("tournament:roundStart", {
+      tournamentId,
+      round: state.currentRound,
+      totalRounds: state.totalRounds,
+      roundEndTime: state.roundEndTime,
+      standings: getTournamentStandings(state),
+    });
+
+    console.log(`[TOURNAMENT] Round ${state.currentRound}/${state.totalRounds} started for tournament ${tournamentId}`);
+
+    // Set round timeout to force-end any remaining games
+    state.roundTimer = setTimeout(() => forceEndTournamentRound(tournamentId), roundDurationMs);
+  }
+
+  async function handleTournamentGameEnd(tournamentId, gameId, winner, isDraw) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    const gameState = state.roundGames.get(gameId);
+    if (!gameState || gameState.status !== "playing") return;
+
+    gameState.status = "completed";
+
+    // Update participant scores
+    const white = state.participants.find((p) => p.userId === gameState.whiteId);
+    const black = state.participants.find((p) => p.userId === gameState.blackId);
+
+    if (isDraw) {
+      if (white) { white.points += 0.5; white.draws += 1; }
+      if (black) { black.points += 0.5; black.draws += 1; }
+    } else if (winner === "white") {
+      if (white) { white.points += 1; white.wins += 1; }
+      if (black) { black.losses += 1; }
+    } else if (winner === "black") {
+      if (black) { black.points += 1; black.wins += 1; }
+      if (white) { white.losses += 1; }
+    }
+
+    // Update DB - participant stats
+    if (white) {
+      await prisma.tournamentParticipant.updateMany({
+        where: { tournamentId, userId: white.userId },
+        data: { points: white.points, wins: white.wins, draws: white.draws, losses: white.losses },
+      });
+    }
+    if (black) {
+      await prisma.tournamentParticipant.updateMany({
+        where: { tournamentId, userId: black.userId },
+        data: { points: black.points, wins: black.wins, draws: black.draws, losses: black.losses },
+      });
+    }
+
+    // Update tournament match
+    let winnerId = null;
+    if (winner === "white") winnerId = gameState.whiteId;
+    else if (winner === "black") winnerId = gameState.blackId;
+
+    await prisma.tournamentMatch.updateMany({
+      where: { tournamentId, gameId },
+      data: { status: "COMPLETED", winnerId, isDraw },
+    });
+
+    await prisma.game.update({
+      where: { id: gameId },
+      data: { status: isDraw ? "DRAW" : "COMPLETED", winnerId },
+    });
+
+    const roomName = `tournament:${tournamentId}`;
+    const gamesCompleted = [...state.roundGames.values()].filter((g) => g.status === "completed").length;
+    const totalGames = state.roundGames.size;
+
+    console.log(`[TOURNAMENT] Game ${gameId} ended. Round ${state.currentRound}: ${gamesCompleted}/${totalGames} games complete`);
+
+    // Notify players their tournament game ended
+    io.to(gameId).emit("tournament:gameOver", {
+      tournamentId,
+      gameId,
+      winner,
+      isDraw,
+      gamesCompleted,
+      totalGames,
+      roundEndTime: state.roundEndTime,
+    });
+
+    // Emit updated standings to everyone
+    io.to(roomName).emit("tournament:standings", {
+      standings: getTournamentStandings(state),
+      round: state.currentRound,
+      gamesCompleted,
+      totalGames,
+    });
+
+    // Check if all games are done
+    if (gamesCompleted >= totalGames) {
+      if (state.roundTimer) {
+        clearTimeout(state.roundTimer);
+        state.roundTimer = null;
+      }
+      startTournamentBreak(tournamentId);
+    }
+  }
+
+  function startTournamentBreak(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    const roomName = `tournament:${tournamentId}`;
+    const breakDurationMs = 10000; // 10 seconds
+    const breakEndTime = Date.now() + breakDurationMs;
+    const isLastRound = state.currentRound >= state.totalRounds;
+
+    console.log(`[TOURNAMENT] Round ${state.currentRound} complete. ${isLastRound ? "Final round!" : "10s break before next round."}`);
+
+    io.to(roomName).emit("tournament:roundComplete", {
+      tournamentId,
+      round: state.currentRound,
+      standings: getTournamentStandings(state),
+      breakEndTime,
+      nextRound: state.currentRound + 1,
+      isLastRound,
+    });
+
+    if (isLastRound) {
+      setTimeout(() => completeTournament(tournamentId), breakDurationMs);
+    } else {
+      state.breakTimer = setTimeout(() => startTournamentRound(tournamentId), breakDurationMs);
+    }
+  }
+
+  async function forceEndTournamentRound(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    console.log(`[TOURNAMENT] Force-ending round ${state.currentRound} for tournament ${tournamentId}`);
+
+    for (const [gameId, gameState] of state.roundGames.entries()) {
+      if (gameState.status === "playing") {
+        // Force end: emit to players, default to draw
+        io.to(gameId).emit("tournament:forceEnd", { gameId, reason: "round_timeout" });
+        gameState.status = "completed";
+
+        const white = state.participants.find((p) => p.userId === gameState.whiteId);
+        const black = state.participants.find((p) => p.userId === gameState.blackId);
+        if (white) { white.points += 0.5; white.draws += 1; }
+        if (black) { black.points += 0.5; black.draws += 1; }
+
+        // Update DB
+        if (white) {
+          await prisma.tournamentParticipant.updateMany({
+            where: { tournamentId, userId: white.userId },
+            data: { points: white.points, wins: white.wins, draws: white.draws, losses: white.losses },
+          });
+        }
+        if (black) {
+          await prisma.tournamentParticipant.updateMany({
+            where: { tournamentId, userId: black.userId },
+            data: { points: black.points, wins: black.wins, draws: black.draws, losses: black.losses },
+          });
+        }
+
+        await prisma.tournamentMatch.updateMany({
+          where: { tournamentId, gameId },
+          data: { status: "COMPLETED", isDraw: true },
+        });
+        await prisma.game.update({
+          where: { id: gameId },
+          data: { status: "DRAW" },
+        });
+      }
+    }
+
+    // Emit final standings for the round
+    const roomName = `tournament:${tournamentId}`;
+    io.to(roomName).emit("tournament:standings", {
+      standings: getTournamentStandings(state),
+      round: state.currentRound,
+      gamesCompleted: state.roundGames.size,
+      totalGames: state.roundGames.size,
+    });
+
+    startTournamentBreak(tournamentId);
+  }
+
+  async function completeTournament(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    const standings = getTournamentStandings(state);
+
+    // Update tournament in DB
+    await prisma.tournament.update({
+      where: { id: tournamentId },
+      data: { status: "COMPLETED" },
+    });
+
+    // Update participant placements
+    for (const standing of standings) {
+      await prisma.tournamentParticipant.updateMany({
+        where: { tournamentId, userId: standing.userId },
+        data: { placement: standing.rank },
+      });
+    }
+
+    const roomName = `tournament:${tournamentId}`;
+    console.log(`[TOURNAMENT] Tournament ${tournamentId} completed! Winner: ${standings[0]?.walletAddress}`);
+
+    io.to(roomName).emit("tournament:complete", {
+      tournamentId,
+      standings,
+      winner: standings[0],
+    });
+
+    // Clean up
+    for (const p of state.participants) {
+      playerTournamentMap.delete(p.walletAddress);
+    }
+    if (state.roundTimer) clearTimeout(state.roundTimer);
+    if (state.breakTimer) clearTimeout(state.breakTimer);
+    activeTournaments.delete(tournamentId);
+  }
+
   const checkForMatch = async () => {
     if (matchmakingQueue.length >= 2) {
       const p1 = matchmakingQueue.shift();
@@ -391,6 +882,124 @@ app.prepare().then(() => {
         } catch (error) {
           console.error("Error creating challenge game in DB:", error);
         }
+      }
+    });
+
+    // ─── Tournament Socket Events ───
+
+    socket.on("tournament:register", async ({ tournamentId }) => {
+      const uid = userId;
+      if (!uid || !tournamentId) return;
+
+      const roomName = `tournament:${tournamentId}`;
+      socket.join(roomName);
+      console.log(`[TOURNAMENT] Player ${uid} registered for tournament ${tournamentId}`);
+
+      // Send current state if tournament is active
+      const state = activeTournaments.get(tournamentId);
+      if (state) {
+        socket.emit("tournament:state", {
+          tournamentId,
+          phase: state.currentRound === 0 ? "lobby" : "playing",
+          currentRound: state.currentRound,
+          totalRounds: state.totalRounds,
+          timeControl: state.timeControl,
+          roundEndTime: state.roundEndTime,
+          standings: getTournamentStandings(state),
+          participants: state.participants.map((p) => ({
+            walletAddress: p.walletAddress,
+            connected: userSocketMap.has(p.walletAddress),
+          })),
+        });
+      } else {
+        // Tournament not started yet, send participant info
+        try {
+          const tournament = await prisma.tournament.findUnique({
+            where: { id: tournamentId },
+            include: {
+              participants: {
+                include: { user: { select: { walletAddress: true } } },
+              },
+            },
+          });
+          if (tournament) {
+            socket.emit("tournament:state", {
+              tournamentId,
+              phase: "lobby",
+              currentRound: 0,
+              totalRounds: 0,
+              timeControl: tournament.timeControl,
+              roundEndTime: null,
+              standings: [],
+              participants: tournament.participants.map((p) => ({
+                walletAddress: p.user.walletAddress,
+                connected: userSocketMap.has(p.user.walletAddress),
+              })),
+            });
+
+            // Notify others that a player connected
+            socket.to(roomName).emit("tournament:playerConnected", {
+              walletAddress: uid,
+              connectedCount: tournament.participants.filter((p) =>
+                userSocketMap.has(p.user.walletAddress)
+              ).length,
+              totalPlayers: tournament.participants.length,
+            });
+          }
+        } catch (e) {
+          console.error("[TOURNAMENT] Error fetching tournament for register:", e);
+        }
+      }
+    });
+
+    socket.on("tournament:start", async ({ tournamentId }) => {
+      // Only tournament creator or when all players are connected
+      if (!tournamentId) return;
+      console.log(`[TOURNAMENT] Start requested for tournament ${tournamentId} by ${userId}`);
+      await startTournament(tournamentId);
+    });
+
+    socket.on("tournament:move", ({ gameId, move }) => {
+      // Relay move to opponent in the game room
+      socket.to(gameId).emit("tournament:opponentMove", { gameId, move });
+    });
+
+    socket.on("tournament:gameComplete", async ({ tournamentId, gameId, winner, isDraw }) => {
+      console.log(`[TOURNAMENT] Game complete: tournament=${tournamentId}, game=${gameId}, winner=${winner}, isDraw=${isDraw}`);
+      await handleTournamentGameEnd(tournamentId, gameId, winner, isDraw);
+    });
+
+    socket.on("tournament:resign", async ({ tournamentId, gameId }) => {
+      const uid = userId;
+      if (!uid || !tournamentId || !gameId) return;
+
+      const state = activeTournaments.get(tournamentId);
+      if (!state) return;
+
+      const gameState = state.roundGames.get(gameId);
+      if (!gameState || gameState.status !== "playing") return;
+
+      // Determine who resigned and who wins
+      const white = state.participants.find((p) => p.userId === gameState.whiteId);
+      const black = state.participants.find((p) => p.userId === gameState.blackId);
+
+      let winner = null;
+      if (white?.walletAddress === uid) {
+        winner = "black";
+      } else if (black?.walletAddress === uid) {
+        winner = "white";
+      }
+
+      if (winner) {
+        // Notify the opponent
+        socket.to(gameId).emit("tournament:gameOver", {
+          tournamentId,
+          gameId,
+          winner,
+          isDraw: false,
+          reason: "resignation",
+        });
+        await handleTournamentGameEnd(tournamentId, gameId, winner, false);
       }
     });
 

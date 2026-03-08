@@ -19,7 +19,7 @@ export function ConnectWallet() {
   }
 
   return (
-    <GlassButton onClick={openConnectModal} className="text-xs sm:text-sm">
+    <GlassButton onClick={openConnectModal} className="text-xs sm:text-sm cursor-pointer">
       Connect wallet
     </GlassButton>
   );
