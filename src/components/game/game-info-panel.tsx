@@ -23,6 +23,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     roomId,
     setStatus,
     reset,
+    drawOfferSent,
+    setDrawOfferSent,
   } = useGameStore();
 
   const { address } = useAccount();
@@ -201,14 +203,23 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           <div className="grid grid-cols-2 gap-2">
             <button
               onClick={() => {
-                // TODO: Implement draw offer
+                if (!socket || !roomId || drawOfferSent) return;
+                socket.emit("offerDraw", { roomId });
+                setDrawOfferSent(true);
+                console.log("[INFO-PANEL] Draw offer sent");
               }}
-              className="flex items-center justify-center gap-2 rounded-xl bg-white/5 px-4 py-3 text-sm font-medium text-white/60 transition hover:bg-white/10 hover:text-white"
+              disabled={drawOfferSent}
+              className={cn(
+                "flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition",
+                drawOfferSent
+                  ? "bg-yellow-500/10 text-yellow-400/60 cursor-not-allowed"
+                  : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+              )}
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              Offer Draw
+              {drawOfferSent ? "Draw Offered..." : "Offer Draw"}
             </button>
             <button
               onClick={() => {

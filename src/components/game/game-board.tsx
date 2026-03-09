@@ -8,6 +8,7 @@ import { getBestMove } from "@/lib/chess-ai";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
+import { DrawOfferModal } from "./draw-offer-modal";
 
 // Helper to format time as MM:SS
 function formatTime(seconds: number): string {
@@ -15,6 +16,16 @@ function formatTime(seconds: number): string {
   const secs = seconds % 60;
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
+
+// Map piece codes to unicode symbols
+const pieceSymbols: Record<string, { w: string; b: string }> = {
+  p: { w: "\u2659", b: "\u265F" },
+  n: { w: "\u2658", b: "\u265E" },
+  b: { w: "\u2657", b: "\u265D" },
+  r: { w: "\u2656", b: "\u265C" },
+  q: { w: "\u2655", b: "\u265B" },
+  k: { w: "\u2654", b: "\u265A" },
+};
 
 export function GameBoard() {
   const {
@@ -36,6 +47,9 @@ export function GameBoard() {
     resetTimers,
     gameOver,
     setGameOver,
+    drawOfferReceived,
+    setDrawOfferReceived,
+    setDrawOfferSent,
     reset: resetStore
   } = useGameStore();
 
@@ -56,6 +70,8 @@ export function GameBoard() {
   // State for move highlighting
   const [moveSquares, setMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
+  // State for last move highlighting (persists between moves)
+  const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
 
   // Helper to sync the state with the game instance
   const syncState = useCallback(() => {
@@ -78,7 +94,13 @@ export function GameBoard() {
           timestamp: Date.now(),
         });
 
-        // Clear highlights after move
+        // Highlight the last move squares
+        setLastMoveSquares({
+          [result.from]: { background: "rgba(255, 255, 0, 0.3)" },
+          [result.to]: { background: "rgba(255, 255, 0, 0.4)" },
+        });
+
+        // Clear selection highlights after move
         setMoveSquares({});
         setSourceSquare(null);
 
@@ -100,6 +122,7 @@ export function GameBoard() {
       resetTimers();
       setMoveSquares({});
       setSourceSquare(null);
+      setLastMoveSquares({});
     }
   }, [status, game, syncState, clearMoves, resetTimers]);
 
@@ -257,6 +280,16 @@ export function GameBoard() {
       setStatus("finished");
     };
 
+    const handleDrawOffered = () => {
+      console.log("[CLIENT] Draw offer received from opponent");
+      setDrawOfferReceived(true);
+    };
+
+    const handleDrawDeclined = () => {
+      console.log("[CLIENT] Draw offer declined by opponent");
+      setDrawOfferSent(false);
+    };
+
     const handleResignError = ({ error }: { error: string }) => {
       console.error("[CLIENT] resignError event received:", error);
       alert(`Failed to resign: ${error}`);
@@ -284,6 +317,8 @@ export function GameBoard() {
     socket.on('gameOver', handleGameOver);
     socket.on('pong', handlePong);
     socket.on('resignError', handleResignError);
+    socket.on('drawOffered', handleDrawOffered);
+    socket.on('drawDeclined', handleDrawDeclined);
 
     return () => {
       clearInterval(pingInterval);
@@ -292,8 +327,10 @@ export function GameBoard() {
       socket.off('gameOver', handleGameOver);
       socket.off('pong', handlePong);
       socket.off('resignError', handleResignError);
+      socket.off('drawOffered', handleDrawOffered);
+      socket.off('drawDeclined', handleDrawDeclined);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent]);
 
   // Calculate and style possible moves
   const getMoveOptions = (square: string) => {
@@ -492,6 +529,20 @@ export function GameBoard() {
     setShowResignModal(false);
   }, [socket, roomId, address]);
 
+  // Handle accepting a draw offer
+  const handleAcceptDraw = useCallback(() => {
+    if (!socket || !roomId) return;
+    socket.emit("acceptDraw", { roomId });
+    setDrawOfferReceived(false);
+  }, [socket, roomId, setDrawOfferReceived]);
+
+  // Handle declining a draw offer
+  const handleDeclineDraw = useCallback(() => {
+    if (!socket || !roomId) return;
+    socket.emit("declineDraw", { roomId });
+    setDrawOfferReceived(false);
+  }, [socket, roomId, setDrawOfferReceived]);
+
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
   const playerTurnCode = effectiveColor === 'black' ? 'b' : 'w';
@@ -512,7 +563,12 @@ export function GameBoard() {
               {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-white/30">
-              {status === 'in-progress' && !isMyTurn ? 'Thinking...' : 'Waiting'}
+              {status === 'in-progress' && !isMyTurn ? 'Thinking...' :
+                lastMove && lastMove.color !== playerTurnCode
+                  ? <span className="normal-case tracking-normal text-white/50">
+                      played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                    </span>
+                  : 'Waiting'}
             </div>
           </div>
         </div>
@@ -546,7 +602,7 @@ export function GameBoard() {
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
-              squareStyles: moveSquares,
+              squareStyles: { ...lastMoveSquares, ...moveSquares },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
                 if (!sourceSquare || !targetSquare) return false;
@@ -567,21 +623,24 @@ export function GameBoard() {
           {gameOver && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in zoom-in-95 duration-300">
               <div className="bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
-                <div className={`mx-auto h-16 w-16 flex items-center justify-center rounded-full mb-4 ${gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                  {gameOver.winner === playerColor || gameOver.winner === 'opponent' ? (
+                <div className={`mx-auto h-16 w-16 flex items-center justify-center rounded-full mb-4 ${gameOver.winner === 'draw' ? 'bg-yellow-500/20 text-yellow-400' : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                  {gameOver.winner === 'draw' ? (
+                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  ) : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? (
                     <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                   ) : (
                     <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                   )}
                 </div>
                 <h2 className="text-2xl font-black text-white mb-2">
-                  {(gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
+                  {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
                 </h2>
                 <p className="text-white/60 mb-6 capitalize">
                   {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
                     gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
                       gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
-                        gameOver.reason}
+                        gameOver.reason === 'draw' ? 'Draw by Agreement' :
+                          gameOver.reason}
                 </p>
                 <button
                   onClick={() => window.location.reload()}
@@ -608,7 +667,12 @@ export function GameBoard() {
               {isMyTurn && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,1)]" />}
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-blue-400">
-              {status === 'in-progress' ? (isMyTurn ? 'Your Turn' : 'Waiting for opponent') : 'Online'}
+              {status === 'in-progress' ? (isMyTurn ? 'Your Turn' :
+                lastMove && lastMove.color === playerTurnCode
+                  ? <span className="normal-case tracking-normal text-white/50">
+                      played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                    </span>
+                  : 'Waiting for opponent') : 'Online'}
             </div>
           </div>
         </div>
@@ -653,6 +717,13 @@ export function GameBoard() {
         isOpen={showResignModal}
         onConfirm={handleResign}
         onCancel={() => setShowResignModal(false)}
+      />
+
+      {/* Draw Offer Modal (shown when opponent offers a draw) */}
+      <DrawOfferModal
+        isOpen={drawOfferReceived}
+        onAccept={handleAcceptDraw}
+        onDecline={handleDeclineDraw}
       />
     </div>
   );

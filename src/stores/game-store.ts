@@ -40,6 +40,11 @@ type GameState = {
   // Connection status
   isOpponentConnected: boolean;
   setOpponentConnected: (connected: boolean) => void;
+  // Draw offer state
+  drawOfferReceived: boolean;
+  drawOfferSent: boolean;
+  setDrawOfferReceived: (received: boolean) => void;
+  setDrawOfferSent: (sent: boolean) => void;
   // Timer state
   initialTime: number; // in seconds (default 600 = 10 minutes)
   whiteTime: number; // remaining time for white in seconds
@@ -86,6 +91,8 @@ const initialState = {
   opponent: undefined,
   moves: [] as MoveRecord[],
   isOpponentConnected: false,
+  drawOfferReceived: false,
+  drawOfferSent: false,
   // Timer
   initialTime: DEFAULT_TIME,
   whiteTime: DEFAULT_TIME,
@@ -106,6 +113,8 @@ export const useGameStore = create<GameState>((set) => ({
   addMove: (move) => set((state) => ({ moves: [...state.moves, move] })),
   clearMoves: () => set({ moves: [] }),
   setOpponentConnected: (connected) => set({ isOpponentConnected: connected }),
+  setDrawOfferReceived: (received) => set({ drawOfferReceived: received }),
+  setDrawOfferSent: (sent) => set({ drawOfferSent: sent }),
   // Timer functions
   setInitialTime: (time) => set({ initialTime: time, whiteTime: time, blackTime: time }),
   setWhiteTime: (time) => set({ whiteTime: time }),
@@ -121,6 +130,8 @@ export const useGameStore = create<GameState>((set) => ({
       playerColor: undefined,
       moves: [],
       isOpponentConnected: false,
+      drawOfferReceived: false,
+      drawOfferSent: false,
       whiteTime: DEFAULT_TIME,
       blackTime: DEFAULT_TIME,
       gameOver: null,
