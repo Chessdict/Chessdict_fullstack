@@ -152,6 +152,69 @@ app.prepare().then(() => {
       socket.emit("pong", { timestamp: Date.now() });
     });
 
+    socket.on("offerDraw", ({ roomId }) => {
+      const roomSockets = io.sockets.adapter.rooms.get(roomId);
+      console.log(`[SERVER] Draw offered in room ${roomId} by socket ${socket.id}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
+      // Use socket.to to send to all room members except the sender
+      socket.to(roomId).emit("drawOffered");
+      // Also broadcast via io.to for reliability (sender will also get it, but they already know)
+      if (roomSockets) {
+        roomSockets.forEach(sid => {
+          if (sid !== socket.id) {
+            io.to(sid).emit("drawOffered");
+          }
+        });
+      }
+    });
+
+    socket.on("acceptDraw", async ({ roomId }) => {
+      console.log(`[SERVER] Draw accepted in room ${roomId} by socket ${socket.id}`);
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game || game.status !== "IN_PROGRESS") {
+          console.log(`[SERVER] Game ${roomId} not valid for draw`);
+          return;
+        }
+
+        await prisma.game.update({
+          where: { id: roomId },
+          data: { status: "COMPLETED", winnerId: null },
+        });
+
+        recentlyCompletedGames.add(roomId);
+        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
+
+        const gameOverPayload = { winner: "draw", reason: "draw" };
+        io.to(roomId).emit("gameOver", gameOverPayload);
+
+        // Also emit directly to both player sockets for reliability
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+        const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
+        const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
+        if (whiteSocketId) io.to(whiteSocketId).emit("gameOver", gameOverPayload);
+        if (blackSocketId) io.to(blackSocketId).emit("gameOver", gameOverPayload);
+
+        console.log(`[SERVER] Game ${roomId} ended in draw by agreement`);
+      } catch (error) {
+        console.error("Error processing draw acceptance:", error);
+      }
+    });
+
+    socket.on("declineDraw", ({ roomId }) => {
+      console.log(`[SERVER] Draw declined in room ${roomId} by socket ${socket.id}`);
+      socket.to(roomId).emit("drawDeclined");
+      // Also send directly for reliability
+      const roomSockets = io.sockets.adapter.rooms.get(roomId);
+      if (roomSockets) {
+        roomSockets.forEach(sid => {
+          if (sid !== socket.id) {
+            io.to(sid).emit("drawDeclined");
+          }
+        });
+      }
+    });
+
     socket.on("resign", async ({ roomId, userId }) => {
       console.log(`[SERVER] Resignation received from ${userId} in room ${roomId}`);
       console.log(`[SERVER] Socket ${socket.id} rooms:`, Array.from(socket.rooms));
