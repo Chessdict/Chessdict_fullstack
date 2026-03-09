@@ -24,6 +24,7 @@ export type TournamentListItem = {
   sponsorAddress: string | null;
   createdBy: string;
   playerCount: number;
+  winner: string | null;
 };
 
 // ─── List tournaments ───
@@ -47,6 +48,11 @@ export async function getTournaments(
       include: {
         creator: { select: { walletAddress: true } },
         _count: { select: { participants: true } },
+        participants: {
+          where: { placement: 1 },
+          include: { user: { select: { walletAddress: true } } },
+          take: 1,
+        },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -66,6 +72,7 @@ export async function getTournaments(
       sponsorAddress: t.sponsorAddress,
       createdBy: t.creator.walletAddress,
       playerCount: t._count.participants,
+      winner: t.participants.find((p: any) => p.placement === 1)?.user?.walletAddress ?? null,
     }));
 
     return { success: true, data };
@@ -143,6 +150,7 @@ export async function getTournamentById(
       sponsorAddress: t.sponsorAddress,
       createdBy: t.creator.walletAddress,
       playerCount: t._count.participants,
+      winner: t.participants.find((p) => p.placement === 1)?.user?.walletAddress ?? null,
       participants: t.participants.map((p) => ({
         id: p.id,
         walletAddress: p.user.walletAddress,

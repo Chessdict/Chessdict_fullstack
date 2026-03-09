@@ -98,9 +98,28 @@ export function TournamentPanel() {
     });
   }, [filter]);
 
+  const notifyTournamentListChanged = useCallback(() => {
+    if (socket) {
+      socket.emit("tournament:listChanged");
+    }
+  }, [socket]);
+
   useEffect(() => {
     fetchList();
   }, [fetchList]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const onTournamentListChanged = () => {
+      fetchList();
+    };
+
+    socket.on("tournament:listChanged", onTournamentListChanged);
+    return () => {
+      socket.off("tournament:listChanged", onTournamentListChanged);
+    };
+  }, [socket, fetchList]);
 
   // Fetch detail when navigating
   const openDetail = useCallback((id: string) => {
@@ -142,6 +161,7 @@ export function TournamentPanel() {
         setToken("USDC"); setIsSponsored(false); setSponsorAmount("");
         setStartsAt(""); setJoinAsPlayer(true);
         setPanelView("list");
+        notifyTournamentListChanged();
         fetchList();
       } else {
         setError(result.error);
@@ -153,6 +173,7 @@ export function TournamentPanel() {
     startTransition(async () => {
       const result = await joinTournament(tournamentId, address ?? "");
       if (result.success) {
+        notifyTournamentListChanged();
         openDetail(tournamentId); // refresh detail
         fetchList(); // refresh counts
       } else {
@@ -165,6 +186,7 @@ export function TournamentPanel() {
     startTransition(async () => {
       const result = await exitTournament(tournamentId, address ?? "");
       if (result.success) {
+        notifyTournamentListChanged();
         openDetail(tournamentId);
         fetchList();
       } else {
@@ -214,7 +236,7 @@ export function TournamentPanel() {
         </div>
 
         {/* Tournament list */}
-        <div className="flex flex-col gap-2 max-h-[340px] overflow-y-auto pr-1">
+        <div className="elegant-scrollbar flex flex-col gap-2 max-h-[340px] overflow-y-auto pr-1">
           {isPending && filtered.length === 0 ? (
             <div className="py-10 text-center text-sm text-white/30">
               Loading...
@@ -267,6 +289,14 @@ export function TournamentPanel() {
                       </>
                     )}
                   </div>
+                  {uiStatus === "completed" && t.winner && (
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-amber-400">🏆</span>
+                      <span className="text-amber-400/80 font-medium">
+                        {t.winner.slice(0, 6)}...{t.winner.slice(-4)}
+                      </span>
+                    </div>
+                  )}
                 </button>
               );
             })
@@ -419,6 +449,27 @@ export function TournamentPanel() {
           </span>
         </div>
 
+        {/* Winner banner for completed tournaments */}
+        {uiStatus === "completed" && (() => {
+          const winner = t.participants.find((p) => p.placement === 1);
+          if (!winner) return null;
+          return (
+            <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-yellow-500/10 to-amber-500/10 px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/20 text-lg">
+                  🏆
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-medium text-amber-400/70">Winner</span>
+                  <span className="text-sm font-semibold text-amber-300">
+                    {winner.walletAddress.slice(0, 6)}...{winner.walletAddress.slice(-4)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Join / Exit buttons */}
         {(isJoinable || uiStatus === "upcoming") && (
           <div className="flex gap-2">
@@ -487,18 +538,42 @@ export function TournamentPanel() {
         {/* Participants */}
         <div className="flex flex-col gap-2">
           <h4 className="text-xs font-medium text-white/60">
-            Participants ({t.playerCount}/{t.maxPlayers})
+            {uiStatus === "completed" ? "Final Standings" : `Participants (${t.playerCount}/${t.maxPlayers})`}
           </h4>
-          <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto pr-1">
-            {t.participants.map((p, i) => (
+          <div className="elegant-scrollbar flex flex-col gap-1 max-h-[160px] overflow-y-auto pr-1">
+            {(uiStatus === "completed"
+              ? [...t.participants].sort((a, b) => (a.placement ?? 999) - (b.placement ?? 999))
+              : t.participants
+            ).map((p, i) => (
               <div
                 key={p.id}
-                className="flex items-center gap-2 rounded-xl bg-white/[0.02] px-3 py-2"
+                className={cn(
+                  "flex items-center gap-2 rounded-xl px-3 py-2",
+                  uiStatus === "completed" && p.placement === 1
+                    ? "bg-amber-500/10 border border-amber-500/20"
+                    : "bg-white/[0.02]",
+                )}
               >
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-[10px] font-bold text-white/60">
-                  {i + 1}
+                <div className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold",
+                  uiStatus === "completed" && p.placement === 1
+                    ? "bg-amber-500/20 text-amber-400"
+                    : uiStatus === "completed" && p.placement === 2
+                      ? "bg-gray-400/20 text-gray-300"
+                      : uiStatus === "completed" && p.placement === 3
+                        ? "bg-orange-700/20 text-orange-400"
+                        : "bg-white/10 text-white/60",
+                )}>
+                  {uiStatus === "completed" ? (p.placement ?? i + 1) : i + 1}
                 </div>
-                <span className="text-xs text-white/70">{p.walletAddress}</span>
+                <span className={cn(
+                  "text-xs",
+                  uiStatus === "completed" && p.placement === 1
+                    ? "text-amber-300 font-medium"
+                    : "text-white/70",
+                )}>
+                  {p.walletAddress}
+                </span>
               </div>
             ))}
             {t.playerCount < t.maxPlayers && (

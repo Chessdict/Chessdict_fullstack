@@ -79,6 +79,16 @@ export default function TournamentPlayPage({
       setParticipants(updated);
     };
 
+    const handlePlayerDisconnected = (data: any) => {
+      const store = useTournamentStore.getState();
+      const updated = store.participants.map((p) =>
+        p.walletAddress === data.walletAddress
+          ? { ...p, connected: false }
+          : p,
+      );
+      setParticipants(updated);
+    };
+
     const handleStarting = (data: any) => {
       setPhase("starting");
       setRoundInfo(0, data.totalRounds);
@@ -145,6 +155,7 @@ export default function TournamentPlayPage({
 
     socket.on("tournament:state", handleState);
     socket.on("tournament:playerConnected", handlePlayerConnected);
+    socket.on("tournament:playerDisconnected", handlePlayerDisconnected);
     socket.on("tournament:starting", handleStarting);
     socket.on("tournament:roundStart", handleRoundStart);
     socket.on("tournament:gameStart", handleGameStart);
@@ -158,6 +169,7 @@ export default function TournamentPlayPage({
     return () => {
       socket.off("tournament:state", handleState);
       socket.off("tournament:playerConnected", handlePlayerConnected);
+      socket.off("tournament:playerDisconnected", handlePlayerDisconnected);
       socket.off("tournament:starting", handleStarting);
       socket.off("tournament:roundStart", handleRoundStart);
       socket.off("tournament:gameStart", handleGameStart);
