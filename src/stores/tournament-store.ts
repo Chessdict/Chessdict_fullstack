@@ -45,6 +45,7 @@ type TournamentState = {
   roundEndTime: number | null;
   breakEndTime: number | null;
   startingEndTime: number | null;
+  isFinalBreak: boolean;
 
   // Round progress
   gamesCompleted: number;
@@ -76,6 +77,7 @@ type TournamentState = {
   setRoundEndTime: (time: number | null) => void;
   setBreakEndTime: (time: number | null) => void;
   setStartingEndTime: (time: number | null) => void;
+  setIsFinalBreak: (isFinalBreak: boolean) => void;
   setRoundProgress: (completed: number, total: number) => void;
   setGameResult: (
     winner: "white" | "black" | "draw" | null,
@@ -102,6 +104,7 @@ const initialState = {
   roundEndTime: null as number | null,
   breakEndTime: null as number | null,
   startingEndTime: null as number | null,
+  isFinalBreak: false,
   gamesCompleted: 0,
   totalGames: 0,
   gameResult: null as TournamentState["gameResult"],
@@ -142,6 +145,7 @@ export const useTournamentStore = create<TournamentState>((set) => ({
   setRoundEndTime: (time) => set({ roundEndTime: time }),
   setBreakEndTime: (time) => set({ breakEndTime: time }),
   setStartingEndTime: (time) => set({ startingEndTime: time }),
+  setIsFinalBreak: (isFinalBreak) => set({ isFinalBreak }),
   setRoundProgress: (completed, total) =>
     set({ gamesCompleted: completed, totalGames: total }),
   setGameResult: (winner, reason) => set({ gameResult: { winner, reason } }),

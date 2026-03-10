@@ -114,6 +114,7 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
     roundEndTime,
     breakEndTime,
     startingEndTime,
+    isFinalBreak,
     gamesCompleted,
     totalGames,
     opponentAddress,
@@ -128,7 +129,7 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
   if (phase === "lobby") {
     const connectedCount = participants.filter((p) => p.connected).length;
     return (
-      <div className="flex flex-col gap-4 rounded-[32px] border border-white/10 bg-[#0A0A0A]/40 p-6 backdrop-blur-xl">
+      <div className="mt-[50px] flex flex-col gap-4 rounded-[32px] border border-white/10 bg-[#0A0A0A]/40 p-6 backdrop-blur-xl">
         <div className="flex items-center justify-between border-b border-white/10 pb-4">
           <span className="text-xs font-bold uppercase tracking-widest text-white/40">
             Tournament Lobby
@@ -145,7 +146,7 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
               <div className="h-8 w-8 rounded-full bg-blue-500/20" />
             </div>
           </div>
-          <p className="text-white font-medium">Waiting for players...</p>
+          <p className="text-white font-medium">Waiting for tournament to start...</p>
           <p className="text-sm text-white/40">
             {connectedCount}/{participants.length} players connected
           </p>
@@ -354,7 +355,7 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
   // ── Break: countdown between rounds ──
   if (phase === "break") {
     const breakSecs = Math.ceil(breakRemaining / 1000);
-    const isLast = currentRound >= totalRounds;
+    const isLast = isFinalBreak;
     return (
       <div className="flex flex-col gap-4 rounded-[32px] border border-white/10 bg-[#0A0A0A]/40 p-6 backdrop-blur-xl">
         <div className="flex items-center justify-between border-b border-white/10 pb-4">

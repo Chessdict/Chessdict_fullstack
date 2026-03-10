@@ -26,6 +26,9 @@ app.prepare().then(() => {
     },
   });
 
+  // Expose io globally so server actions can emit events
+  globalThis.__io = io;
+
   const userSocketMap = new Map(); // userId -> socketId
   const activeGames = new Map(); // socketId -> roomId
   const matchmakingQueue = [];
@@ -34,6 +37,45 @@ app.prepare().then(() => {
   // ─── Tournament Management ───
   const activeTournaments = new Map(); // tournamentId -> tournament state
   const playerTournamentMap = new Map(); // walletAddress -> tournamentId (tracks which tournament a player is in)
+
+  function normalizeWalletAddress(walletAddress) {
+    return String(walletAddress || "").toLowerCase();
+  }
+
+  function getSocketIdForWallet(walletAddress) {
+    const target = normalizeWalletAddress(walletAddress);
+    for (const [connectedWallet, socketId] of userSocketMap.entries()) {
+      if (normalizeWalletAddress(connectedWallet) === target) {
+        return socketId;
+      }
+    }
+    return undefined;
+  }
+
+  function hasConnectedTournamentPlayer(state, walletAddress) {
+    const target = normalizeWalletAddress(walletAddress);
+    for (const connectedWallet of state.connectedPlayers.values()) {
+      if (normalizeWalletAddress(connectedWallet) === target) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function addConnectedTournamentPlayer(state, walletAddress) {
+    if (!hasConnectedTournamentPlayer(state, walletAddress)) {
+      state.connectedPlayers.add(walletAddress);
+    }
+  }
+
+  function removeConnectedTournamentPlayer(state, walletAddress) {
+    const target = normalizeWalletAddress(walletAddress);
+    for (const connectedWallet of state.connectedPlayers.values()) {
+      if (normalizeWalletAddress(connectedWallet) === target) {
+        state.connectedPlayers.delete(connectedWallet);
+      }
+    }
+  }
 
   // ─── Periodic stale tournament cleanup (every 60 seconds) ───
   setInterval(async () => {
@@ -179,8 +221,8 @@ app.prepare().then(() => {
 
     // Mark all players with active sockets as connected
     for (const p of tournamentState.participants) {
-      if (userSocketMap.has(p.walletAddress)) {
-        tournamentState.connectedPlayers.add(p.walletAddress);
+      if (getSocketIdForWallet(p.walletAddress)) {
+        addConnectedTournamentPlayer(tournamentState, p.walletAddress);
       }
     }
 
@@ -195,6 +237,9 @@ app.prepare().then(() => {
       startsIn: 10,
       standings: getTournamentStandings(tournamentState),
     });
+
+    // Notify all clients that the tournament list changed
+    io.emit("tournament:listChanged");
 
     // Start first round after 10 seconds
     setTimeout(() => startTournamentRound(tournamentId), 10000);
@@ -222,6 +267,32 @@ app.prepare().then(() => {
 
     const roundPairings = state.schedule[roundIndex];
     state.roundGames = new Map();
+    const roundStartResolutions = [];
+
+    // ─── Refresh connected players from actual socket state ───
+    // Clear stale entries and re-check who really has a live socket
+    console.log(`[ROUND-START] ── Tournament ${tournamentId} Round ${state.currentRound} ──`);
+    console.log(`[ROUND-START] connectedPlayers BEFORE refresh: [${[...state.connectedPlayers].join(', ')}]`);
+    console.log(`[ROUND-START] userSocketMap keys: [${[...userSocketMap.keys()].join(', ')}]`);
+
+    // Rebuild connectedPlayers from live socket state
+    state.connectedPlayers.clear();
+    for (const p of state.participants) {
+      const socketId = getSocketIdForWallet(p.walletAddress);
+      const socketAlive = socketId ? io.sockets.sockets.has(socketId) : false;
+      console.log(`[ROUND-START]   participant ${p.walletAddress} → socketId=${socketId || 'NONE'}, socketAlive=${socketAlive}`);
+      if (socketId && socketAlive) {
+        addConnectedTournamentPlayer(state, p.walletAddress);
+      }
+    }
+    console.log(`[ROUND-START] connectedPlayers AFTER refresh: [${[...state.connectedPlayers].join(', ')}] (${state.connectedPlayers.size}/${state.participants.length})`);
+
+    // If nobody is connected after refresh, force-complete
+    if (state.connectedPlayers.size === 0) {
+      console.log(`[ROUND-START] No connected players after refresh. Force-completing.`);
+      await forceCompleteTournament(tournamentId);
+      return;
+    }
 
     // Update tournament current round in DB
     await prisma.tournament.update({
@@ -264,8 +335,12 @@ app.prepare().then(() => {
       const blackPlayer = state.participants.find((p) => p.userId === pairing.blackId);
 
       if (whitePlayer && blackPlayer) {
-        const whiteSocketId = userSocketMap.get(whitePlayer.walletAddress);
-        const blackSocketId = userSocketMap.get(blackPlayer.walletAddress);
+        const whiteSocketId = getSocketIdForWallet(whitePlayer.walletAddress);
+        const blackSocketId = getSocketIdForWallet(blackPlayer.walletAddress);
+        const whiteConnected = hasConnectedTournamentPlayer(state, whitePlayer.walletAddress);
+        const blackConnected = hasConnectedTournamentPlayer(state, blackPlayer.walletAddress);
+
+        console.log(`[ROUND-START] Game ${game.id}: WHITE ${whitePlayer.walletAddress} connected=${whiteConnected} socketId=${whiteSocketId || 'NONE'} | BLACK ${blackPlayer.walletAddress} connected=${blackConnected} socketId=${blackSocketId || 'NONE'}`);
 
         // Join both sockets to the game room for move relay
         if (whiteSocketId) {
@@ -299,6 +374,38 @@ app.prepare().then(() => {
             totalRounds: state.totalRounds,
             timeControl: state.timeControl,
           });
+        }
+
+        if (!whiteConnected && !blackConnected) {
+          console.log(`[ROUND-START] ⚠ BOTH ABSENT → DRAW for game ${game.id} (white: ${whitePlayer.walletAddress}, black: ${blackPlayer.walletAddress})`);
+          roundStartResolutions.push({
+            gameId: game.id,
+            winner: null,
+            isDraw: true,
+            reason: "players_not_connected",
+            whiteWalletAddress: whitePlayer.walletAddress,
+            blackWalletAddress: blackPlayer.walletAddress,
+          });
+        } else if (!whiteConnected) {
+          console.log(`[ROUND-START] ⚠ WHITE ABSENT → BLACK WINS (forfeit) for game ${game.id} (absent: ${whitePlayer.walletAddress})`);
+          roundStartResolutions.push({
+            gameId: game.id,
+            winner: "black",
+            isDraw: false,
+            reason: "player_not_connected",
+            absentWalletAddress: whitePlayer.walletAddress,
+          });
+        } else if (!blackConnected) {
+          console.log(`[ROUND-START] ⚠ BLACK ABSENT → WHITE WINS (forfeit) for game ${game.id} (absent: ${blackPlayer.walletAddress})`);
+          roundStartResolutions.push({
+            gameId: game.id,
+            winner: "white",
+            isDraw: false,
+            reason: "player_not_connected",
+            absentWalletAddress: blackPlayer.walletAddress,
+          });
+        } else {
+          console.log(`[ROUND-START] ✓ Both connected for game ${game.id} — normal play`);
         }
       }
     }
@@ -344,12 +451,30 @@ app.prepare().then(() => {
     });
 
     console.log(`[TOURNAMENT] Round ${state.currentRound}/${state.totalRounds} started for tournament ${tournamentId}`);
+    console.log(`[ROUND-START] Resolutions to process: ${roundStartResolutions.length} (forfeits/draws)`);
 
     // Set round timeout to force-end any remaining games
     state.roundTimer = setTimeout(() => forceEndTournamentRound(tournamentId), roundDurationMs);
+
+    for (const resolution of roundStartResolutions) {
+      if (resolution.isDraw) {
+        console.log(`[ROUND-START] Processing DRAW: game ${resolution.gameId} (white: ${resolution.whiteWalletAddress}, black: ${resolution.blackWalletAddress})`);
+      } else {
+        console.log(`[ROUND-START] Processing FORFEIT: game ${resolution.gameId}, winner=${resolution.winner}, absent=${resolution.absentWalletAddress}`);
+      }
+      await handleTournamentGameEnd(
+        tournamentId,
+        resolution.gameId,
+        resolution.winner,
+        resolution.isDraw,
+        resolution.reason,
+      );
+      console.log(`[ROUND-START] Resolved game ${resolution.gameId} successfully`);
+    }
+    console.log(`[ROUND-START] ── Round ${state.currentRound} setup complete ──`);
   }
 
-  async function handleTournamentGameEnd(tournamentId, gameId, winner, isDraw) {
+  async function handleTournamentGameEnd(tournamentId, gameId, winner, isDraw, reason = null) {
     const state = activeTournaments.get(tournamentId);
     if (!state) return;
 
@@ -416,6 +541,7 @@ app.prepare().then(() => {
       gameId,
       winner,
       isDraw,
+      reason,
       gamesCompleted,
       totalGames,
       roundEndTime: state.roundEndTime,
@@ -565,12 +691,6 @@ app.prepare().then(() => {
   }
 
   // Check if all players in a tournament have disconnected
-  function checkTournamentAllDisconnected(tournamentId) {
-    const state = activeTournaments.get(tournamentId);
-    if (!state) return false;
-    return state.connectedPlayers.size === 0;
-  }
-
   // Force-complete a tournament when all players have disconnected
   async function forceCompleteTournament(tournamentId) {
     const state = activeTournaments.get(tournamentId);
@@ -654,6 +774,9 @@ app.prepare().then(() => {
       standings,
       winner: standings[0],
     });
+
+    // Notify all clients that the tournament list changed
+    io.emit("tournament:listChanged");
 
     // Clean up
     for (const p of state.participants) {
@@ -1040,7 +1163,7 @@ app.prepare().then(() => {
       // Track this player as connected
       const state = activeTournaments.get(tournamentId);
       if (state) {
-        state.connectedPlayers.add(uid);
+        addConnectedTournamentPlayer(state, uid);
         state.lastActivityTime = Date.now();
       }
 
@@ -1098,12 +1221,6 @@ app.prepare().then(() => {
           console.error("[TOURNAMENT] Error fetching tournament for register:", e);
         }
       }
-    });
-
-    // Broadcast tournament list changes to all clients
-    socket.on("tournament:listChanged", () => {
-      console.log(`[TOURNAMENT] List changed event from ${socket.id}, broadcasting to all`);
-      io.emit("tournament:listChanged");
     });
 
     socket.on("tournament:start", async ({ tournamentId }) => {
@@ -1167,28 +1284,16 @@ app.prepare().then(() => {
         if (tournamentId) {
           const tState = activeTournaments.get(tournamentId);
           if (tState) {
-            tState.connectedPlayers.delete(disconnectingUserId);
+            removeConnectedTournamentPlayer(tState, disconnectingUserId);
             console.log(`[TOURNAMENT] Player ${disconnectingUserId} disconnected from tournament ${tournamentId}. Connected: ${tState.connectedPlayers.size}/${tState.participants.length}`);
 
             // Forfeit their active game
-            forfeitTournamentGame(tournamentId, disconnectingUserId).then(() => {
-              // After forfeiting, check if all players disconnected
-              if (checkTournamentAllDisconnected(tournamentId)) {
-                // Give a 30-second grace period before force-completing
-                // in case players are just refreshing their browser
-                console.log(`[TOURNAMENT] All players disconnected from tournament ${tournamentId}. Starting 30s grace period.`);
-                setTimeout(async () => {
-                  const currentState = activeTournaments.get(tournamentId);
-                  if (currentState && currentState.connectedPlayers.size === 0) {
-                    await forceCompleteTournament(tournamentId);
-                  } else {
-                    console.log(`[TOURNAMENT] Players reconnected to tournament ${tournamentId}, cancelling force-complete.`);
-                  }
-                }, 30000);
-              }
-            }).catch((e) => {
+            forfeitTournamentGame(tournamentId, disconnectingUserId).catch((e) => {
               console.error(`[TOURNAMENT] Error handling tournament disconnect for ${disconnectingUserId}:`, e);
             });
+
+            // Update lastActivityTime so the periodic cleanup interval can detect stale tournaments
+            tState.lastActivityTime = Date.now();
 
             // Notify remaining players
             const roomName = `tournament:${tournamentId}`;
@@ -1298,7 +1403,7 @@ app.prepare().then(() => {
 
     // ─── Startup cleanup: mark stuck IN_PROGRESS tournaments as COMPLETED ───
     try {
-      const stuckTournaments = await prisma.tournament.-({
+      const stuckTournaments = await prisma.tournament.findMany({
         where: { status: "IN_PROGRESS" },
       });
       for (const t of stuckTournaments) {

@@ -36,6 +36,46 @@ function formatTime(minutes: number): string {
   return `${minutes} min`;
 }
 
+function formatAddress(address: string): string {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function getPlacementStyles(placement: number | null, uiStatus: TournamentStatus) {
+  if (uiStatus !== "completed") {
+    return {
+      row: "bg-white/[0.02]",
+      bubble: "bg-white/10 text-white/60",
+      name: "text-white/70",
+    };
+  }
+  switch (placement) {
+    case 1:
+      return {
+        row: "bg-amber-500/10 border border-amber-500/20",
+        bubble: "bg-amber-500/20 text-amber-400",
+        name: "text-amber-300 font-medium",
+      };
+    case 2:
+      return {
+        row: "bg-white/[0.02]",
+        bubble: "bg-gray-400/20 text-gray-300",
+        name: "text-white/70",
+      };
+    case 3:
+      return {
+        row: "bg-white/[0.02]",
+        bubble: "bg-orange-700/20 text-orange-400",
+        name: "text-white/70",
+      };
+    default:
+      return {
+        row: "bg-white/[0.02]",
+        bubble: "bg-white/10 text-white/60",
+        name: "text-white/70",
+      };
+  }
+}
+
 const statusColors: Record<TournamentStatus, string> = {
   upcoming:
     "relative text-blue-400 before:absolute before:bottom-0 before:left-0 before:w-1/2 before:h-1/2 before:border-b before:border-l before:border-blue-400/50 after:absolute after:top-0 after:right-0 after:w-1/2 after:h-1/2 after:border-t after:border-r after:border-blue-400/50",
@@ -98,11 +138,21 @@ export function TournamentPanel() {
     });
   }, [filter]);
 
-  const notifyTournamentListChanged = useCallback(() => {
-    if (socket) {
-      socket.emit("tournament:listChanged");
+  const refreshDetail = useCallback(async (tournamentId: string) => {
+    const result = await getTournamentById(tournamentId);
+    if (result.success) {
+      setDetail(result.data);
+      if (address) {
+        const startCheck = await canStartTournament(tournamentId, address);
+        setCanStart(startCheck.success && startCheck.data?.canStart === true);
+      } else {
+        setCanStart(false);
+      }
+      setError(null);
+    } else {
+      setError(result.error);
     }
-  }, [socket]);
+  }, [address]);
 
   useEffect(() => {
     fetchList();
@@ -113,32 +163,27 @@ export function TournamentPanel() {
 
     const onTournamentListChanged = () => {
       fetchList();
+      if (panelView === "detail" && selectedId) {
+        startTransition(async () => {
+          await refreshDetail(selectedId);
+        });
+      }
     };
 
     socket.on("tournament:listChanged", onTournamentListChanged);
     return () => {
       socket.off("tournament:listChanged", onTournamentListChanged);
     };
-  }, [socket, fetchList]);
+  }, [socket, fetchList, panelView, selectedId, refreshDetail]);
 
   // Fetch detail when navigating
   const openDetail = useCallback((id: string) => {
     setSelectedId(id);
     setPanelView("detail");
     startTransition(async () => {
-      const result = await getTournamentById(id);
-      if (result.success) {
-        setDetail(result.data);
-        // Check if we can start this tournament
-        if (address) {
-          const startCheck = await canStartTournament(id, address);
-          setCanStart(startCheck.success && startCheck.data?.canStart === true);
-        }
-      } else {
-        setError(result.error);
-      }
+      await refreshDetail(id);
     });
-  }, [address]);
+  }, [refreshDetail]);
 
   // Handlers
   const handleCreate = () => {
@@ -161,7 +206,6 @@ export function TournamentPanel() {
         setToken("USDC"); setIsSponsored(false); setSponsorAmount("");
         setStartsAt(""); setJoinAsPlayer(true);
         setPanelView("list");
-        notifyTournamentListChanged();
         fetchList();
       } else {
         setError(result.error);
@@ -173,7 +217,6 @@ export function TournamentPanel() {
     startTransition(async () => {
       const result = await joinTournament(tournamentId, address ?? "");
       if (result.success) {
-        notifyTournamentListChanged();
         openDetail(tournamentId); // refresh detail
         fetchList(); // refresh counts
       } else {
@@ -186,7 +229,6 @@ export function TournamentPanel() {
     startTransition(async () => {
       const result = await exitTournament(tournamentId, address ?? "");
       if (result.success) {
-        notifyTournamentListChanged();
         openDetail(tournamentId);
         fetchList();
       } else {
@@ -293,7 +335,7 @@ export function TournamentPanel() {
                     <div className="flex items-center gap-1.5 text-xs">
                       <span className="text-amber-400">🏆</span>
                       <span className="text-amber-400/80 font-medium">
-                        {t.winner.slice(0, 6)}...{t.winner.slice(-4)}
+                        {formatAddress(t.winner)}
                       </span>
                     </div>
                   )}
@@ -350,6 +392,7 @@ export function TournamentPanel() {
     }
     const t = detail;
     const uiStatus = dbStatusToUI[t.status] ?? "upcoming";
+    const hasJoined = address ? t.participants.some((p) => p.walletAddress.toLowerCase() === address.toLowerCase()) : false;
     const isJoinable = uiStatus === "upcoming" && t.playerCount < t.maxPlayers;
 
     return (
@@ -462,7 +505,7 @@ export function TournamentPanel() {
                 <div className="flex flex-col">
                   <span className="text-[10px] font-medium text-amber-400/70">Winner</span>
                   <span className="text-sm font-semibold text-amber-300">
-                    {winner.walletAddress.slice(0, 6)}...{winner.walletAddress.slice(-4)}
+                    {formatAddress(winner.walletAddress)}
                   </span>
                 </div>
               </div>
@@ -470,13 +513,22 @@ export function TournamentPanel() {
           );
         })()}
 
+        {uiStatus === "upcoming" && !isJoinable && (
+          <div className="flex items-center gap-2 border-l-2 border-amber-400/70 bg-amber-500/5 px-3 py-2 text-xs text-amber-100/75">
+            <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-amber-300/70">
+              Notice
+            </span>
+            <span>Tournament is full.</span>
+          </div>
+        )}
+        
         {/* Join / Exit buttons */}
         {(isJoinable || uiStatus === "upcoming") && (
           <div className="flex gap-2">
             {isJoinable && (
               <button
                 onClick={() => handleJoin(t.id)}
-                disabled={isPending}
+                disabled={isPending || hasJoined}
                 className="group relative flex flex-1 items-center justify-center overflow-hidden rounded-full py-3.5 transition-transform active:scale-95 disabled:opacity-50"
               >
                 <div className="absolute inset-0 border border-white/20 rounded-full" />
@@ -489,17 +541,11 @@ export function TournamentPanel() {
             )}
             <button
               onClick={() => handleExit(t.id)}
-              disabled={isPending}
+              disabled={isPending || !hasJoined}
               className="flex flex-1 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 py-3 text-sm font-medium text-red-400 transition hover:bg-red-500/20 active:scale-95 disabled:opacity-50"
             >
               {isPending ? "Exiting..." : "Exit tournament"}
             </button>
-          </div>
-        )}
-
-        {uiStatus === "upcoming" && !isJoinable && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs text-white/40 text-center">
-            Tournament full
           </div>
         )}
 
@@ -523,7 +569,7 @@ export function TournamentPanel() {
         )}
 
         {/* Enter Tournament — shown when tournament is in progress or ready */}
-        {(uiStatus === "in-progress" || t.status === "READY") && (
+        {!canStart && (uiStatus === "in-progress" || t.status === "READY") && (
           <button
             onClick={() => router.push(`/play/tournament/${t.id}`)}
             className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-3.5 transition-transform active:scale-95"
@@ -544,38 +590,31 @@ export function TournamentPanel() {
             {(uiStatus === "completed"
               ? [...t.participants].sort((a, b) => (a.placement ?? 999) - (b.placement ?? 999))
               : t.participants
-            ).map((p, i) => (
+            ).map((p, i) => {
+              const styles = getPlacementStyles(p.placement ?? null, uiStatus);
+              return (
               <div
                 key={p.id}
                 className={cn(
                   "flex items-center gap-2 rounded-xl px-3 py-2",
-                  uiStatus === "completed" && p.placement === 1
-                    ? "bg-amber-500/10 border border-amber-500/20"
-                    : "bg-white/[0.02]",
+                  styles.row,
                 )}
               >
                 <div className={cn(
                   "flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold",
-                  uiStatus === "completed" && p.placement === 1
-                    ? "bg-amber-500/20 text-amber-400"
-                    : uiStatus === "completed" && p.placement === 2
-                      ? "bg-gray-400/20 text-gray-300"
-                      : uiStatus === "completed" && p.placement === 3
-                        ? "bg-orange-700/20 text-orange-400"
-                        : "bg-white/10 text-white/60",
+                  styles.bubble,
                 )}>
                   {uiStatus === "completed" ? (p.placement ?? i + 1) : i + 1}
                 </div>
                 <span className={cn(
                   "text-xs",
-                  uiStatus === "completed" && p.placement === 1
-                    ? "text-amber-300 font-medium"
-                    : "text-white/70",
+                  styles.name,
                 )}>
                   {p.walletAddress}
                 </span>
               </div>
-            ))}
+              );
+            })}
             {t.playerCount < t.maxPlayers && (
               <div className="flex items-center justify-center rounded-xl border border-dashed border-white/10 px-3 py-2 text-[10px] text-white/20">
                 {t.maxPlayers - t.playerCount} spots remaining

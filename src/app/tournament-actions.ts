@@ -3,6 +3,13 @@
 import prisma from "@/lib/prisma";
 import { containsProfanity } from "@/lib/utils";
 
+function emitTournamentListChanged() {
+  const io = (globalThis as any).__io;
+  if (io) {
+    io.emit("tournament:listChanged");
+  }
+}
+
 // ─── Types ───
 
 type ActionResult<T = undefined> =
@@ -270,6 +277,8 @@ export async function createTournament(
   } catch (error) {
     console.error("Error creating tournament:", error);
     return { success: false, error: "Failed to create tournament" };
+  } finally {
+    emitTournamentListChanged();
   }
 }
 
@@ -346,6 +355,8 @@ export async function joinTournament(
   } catch (error) {
     console.error("Error joining tournament:", error);
     return { success: false, error: "Failed to join tournament" };
+  } finally {
+    emitTournamentListChanged();
   }
 }
 
@@ -414,6 +425,8 @@ export async function exitTournament(
   } catch (error) {
     console.error("Error exiting tournament:", error);
     return { success: false, error: "Failed to exit tournament" };
+  } finally {
+    emitTournamentListChanged();
   }
 }
 

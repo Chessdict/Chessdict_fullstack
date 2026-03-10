@@ -31,6 +31,7 @@ export default function TournamentPlayPage({
     setRoundEndTime,
     setBreakEndTime,
     setStartingEndTime,
+    setIsFinalBreak,
     setRoundProgress,
     setGameResult,
     reset,
@@ -91,6 +92,7 @@ export default function TournamentPlayPage({
 
     const handleStarting = (data: any) => {
       setPhase("starting");
+      setIsFinalBreak(false);
       setRoundInfo(0, data.totalRounds);
       setTimeControl(data.timeControl);
       setStartingEndTime(Date.now() + data.startsIn * 1000);
@@ -98,6 +100,7 @@ export default function TournamentPlayPage({
     };
 
     const handleRoundStart = (data: any) => {
+      setIsFinalBreak(false);
       setRoundInfo(data.round, data.totalRounds);
       setRoundEndTime(data.roundEndTime);
       if (data.standings) setStandings(data.standings);
@@ -139,12 +142,14 @@ export default function TournamentPlayPage({
     const handleRoundComplete = (data: any) => {
       setPhase("break");
       setBreakEndTime(data.breakEndTime);
+      setIsFinalBreak(Boolean(data.isLastRound));
       setRoundInfo(data.round, data.isLastRound ? data.round : data.round + 0); // keep current round info
       if (data.standings) setStandings(data.standings);
     };
 
     const handleComplete = (data: any) => {
       setPhase("complete");
+      setIsFinalBreak(false);
       if (data.standings) setStandings(data.standings);
     };
 
@@ -193,6 +198,7 @@ export default function TournamentPlayPage({
     setRoundEndTime,
     setBreakEndTime,
     setStartingEndTime,
+    setIsFinalBreak,
     setRoundProgress,
     setGameResult,
   ]);
