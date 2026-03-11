@@ -16,6 +16,7 @@ datasource db {
 model User {
   id            Int       @id @default(autoincrement())
   walletAddress String    @unique
+  rating        Int       @default(1200)
   accounts      Account[]
   sessions      Session[]
 

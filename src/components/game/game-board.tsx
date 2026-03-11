@@ -34,6 +34,7 @@ export function GameBoard() {
     difficulty,
     roomId,
     playerColor,
+    player,
     opponent,
     setStatus,
     addMove,
@@ -56,6 +57,7 @@ export function GameBoard() {
   const [ping, setPing] = useState<number>(0);
   const [opponentPing, setOpponentPing] = useState<number>(0);
   const [showResignModal, setShowResignModal] = useState(false);
+  const [ratingChange, setRatingChange] = useState<number | null>(null);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
@@ -275,10 +277,17 @@ export function GameBoard() {
       setOpponentConnected(false);
     };
 
-    const handleGameOver = ({ winner, reason }: { winner: "white" | "black" | "draw" | "opponent"; reason: any }) => {
-      console.log("[CLIENT] gameOver event received:", { winner, reason });
+    const handleGameOver = ({ winner, reason, ratings }: { winner: "white" | "black" | "draw" | "opponent"; reason: any; ratings?: Record<string, number> }) => {
+      console.log("[CLIENT] gameOver event received:", { winner, reason, ratings });
       setGameOver(winner, reason);
       setStatus("finished");
+      if (ratings && address) {
+        const newRating = ratings[address];
+        const oldRating = player?.rating;
+        if (newRating !== undefined && oldRating !== undefined) {
+          setRatingChange(newRating - oldRating);
+        }
+      }
     };
 
     const handleDrawOffered = () => {
@@ -566,15 +575,16 @@ export function GameBoard() {
             </div>
           </div>
           <div>
-            <div className="text-sm font-bold text-white tracking-tight">
+            <div className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
               {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
+              {opponent && <span className="text-[10px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 rounded">{opponent.rating}</span>}
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-white/30">
               {status === 'in-progress' && !isMyTurn ? 'Thinking...' :
                 lastMove && lastMove.color !== playerTurnCode
                   ? <span className="normal-case tracking-normal text-white/50">
-                      played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
-                    </span>
+                    played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                  </span>
                   : 'Waiting'}
             </div>
           </div>
@@ -655,13 +665,18 @@ export function GameBoard() {
                 <h2 className="text-2xl font-black text-white mb-2">
                   {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
                 </h2>
-                <p className="text-white/60 mb-6 capitalize">
+                <p className="text-white/60 mb-4 capitalize">
                   {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
                     gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
                       gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
                         gameOver.reason === 'draw' ? 'Draw by Agreement' :
                           gameOver.reason}
                 </p>
+                {ratingChange !== null && (
+                  <div className={`mb-4 px-3 py-2 rounded-lg text-sm font-bold ${ratingChange > 0 ? 'bg-green-500/20 text-green-400' : ratingChange < 0 ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                    Rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
+                  </div>
+                )}
                 <button
                   onClick={() => window.location.reload()}
                   className="w-full py-3 rounded-xl bg-white text-black font-bold hover:bg-gray-200 transition-colors"
@@ -684,14 +699,15 @@ export function GameBoard() {
           <div>
             <div className="text-sm font-bold text-white flex items-center gap-2">
               You ({playerColor || 'White'})
+              {player && <span className="text-[10px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 rounded">{player.rating}</span>}
               {isMyTurn && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,1)]" />}
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-blue-400">
               {status === 'in-progress' ? (isMyTurn ? 'Your Turn' :
                 lastMove && lastMove.color === playerTurnCode
                   ? <span className="normal-case tracking-normal text-white/50">
-                      played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
-                    </span>
+                    played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                  </span>
                   : 'Waiting for opponent') : 'Online'}
             </div>
           </div>

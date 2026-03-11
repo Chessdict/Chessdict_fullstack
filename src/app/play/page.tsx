@@ -17,7 +17,7 @@ export default function PlayPage() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer } = useGameStore();
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
-  const [pendingMatch, setPendingMatch] = useState<{ roomId: string, color: "white" | "black", opponent: string } | null>(null);
+  const [pendingMatch, setPendingMatch] = useState<{ roomId: string, color: "white" | "black", opponent: string, playerRating: number, opponentRating: number } | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
@@ -26,20 +26,21 @@ export default function PlayPage() {
     if (isConnected && address) {
       loginWithWallet(address)
         .then((result) => {
-          if (result.success) {
+          if (result.success && result.user) {
             console.log("Logged in with wallet:", result.user);
+            setPlayer({ address, rating: result.user.rating ?? 1200 });
           } else {
             console.error("Login failed:", result.error);
           }
         })
         .catch((err) => console.error("Login error:", err));
     }
-  }, [isConnected, address]);
+  }, [isConnected, address, setPlayer]);
 
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('matchFound', (data: { roomId: string, color: "white" | "black", opponent: string }) => {
+    socket.on('matchFound', (data: { roomId: string, color: "white" | "black", opponent: string, playerRating: number, opponentRating: number }) => {
       console.log("MATCH FOUND EVENT:", data);
       setPendingMatch(data);
       setIsSearchOpen(false);
@@ -81,6 +82,7 @@ export default function PlayPage() {
       socket?.emit("joinQueue", { userId: address });
     } else if (gameMode === 'computer') {
       setPlayerColor("white");
+      setOpponent({ address: 'stockfish', rating: 1500 });
       setStatus("in-progress");
       console.log("computer mode started");
     }
@@ -118,8 +120,8 @@ export default function PlayPage() {
               });
               setRoomId(pendingMatch.roomId);
               setPlayerColor(pendingMatch.color);
-              setOpponent({ address: pendingMatch.opponent, rating: 1200 });
-              setPlayer({ address: address!, rating: 1200 });
+              setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating });
+              setPlayer({ address: address!, rating: pendingMatch.playerRating });
               // Ensure gameMode is set to online if it was null (e.g. from a challenge)
               if (!gameMode) setGameMode("online");
               setStatus("in-progress");
