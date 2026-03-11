@@ -12,7 +12,6 @@ import { GameInfoPanel } from "./game-info-panel";
 import { TournamentPanel } from "../tournament/tournament-panel";
 import {
   useChessdict,
-  useGetSupportedTokens,
   useTokenSymbol,
   useTokenDecimals,
   useTokenBalance,
@@ -74,9 +73,6 @@ function StakePanel({
   stakeAmount,
   setStakeAmount,
 }: StakePanelProps) {
-  const { data: supportedTokens } = useGetSupportedTokens();
-  const tokens = (supportedTokens as `0x${string}`[]) ?? [];
-
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between">
@@ -99,33 +95,17 @@ function StakePanel({
 
       {stakeEnabled && (
         <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
-          {tokens.length === 0 ? (
-            <p className="text-xs text-white/40 italic">Loading supported tokens…</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-white/60">Token</label>
-              <div className="relative">
-                <select
-                  value={selectedToken ?? ""}
-                  onChange={(e) => setSelectedToken(e.target.value as `0x${string}`)}
-                  className="w-full appearance-none rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white outline-none transition hover:bg-white/10"
-                >
-                  <option value="" className="bg-[#0A0A0A]">Select token…</option>
-                  {tokens.map((t) => (
-                    <option key={t} value={t} className="bg-[#0A0A0A]">
-                      {t.slice(0, 6)}…{t.slice(-4)}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/40">
-                  <svg width="10" height="6" viewBox="0 0 12 8" fill="none">
-                    <path d="M1.41 0.59L6 5.17L10.59 0.59L12 2L6 8L0 2L1.41 0.59Z" fill="currentColor" />
-                  </svg>
-                </div>
-              </div>
-              {selectedToken && <TokenInfo token={selectedToken} />}
-            </div>
-          )}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-white/60">Token address</label>
+            <input
+              type="text"
+              placeholder="0x…"
+              value={selectedToken ?? ""}
+              onChange={(e) => setSelectedToken(e.target.value as `0x${string}` || null)}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 font-mono text-xs text-white outline-none transition hover:bg-white/10 placeholder:text-white/20"
+            />
+            {selectedToken && <TokenInfo token={selectedToken} />}
+          </div>
 
           <div className="flex flex-col gap-1">
             <label className="text-xs text-white/60">Amount</label>
