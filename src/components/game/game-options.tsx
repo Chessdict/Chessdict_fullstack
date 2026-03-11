@@ -39,21 +39,53 @@ interface Opponent {
 
 // ─── Stake Panel ─────────────────────────────────────────────────────────────
 
-function TokenInfo({ token }: { token: `0x${string}` }) {
+function TokenPill({ token, onChange }: { token: `0x${string}`; onChange: (v: `0x${string}` | null) => void }) {
   const { data: symbol } = useTokenSymbol(token);
   const { data: decimals } = useTokenDecimals(token);
   const { address } = useAccount();
   const { data: balance } = useTokenBalance(token, address);
+  const [editing, setEditing] = useState(false);
 
   const displayBalance =
     balance !== undefined && decimals !== undefined
       ? Number(formatUnits(balance as bigint, decimals as number)).toFixed(4)
-      : "...";
+      : "…";
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="text"
+        placeholder="0x…"
+        defaultValue={token}
+        onBlur={(e) => {
+          const val = e.target.value.trim();
+          onChange(val ? (val as `0x${string}`) : null);
+          setEditing(false);
+        }}
+        className="w-full rounded-xl border border-white/20 bg-white/10 px-3 py-2 font-mono text-xs text-white outline-none"
+      />
+    );
+  }
 
   return (
-    <span className="text-xs text-white/40">
-      {symbol as string ?? token.slice(0, 6) + "..."} &bull; Balance: {displayBalance}
-    </span>
+    <button
+      onClick={() => setEditing(true)}
+      className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left transition hover:bg-white/10"
+    >
+      <div className="flex flex-col">
+        <span className="text-sm font-semibold text-white">
+          {(symbol as string) ?? "ERC-20"}
+        </span>
+        <span className="text-xs text-white/40">
+          {token.slice(0, 6)}…{token.slice(-4)}
+        </span>
+      </div>
+      <div className="text-right">
+        <span className="text-xs text-white/60">Balance</span>
+        <p className="text-sm font-medium text-white">{displayBalance}</p>
+      </div>
+    </button>
   );
 }
 
@@ -97,15 +129,22 @@ function StakePanel({
       {stakeEnabled && (
         <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-white/60">Token address</label>
-            <input
-              type="text"
-              placeholder="0x…"
-              value={selectedToken ?? ""}
-              onChange={(e) => setSelectedToken(e.target.value as `0x${string}` || null)}
-              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 font-mono text-xs text-white outline-none transition hover:bg-white/10 placeholder:text-white/20"
-            />
-            {selectedToken && <TokenInfo token={selectedToken} />}
+            <label className="text-xs text-white/60">Token <span className="text-white/30">(tap to change)</span></label>
+            {selectedToken ? (
+              <TokenPill token={selectedToken} onChange={setSelectedToken} />
+            ) : (
+              <input
+                autoFocus
+                type="text"
+                placeholder="Paste token address…"
+                onChange={(e) => {
+                  const val = e.target.value.trim();
+                  if (val.startsWith("0x") && val.length === 42)
+                    setSelectedToken(val as `0x${string}`);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 font-mono text-xs text-white outline-none transition hover:bg-white/10 placeholder:text-white/20"
+              />
+            )}
           </div>
 
           <div className="flex flex-col gap-1">
