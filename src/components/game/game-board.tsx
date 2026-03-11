@@ -10,6 +10,7 @@ import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { DrawOfferModal } from "./draw-offer-modal";
 
+
 // Helper to format time as MM:SS
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -34,6 +35,7 @@ export function GameBoard() {
     difficulty,
     roomId,
     playerColor,
+    player,
     opponent,
     setStatus,
     addMove,
@@ -54,10 +56,14 @@ export function GameBoard() {
   } = useGameStore();
 
   const [ping, setPing] = useState<number>(0);
+  const [opponentPing, setOpponentPing] = useState<number>(0);
   const [showResignModal, setShowResignModal] = useState(false);
+  const [ratingChange, setRatingChange] = useState<number | null>(null);
+  const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
+
 
   // Initialize the chess instance once and keep it stable.
   // We use fen as the source of truth for React rendering.
@@ -72,6 +78,25 @@ export function GameBoard() {
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
   // State for last move highlighting (persists between moves)
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
+
+  // Compute persistent check highlight from current position
+  const checkSquare = useMemo<Record<string, React.CSSProperties>>(() => {
+    if (!game.isCheck()) return {};
+    const turn = game.turn();
+    const board = game.board();
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = board[r][c];
+        if (piece && piece.type === 'k' && piece.color === turn) {
+          const file = String.fromCharCode(97 + c);
+          const rank = String(8 - r);
+          return { [`${file}${rank}`]: { background: "radial-gradient(circle, rgba(255,0,0,0.4) 50%, transparent 100%)" } };
+        }
+      }
+    }
+    return {};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fen]);
 
   // Helper to sync the state with the game instance
   const syncState = useCallback(() => {
@@ -274,10 +299,17 @@ export function GameBoard() {
       setOpponentConnected(false);
     };
 
-    const handleGameOver = ({ winner, reason }: { winner: "white" | "black" | "draw" | "opponent"; reason: any }) => {
-      console.log("[CLIENT] gameOver event received:", { winner, reason });
+    const handleGameOver = ({ winner, reason, ratings }: { winner: "white" | "black" | "draw" | "opponent"; reason: any; ratings?: Record<string, number> }) => {
+      console.log("[CLIENT] gameOver event received:", { winner, reason, ratings });
       setGameOver(winner, reason);
       setStatus("finished");
+      if (ratings && address) {
+        const newRating = ratings[address];
+        const oldRating = player?.rating;
+        if (newRating !== undefined && oldRating !== undefined) {
+          setRatingChange(newRating - oldRating);
+        }
+      }
     };
 
     const handleDrawOffered = () => {
@@ -301,9 +333,13 @@ export function GameBoard() {
       setPing(rtt);
     };
 
+    const handleOpponentPing = (data: { ping: number }) => {
+      setOpponentPing(data.ping);
+    };
+
     // Ping interval
     const pingInterval = setInterval(() => {
-      socket.emit("ping");
+      socket.emit("ping", { timestamp: Date.now() });
     }, 5000);
 
     // Set connected when we have an opponent
@@ -316,6 +352,7 @@ export function GameBoard() {
     socket.on('opponentLeft', handleOpponentLeft);
     socket.on('gameOver', handleGameOver);
     socket.on('pong', handlePong);
+    socket.on('opponentPing', handleOpponentPing);
     socket.on('resignError', handleResignError);
     socket.on('drawOffered', handleDrawOffered);
     socket.on('drawDeclined', handleDrawDeclined);
@@ -326,11 +363,37 @@ export function GameBoard() {
       socket.off('opponentLeft', handleOpponentLeft);
       socket.off('gameOver', handleGameOver);
       socket.off('pong', handlePong);
+      socket.off('opponentPing', handleOpponentPing);
       socket.off('resignError', handleResignError);
       socket.off('drawOffered', handleDrawOffered);
       socket.off('drawDeclined', handleDrawDeclined);
     };
   }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent]);
+
+  // Flash the king square red when in check and player tries an invalid action
+  const flashKingCheck = useCallback(() => {
+    if (!game.isCheck()) return;
+    const turn = game.turn();
+    const board = game.board();
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = board[r][c];
+        if (piece && piece.type === 'k' && piece.color === turn) {
+          const file = String.fromCharCode(97 + c);
+          const rank = String(8 - r);
+          const kingSquare = `${file}${rank}`;
+          setCheckFlash({
+            [kingSquare]: {
+              background: "radial-gradient(circle, rgba(255,0,0,0.6) 60%, rgba(255,0,0,0.2) 100%)",
+              borderRadius: "50%",
+            },
+          });
+          setTimeout(() => setCheckFlash({}), 500);
+          return;
+        }
+      }
+    }
+  }, [game]);
 
   // Calculate and style possible moves
   const getMoveOptions = (square: string) => {
@@ -361,6 +424,7 @@ export function GameBoard() {
 
     if (moves.length === 0) {
       setMoveSquares({});
+      flashKingCheck();
       return false;
     }
 
@@ -442,6 +506,7 @@ export function GameBoard() {
       }
 
       // Invalid move and not clicking our own piece -> Deselect
+      flashKingCheck();
       setSourceSquare(null);
       setMoveSquares({});
       return;
@@ -559,24 +624,38 @@ export function GameBoard() {
             </div>
           </div>
           <div>
-            <div className="text-sm font-bold text-white tracking-tight">
+            <div className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
               {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
+              {opponent && <span className="text-[10px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 rounded">{opponent.rating}</span>}
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-white/30">
               {status === 'in-progress' && !isMyTurn ? 'Thinking...' :
                 lastMove && lastMove.color !== playerTurnCode
                   ? <span className="normal-case tracking-normal text-white/50">
-                      played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
-                    </span>
+                    played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                  </span>
                   : 'Waiting'}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
           {['online', 'friend'].includes(gameMode || '') && (
-            <div className="flex items-center gap-2 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
-              <div className={`h-2 w-2 rounded-full ${ping < 100 ? 'bg-green-500' : ping < 300 ? 'bg-yellow-500' : 'bg-red-500'}`} />
-              <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Opponent Latency: ${opponentPing}ms`}>
+              <div className="flex items-end gap-0.5 h-3.5">
+                {[1, 2, 3, 4].map((bar) => {
+                  const strength = opponentPing < 80 ? 4 : opponentPing < 150 ? 3 : opponentPing < 300 ? 2 : 1;
+                  const color = strength >= 3 ? 'bg-green-500' : strength === 2 ? 'bg-yellow-500' : 'bg-red-500';
+                  const isActive = bar <= strength;
+                  return (
+                    <div
+                      key={bar}
+                      className={`w-0.75 rounded-sm ${isActive ? color : 'bg-white/15'}`}
+                      style={{ height: `${bar * 25}%` }}
+                    />
+                  );
+                })}
+              </div>
+              <span className="text-[10px] font-mono text-white/60">{opponentPing}ms</span>
             </div>
           )}
           {/* Opponent's timer */}
@@ -602,7 +681,7 @@ export function GameBoard() {
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
-              squareStyles: { ...lastMoveSquares, ...moveSquares },
+              squareStyles: { ...lastMoveSquares, ...checkSquare, ...moveSquares, ...checkFlash },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
                 if (!sourceSquare || !targetSquare) return false;
@@ -635,13 +714,18 @@ export function GameBoard() {
                 <h2 className="text-2xl font-black text-white mb-2">
                   {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
                 </h2>
-                <p className="text-white/60 mb-6 capitalize">
+                <p className="text-white/60 mb-4 capitalize">
                   {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
                     gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
                       gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
                         gameOver.reason === 'draw' ? 'Draw by Agreement' :
                           gameOver.reason}
                 </p>
+                {ratingChange !== null && (
+                  <div className={`mb-4 px-3 py-2 rounded-lg text-sm font-bold ${ratingChange > 0 ? 'bg-green-500/20 text-green-400' : ratingChange < 0 ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                    Rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
+                  </div>
+                )}
                 <button
                   onClick={() => window.location.reload()}
                   className="w-full py-3 rounded-xl bg-white text-black font-bold hover:bg-gray-200 transition-colors"
@@ -664,14 +748,15 @@ export function GameBoard() {
           <div>
             <div className="text-sm font-bold text-white flex items-center gap-2">
               You ({playerColor || 'White'})
+              {player && <span className="text-[10px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 rounded">{player.rating}</span>}
               {isMyTurn && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,1)]" />}
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-blue-400">
               {status === 'in-progress' ? (isMyTurn ? 'Your Turn' :
                 lastMove && lastMove.color === playerTurnCode
                   ? <span className="normal-case tracking-normal text-white/50">
-                      played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
-                    </span>
+                    played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                  </span>
                   : 'Waiting for opponent') : 'Online'}
             </div>
           </div>
@@ -701,6 +786,25 @@ export function GameBoard() {
             >
               Force Reset
             </button>
+          )}
+          {['online', 'friend'].includes(gameMode || '') && (
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
+              <div className="flex items-end gap-0.5 h-3.5">
+                {[1, 2, 3, 4].map((bar) => {
+                  const strength = ping < 80 ? 4 : ping < 150 ? 3 : ping < 300 ? 2 : 1;
+                  const color = strength >= 3 ? 'bg-green-500' : strength === 2 ? 'bg-yellow-500' : 'bg-red-500';
+                  const isActive = bar <= strength;
+                  return (
+                    <div
+                      key={bar}
+                      className={`w-0.75 rounded-sm ${isActive ? color : 'bg-white/15'}`}
+                      style={{ height: `${bar * 25}%` }}
+                    />
+                  );
+                })}
+              </div>
+              <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
+            </div>
           )}
           {/* Player's timer */}
           <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${isMyTurn && status === 'in-progress'

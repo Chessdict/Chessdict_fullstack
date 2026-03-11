@@ -107,6 +107,7 @@ export async function searchUsers(query: string) {
       select: {
         id: true,
         walletAddress: true,
+        rating: true,
       },
     });
     return { success: true, users };

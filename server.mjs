@@ -13,6 +13,51 @@ const handle = app.getRequestHandler();
 
 const prisma = new PrismaClient();
 
+// ELO rating calculation
+const K_FACTOR = 32; // Standard K-factor for chess ratings
+
+function calculateElo(winnerRating, loserRating, isDraw = false) {
+  const expectedWinner = 1 / (1 + Math.pow(10, (loserRating - winnerRating) / 400));
+  const expectedLoser = 1 - expectedWinner;
+
+  if (isDraw) {
+    const newRatingA = Math.round(winnerRating + K_FACTOR * (0.5 - expectedWinner));
+    const newRatingB = Math.round(loserRating + K_FACTOR * (0.5 - expectedLoser));
+    return { newRatingA, newRatingB };
+  }
+
+  const newWinnerRating = Math.round(winnerRating + K_FACTOR * (1 - expectedWinner));
+  const newLoserRating = Math.round(loserRating + K_FACTOR * (0 - expectedLoser));
+  return {
+    newWinnerRating,
+    newLoserRating: Math.max(100, newLoserRating), // Floor at 100
+  };
+}
+
+async function updateRatings(game, isDraw = false) {
+  const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+  const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+  if (!whitePlayer || !blackPlayer) return null;
+
+  if (isDraw) {
+    const { newRatingA, newRatingB } = calculateElo(whitePlayer.rating, blackPlayer.rating, true);
+    await prisma.user.update({ where: { id: whitePlayer.id }, data: { rating: newRatingA } });
+    await prisma.user.update({ where: { id: blackPlayer.id }, data: { rating: newRatingB } });
+    console.log(`[ELO] Draw: ${whitePlayer.walletAddress} ${whitePlayer.rating} -> ${newRatingA}, ${blackPlayer.walletAddress} ${blackPlayer.rating} -> ${newRatingB}`);
+    return { [whitePlayer.walletAddress]: newRatingA, [blackPlayer.walletAddress]: newRatingB };
+  }
+
+  const winnerId = game.winnerId;
+  const winner = winnerId === whitePlayer.id ? whitePlayer : blackPlayer;
+  const loser = winnerId === whitePlayer.id ? blackPlayer : whitePlayer;
+  const { newWinnerRating, newLoserRating } = calculateElo(winner.rating, loser.rating);
+
+  await prisma.user.update({ where: { id: winner.id }, data: { rating: newWinnerRating } });
+  await prisma.user.update({ where: { id: loser.id }, data: { rating: newLoserRating } });
+  console.log(`[ELO] Win: ${winner.walletAddress} ${winner.rating} -> ${newWinnerRating}, Loss: ${loser.walletAddress} ${loser.rating} -> ${newLoserRating}`);
+  return { [winner.walletAddress]: newWinnerRating, [loser.walletAddress]: newLoserRating };
+}
+
 app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url, true);
@@ -543,16 +588,20 @@ app.prepare().then(() => {
 
           const roomId = game.id;
 
-          // Emit match found to both players
+          // Emit match found to both players (include ratings)
           io.to(p1.socketId).emit("matchFound", {
             roomId,
             color: "white",
             opponent: p2.userId,
+            playerRating: whiteUser.rating,
+            opponentRating: blackUser.rating,
           });
           io.to(p2.socketId).emit("matchFound", {
             roomId,
             color: "black",
             opponent: p1.userId,
+            playerRating: blackUser.rating,
+            opponentRating: whiteUser.rating,
           });
 
           // Join rooms
@@ -639,8 +688,14 @@ app.prepare().then(() => {
       socket.emit("statusUpdate", { statusMap });
     });
 
-    socket.on("ping", () => {
-      socket.emit("pong", { timestamp: Date.now() });
+    socket.on("ping", ({ timestamp }) => {
+      socket.emit("pong", { timestamp });
+      // Forward this player's ping to their opponent
+      const roomId = activeGames.get(socket.id);
+      if (roomId) {
+        const rtt = Date.now() - timestamp;
+        socket.to(roomId).emit("opponentPing", { ping: rtt });
+      }
     });
 
     socket.on("offerDraw", ({ roomId }) => {
@@ -672,10 +727,13 @@ app.prepare().then(() => {
           data: { status: "COMPLETED", winnerId: null },
         });
 
+        // Update ELO ratings for draw
+        const newRatings = await updateRatings(game, true);
+
         recentlyCompletedGames.add(roomId);
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
-        const gameOverPayload = { winner: "draw", reason: "draw" };
+        const gameOverPayload = { winner: "draw", reason: "draw", ratings: newRatings };
         io.to(roomId).emit("gameOver", gameOverPayload);
 
         // Also emit directly to both player sockets for reliability
@@ -755,6 +813,10 @@ app.prepare().then(() => {
           }
         });
 
+        // Update ELO ratings
+        const updatedGame = { ...game, winnerId };
+        const newRatings = await updateRatings(updatedGame);
+
         console.log(`[SERVER] Game ${roomId} ended by resignation. Winner: ${winnerColor}`);
 
         // Mark game as recently completed to prevent false disconnect forfeits
@@ -770,7 +832,7 @@ app.prepare().then(() => {
         const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
         console.log(`[SERVER] Direct socket IDs - White: ${whiteSocketId}, Black: ${blackSocketId}`);
 
-        const gameOverPayload = { winner: winnerColor, reason: "resignation" };
+        const gameOverPayload = { winner: winnerColor, reason: "resignation", ratings: newRatings };
 
         // Emit to room (backup)
         io.to(roomId).emit("gameOver", gameOverPayload);
@@ -822,6 +884,11 @@ app.prepare().then(() => {
           }
         });
 
+        // Update ELO ratings
+        const isDraw = winner === "draw" || reason === "stalemate";
+        const updatedGame = { ...game, winnerId };
+        const newRatings = await updateRatings(updatedGame, isDraw);
+
         console.log(`[SERVER] Game ${roomId} marked as COMPLETED. Winner: ${winner}, Reason: ${reason}`);
 
         // Mark game as recently completed to prevent false disconnect forfeits
@@ -829,7 +896,7 @@ app.prepare().then(() => {
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to both players
-        const gameOverPayload = { winner, reason };
+        const gameOverPayload = { winner, reason, ratings: newRatings };
         io.to(roomId).emit("gameOver", gameOverPayload);
 
         // Also emit directly to both player sockets for reliability
@@ -879,6 +946,10 @@ app.prepare().then(() => {
           }
         });
 
+        // Update ELO ratings
+        const updatedGame = { ...game, winnerId };
+        const newRatings = await updateRatings(updatedGame);
+
         console.log(`[SERVER] Game ${roomId} marked as COMPLETED due to timeout. Winner: ${winnerColor}`);
 
         // Mark game as recently completed to prevent false disconnect forfeits
@@ -886,7 +957,7 @@ app.prepare().then(() => {
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to both players
-        const gameOverPayload = { winner: winnerColor, reason: "timeout" };
+        const gameOverPayload = { winner: winnerColor, reason: "timeout", ratings: newRatings };
         io.to(roomId).emit("gameOver", gameOverPayload);
 
         // Also emit directly to both player sockets for reliability
@@ -937,8 +1008,8 @@ app.prepare().then(() => {
               activeGames.set(s1.id, roomId);
               activeGames.set(s2.id, roomId);
 
-              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId });
-              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId });
+              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
+              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
               console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
             }
           }
@@ -1132,6 +1203,21 @@ app.prepare().then(() => {
                     where: { id: activeRoomId },
                     data: { status: "COMPLETED", winnerId }
                   });
+
+                  // Update ELO ratings
+                  const updatedGame = { ...game, winnerId };
+                  const newRatings = await updateRatings(updatedGame);
+
+                  // Re-emit with ratings
+                  const gameOverPayload = { winner: "opponent", reason: "disconnection", ratings: newRatings };
+                  io.to(activeRoomId).emit("gameOver", gameOverPayload);
+                  const roomSockets2 = io.sockets.adapter.rooms.get(activeRoomId);
+                  if (roomSockets2) {
+                    roomSockets2.forEach(sid => {
+                      if (sid !== socket.id) io.to(sid).emit("gameOver", gameOverPayload);
+                    });
+                  }
+
                   console.log(`[SERVER] Game ${activeRoomId} marked as COMPLETED due to disconnect`);
                 }
               }
