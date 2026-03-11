@@ -21,12 +21,19 @@ type GameState = {
   gameMode: "online" | "computer" | "friend" | "tournament" | null;
   difficulty: "easy" | "medium" | "hard";
   stakeAmount: number;
+  // On-chain state
+  onChainGameId: bigint | null;
+  stakeToken: string | null;
   player?: Player;
   opponent?: Player;
-  setGameMode: (mode: "online" | "computer" | "friend" | "tournament" | null) => void;
+  setGameMode: (
+    mode: "online" | "computer" | "friend" | "tournament" | null,
+  ) => void;
   setDifficulty: (difficulty: "easy" | "medium" | "hard") => void;
   setStatus: (status: GameStatus) => void;
   setStakeAmount: (amount: number) => void;
+  setOnChainGameId: (id: bigint | null) => void;
+  setStakeToken: (token: string | null) => void;
   setPlayer: (player: Player) => void;
   setOpponent: (opponent: Player) => void;
   roomId?: string;
@@ -87,6 +94,8 @@ const initialState = {
   gameMode: null as "online" | "computer" | "friend" | "tournament" | null,
   difficulty: "medium" as "easy" | "medium" | "hard",
   stakeAmount: 0,
+  onChainGameId: null as bigint | null,
+  stakeToken: null as string | null,
   player: undefined,
   opponent: undefined,
   moves: [] as MoveRecord[],
@@ -106,6 +115,8 @@ export const useGameStore = create<GameState>((set) => ({
   setDifficulty: (difficulty) => set({ difficulty }),
   setStatus: (status) => set({ status }),
   setStakeAmount: (amount) => set({ stakeAmount: amount }),
+  setOnChainGameId: (id) => set({ onChainGameId: id }),
+  setStakeToken: (token) => set({ stakeToken: token }),
   setPlayer: (player) => set({ player }),
   setOpponent: (opponent) => set({ opponent }),
   setRoomId: (roomId) => set({ roomId }),
@@ -116,12 +127,19 @@ export const useGameStore = create<GameState>((set) => ({
   setDrawOfferReceived: (received) => set({ drawOfferReceived: received }),
   setDrawOfferSent: (sent) => set({ drawOfferSent: sent }),
   // Timer functions
-  setInitialTime: (time) => set({ initialTime: time, whiteTime: time, blackTime: time }),
+  setInitialTime: (time) =>
+    set({ initialTime: time, whiteTime: time, blackTime: time }),
   setWhiteTime: (time) => set({ whiteTime: time }),
   setBlackTime: (time) => set({ blackTime: time }),
-  decrementWhiteTime: () => set((state) => ({ whiteTime: Math.max(0, state.whiteTime - 1) })),
-  decrementBlackTime: () => set((state) => ({ blackTime: Math.max(0, state.blackTime - 1) })),
-  resetTimers: () => set((state) => ({ whiteTime: state.initialTime, blackTime: state.initialTime })),
+  decrementWhiteTime: () =>
+    set((state) => ({ whiteTime: Math.max(0, state.whiteTime - 1) })),
+  decrementBlackTime: () =>
+    set((state) => ({ blackTime: Math.max(0, state.blackTime - 1) })),
+  resetTimers: () =>
+    set((state) => ({
+      whiteTime: state.initialTime,
+      blackTime: state.initialTime,
+    })),
   setGameOver: (winner, reason) => set({ gameOver: { winner, reason } }),
   reset: () =>
     set({
@@ -135,5 +153,7 @@ export const useGameStore = create<GameState>((set) => ({
       whiteTime: DEFAULT_TIME,
       blackTime: DEFAULT_TIME,
       gameOver: null,
+      onChainGameId: null,
+      stakeToken: null,
     }),
 }));

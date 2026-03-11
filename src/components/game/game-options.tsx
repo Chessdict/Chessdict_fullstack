@@ -10,6 +10,15 @@ import { searchUsers, getRecentOpponents } from "@/app/actions";
 import { toast } from "sonner";
 import { GameInfoPanel } from "./game-info-panel";
 import { TournamentPanel } from "../tournament/tournament-panel";
+import {
+  useChessdict,
+  useGetSupportedTokens,
+  useTokenSymbol,
+  useTokenDecimals,
+  useTokenBalance,
+} from "@/hooks/useChessdict";
+import { useAccount } from "wagmi";
+import { formatUnits } from "viem";
 
 type Tab = "new-game" | "games" | "players";
 
@@ -28,6 +37,113 @@ interface Opponent {
 }
 
 
+// ─── Stake Panel ─────────────────────────────────────────────────────────────
+
+function TokenInfo({ token }: { token: `0x${string}` }) {
+  const { data: symbol } = useTokenSymbol(token);
+  const { data: decimals } = useTokenDecimals(token);
+  const { address } = useAccount();
+  const { data: balance } = useTokenBalance(token, address);
+
+  const displayBalance =
+    balance !== undefined && decimals !== undefined
+      ? Number(formatUnits(balance as bigint, decimals as number)).toFixed(4)
+      : "...";
+
+  return (
+    <span className="text-xs text-white/40">
+      {symbol as string ?? token.slice(0, 6) + "..."} &bull; Balance: {displayBalance}
+    </span>
+  );
+}
+
+interface StakePanelProps {
+  stakeEnabled: boolean;
+  setStakeEnabled: (v: boolean) => void;
+  selectedToken: `0x${string}` | null;
+  setSelectedToken: (v: `0x${string}` | null) => void;
+  stakeAmount: string;
+  setStakeAmount: (v: string) => void;
+}
+
+function StakePanel({
+  stakeEnabled,
+  setStakeEnabled,
+  selectedToken,
+  setSelectedToken,
+  stakeAmount,
+  setStakeAmount,
+}: StakePanelProps) {
+  const { data: supportedTokens } = useGetSupportedTokens();
+  const tokens = (supportedTokens as `0x${string}`[]) ?? [];
+
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-white">Stake</span>
+        <button
+          onClick={() => setStakeEnabled(!stakeEnabled)}
+          className={cn(
+            "relative h-6 w-11 rounded-full transition-colors duration-200",
+            stakeEnabled ? "bg-blue-600" : "bg-white/10"
+          )}
+        >
+          <span
+            className={cn(
+              "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200",
+              stakeEnabled ? "translate-x-5" : "translate-x-0"
+            )}
+          />
+        </button>
+      </div>
+
+      {stakeEnabled && (
+        <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          {tokens.length === 0 ? (
+            <p className="text-xs text-white/40 italic">Loading supported tokens…</p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-white/60">Token</label>
+              <div className="relative">
+                <select
+                  value={selectedToken ?? ""}
+                  onChange={(e) => setSelectedToken(e.target.value as `0x${string}`)}
+                  className="w-full appearance-none rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white outline-none transition hover:bg-white/10"
+                >
+                  <option value="" className="bg-[#0A0A0A]">Select token…</option>
+                  {tokens.map((t) => (
+                    <option key={t} value={t} className="bg-[#0A0A0A]">
+                      {t.slice(0, 6)}…{t.slice(-4)}
+                    </option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/40">
+                  <svg width="10" height="6" viewBox="0 0 12 8" fill="none">
+                    <path d="M1.41 0.59L6 5.17L10.59 0.59L12 2L6 8L0 2L1.41 0.59Z" fill="currentColor" />
+                  </svg>
+                </div>
+              </div>
+              {selectedToken && <TokenInfo token={selectedToken} />}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-white/60">Amount</label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              placeholder="e.g. 10"
+              value={stakeAmount}
+              onChange={(e) => setStakeAmount(e.target.value)}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white outline-none transition hover:bg-white/10 placeholder:text-white/20"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: string; setTimeControl: (value: string) => void }) => (
   <div className="relative">
@@ -53,13 +169,21 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
   const [timeControl, setTimeControl] = useState("10");
-  const { gameMode, setGameMode, status } = useGameStore();
+  const { gameMode, setGameMode, status, setStakeToken } = useGameStore();
   const [selectedOpponent, setSelectedOpponent] = useState<Opponent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [recentOpponents, setRecentOpponents] = useState<any[]>([]);
   const [onlineStatus, setOnlineStatus] = useState<Record<string, string>>({});
+
+  // Staking state
+  const [stakeEnabled, setStakeEnabled] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<`0x${string}` | null>(null);
+  const [stakeAmount, setStakeAmount] = useState("");
+
+  const { createGameSingle, isLoading: isStaking } = useChessdict();
+  const { data: tokenDecimalsData } = useTokenDecimals(selectedToken);
 
   useEffect(() => {
     if (userId) {
@@ -266,13 +390,34 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
         {gameMode === "online" && activeTab === "new-game" && (
           <div className="flex flex-col gap-6">
             <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
+
+            <StakePanel
+              stakeEnabled={stakeEnabled}
+              setStakeEnabled={setStakeEnabled}
+              selectedToken={selectedToken}
+              setSelectedToken={setSelectedToken}
+              stakeAmount={stakeAmount}
+              setStakeAmount={setStakeAmount}
+            />
+
             <button
-              onClick={onStartGame}
-              className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95"
+              disabled={isStaking || (stakeEnabled && (!selectedToken || !stakeAmount))}
+              onClick={async () => {
+                if (stakeEnabled && selectedToken && stakeAmount) {
+                  const decimals = (tokenDecimalsData as number) ?? 18;
+                  await createGameSingle(selectedToken, stakeAmount, decimals);
+                  setStakeToken(selectedToken);
+                  // onChainGameId will be set after tx confirmation via receipt parsing
+                }
+                onStartGame();
+              }}
+              className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="absolute inset-0 border border-white/20 rounded-full" />
               <div className="absolute inset-px rounded-full bg-linear-to-b from-white/10 to-transparent" />
-              <span className="relative font-medium text-white">Start game</span>
+              <span className="relative font-medium text-white">
+                {isStaking ? "Staking…" : "Start game"}
+              </span>
               <div className="absolute bottom-0 h-px w-1/2 bg-white/50 blur-[2px]" />
             </button>
           </div>
@@ -375,18 +520,38 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
               <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
             </div>
 
+            <StakePanel
+              stakeEnabled={stakeEnabled}
+              setStakeEnabled={setStakeEnabled}
+              selectedToken={selectedToken}
+              setSelectedToken={setSelectedToken}
+              stakeAmount={stakeAmount}
+              setStakeAmount={setStakeAmount}
+            />
+
             <GlassButton
               className="w-full"
-              onClick={() => {
+              onClick={async () => {
                 if (!socket || !userId) {
                   toast.error("Please connect your wallet first");
                   return;
                 }
-                socket.emit("sendChallenge", { toUserId: selectedOpponent.walletAddress, fromUserId: userId });
+                if (stakeEnabled && selectedToken && stakeAmount) {
+                  const decimals = (tokenDecimalsData as number) ?? 18;
+                  await createGameSingle(selectedToken, stakeAmount, decimals);
+                  setStakeToken(selectedToken);
+                }
+                socket.emit("sendChallenge", {
+                  toUserId: selectedOpponent.walletAddress,
+                  fromUserId: userId,
+                  stakeEnabled,
+                  stakeToken: selectedToken,
+                  stakeAmount,
+                });
                 toast.success(`Challenge sent to ${selectedOpponent.walletAddress.slice(0, 8)}...`);
               }}
             >
-              Send challenge
+              {isStaking ? "Staking…" : "Send challenge"}
             </GlassButton>
           </div>
         )}
