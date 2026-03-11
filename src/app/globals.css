@@ -250,3 +250,34 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  .elegant-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .elegant-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .elegant-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .elegant-scrollbar::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    transition: background-color 180ms ease;
+  }
+
+  .elegant-scrollbar:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+  }
+
+  .elegant-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.28);
+  }
+}
