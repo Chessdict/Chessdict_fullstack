@@ -10,6 +10,7 @@ import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { DrawOfferModal } from "./draw-offer-modal";
 
+
 // Helper to format time as MM:SS
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -58,9 +59,11 @@ export function GameBoard() {
   const [opponentPing, setOpponentPing] = useState<number>(0);
   const [showResignModal, setShowResignModal] = useState(false);
   const [ratingChange, setRatingChange] = useState<number | null>(null);
+  const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
+
 
   // Initialize the chess instance once and keep it stable.
   // We use fen as the source of truth for React rendering.
@@ -75,6 +78,25 @@ export function GameBoard() {
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
   // State for last move highlighting (persists between moves)
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
+
+  // Compute persistent check highlight from current position
+  const checkSquare = useMemo<Record<string, React.CSSProperties>>(() => {
+    if (!game.isCheck()) return {};
+    const turn = game.turn();
+    const board = game.board();
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = board[r][c];
+        if (piece && piece.type === 'k' && piece.color === turn) {
+          const file = String.fromCharCode(97 + c);
+          const rank = String(8 - r);
+          return { [`${file}${rank}`]: { background: "radial-gradient(circle, rgba(255,0,0,0.4) 50%, transparent 100%)" } };
+        }
+      }
+    }
+    return {};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fen]);
 
   // Helper to sync the state with the game instance
   const syncState = useCallback(() => {
@@ -348,6 +370,31 @@ export function GameBoard() {
     };
   }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent]);
 
+  // Flash the king square red when in check and player tries an invalid action
+  const flashKingCheck = useCallback(() => {
+    if (!game.isCheck()) return;
+    const turn = game.turn();
+    const board = game.board();
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = board[r][c];
+        if (piece && piece.type === 'k' && piece.color === turn) {
+          const file = String.fromCharCode(97 + c);
+          const rank = String(8 - r);
+          const kingSquare = `${file}${rank}`;
+          setCheckFlash({
+            [kingSquare]: {
+              background: "radial-gradient(circle, rgba(255,0,0,0.6) 60%, rgba(255,0,0,0.2) 100%)",
+              borderRadius: "50%",
+            },
+          });
+          setTimeout(() => setCheckFlash({}), 500);
+          return;
+        }
+      }
+    }
+  }, [game]);
+
   // Calculate and style possible moves
   const getMoveOptions = (square: string) => {
     // Only allow selecting if it's the player's turn and color
@@ -377,6 +424,7 @@ export function GameBoard() {
 
     if (moves.length === 0) {
       setMoveSquares({});
+      flashKingCheck();
       return false;
     }
 
@@ -458,6 +506,7 @@ export function GameBoard() {
       }
 
       // Invalid move and not clicking our own piece -> Deselect
+      flashKingCheck();
       setSourceSquare(null);
       setMoveSquares({});
       return;
@@ -632,7 +681,7 @@ export function GameBoard() {
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
-              squareStyles: { ...lastMoveSquares, ...moveSquares },
+              squareStyles: { ...lastMoveSquares, ...checkSquare, ...moveSquares, ...checkFlash },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
                 if (!sourceSquare || !targetSquare) return false;
