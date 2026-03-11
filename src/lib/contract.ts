@@ -5,4 +5,8 @@ export const CHESSDICT_ADDRESS =
 
 export const CHESSDICT_CHAIN_ID = 84532; // Base Sepolia
 
+/** Default stake token — Base Sepolia USDC */
+export const DEFAULT_STAKE_TOKEN =
+  "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
+
 export { chessdictAbi };

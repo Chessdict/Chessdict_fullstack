@@ -18,6 +18,7 @@ import {
 } from "@/hooks/useChessdict";
 import { useAccount } from "wagmi";
 import { formatUnits } from "viem";
+import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
 
 type Tab = "new-game" | "games" | "players";
 
@@ -159,7 +160,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
 
   // Staking state
   const [stakeEnabled, setStakeEnabled] = useState(false);
-  const [selectedToken, setSelectedToken] = useState<`0x${string}` | null>(null);
+  const [selectedToken, setSelectedToken] = useState<`0x${string}` | null>(DEFAULT_STAKE_TOKEN);
   const [stakeAmount, setStakeAmount] = useState("");
 
   const { createGameSingle, isLoading: isStaking } = useChessdict();
