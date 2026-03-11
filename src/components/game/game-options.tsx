@@ -10,6 +10,15 @@ import { searchUsers, getRecentOpponents } from "@/app/actions";
 import { toast } from "sonner";
 import { GameInfoPanel } from "./game-info-panel";
 import { TournamentPanel } from "../tournament/tournament-panel";
+import {
+  useChessdict,
+  useTokenSymbol,
+  useTokenDecimals,
+  useTokenBalance,
+} from "@/hooks/useChessdict";
+import { useAccount } from "wagmi";
+import { formatUnits } from "viem";
+import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
 
 type Tab = "new-game" | "games" | "players";
 
@@ -28,6 +37,133 @@ interface Opponent {
 }
 
 
+// ─── Stake Panel ─────────────────────────────────────────────────────────────
+
+function TokenPill({ token, onChange }: { token: `0x${string}`; onChange: (v: `0x${string}` | null) => void }) {
+  const { data: symbol } = useTokenSymbol(token);
+  const { data: decimals } = useTokenDecimals(token);
+  const { address } = useAccount();
+  const { data: balance } = useTokenBalance(token, address);
+  const [editing, setEditing] = useState(false);
+
+  const displayBalance =
+    balance !== undefined && decimals !== undefined
+      ? Number(formatUnits(balance as bigint, decimals as number)).toFixed(4)
+      : "…";
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="text"
+        placeholder="0x…"
+        defaultValue={token}
+        onBlur={(e) => {
+          const val = e.target.value.trim();
+          onChange(val ? (val as `0x${string}`) : null);
+          setEditing(false);
+        }}
+        className="w-full rounded-xl border border-white/20 bg-white/10 px-3 py-2 font-mono text-xs text-white outline-none"
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left transition hover:bg-white/10"
+    >
+      <div className="flex flex-col">
+        <span className="text-sm font-semibold text-white">
+          {(symbol as string) ?? "ERC-20"}
+        </span>
+        <span className="text-xs text-white/40">
+          {token.slice(0, 6)}…{token.slice(-4)}
+        </span>
+      </div>
+      <div className="text-right">
+        <span className="text-xs text-white/60">Balance</span>
+        <p className="text-sm font-medium text-white">{displayBalance}</p>
+      </div>
+    </button>
+  );
+}
+
+interface StakePanelProps {
+  stakeEnabled: boolean;
+  setStakeEnabled: (v: boolean) => void;
+  selectedToken: `0x${string}` | null;
+  setSelectedToken: (v: `0x${string}` | null) => void;
+  stakeAmount: string;
+  setStakeAmount: (v: string) => void;
+}
+
+function StakePanel({
+  stakeEnabled,
+  setStakeEnabled,
+  selectedToken,
+  setSelectedToken,
+  stakeAmount,
+  setStakeAmount,
+}: StakePanelProps) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-white">Stake</span>
+        <button
+          onClick={() => setStakeEnabled(!stakeEnabled)}
+          className={cn(
+            "relative h-6 w-11 rounded-full transition-colors duration-200",
+            stakeEnabled ? "bg-blue-600" : "bg-white/10"
+          )}
+        >
+          <span
+            className={cn(
+              "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200",
+              stakeEnabled ? "translate-x-5" : "translate-x-0"
+            )}
+          />
+        </button>
+      </div>
+
+      {stakeEnabled && (
+        <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-white/60">Token <span className="text-white/30">(tap to change)</span></label>
+            {selectedToken ? (
+              <TokenPill token={selectedToken} onChange={setSelectedToken} />
+            ) : (
+              <input
+                autoFocus
+                type="text"
+                placeholder="Paste token address…"
+                onChange={(e) => {
+                  const val = e.target.value.trim();
+                  if (val.startsWith("0x") && val.length === 42)
+                    setSelectedToken(val as `0x${string}`);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 font-mono text-xs text-white outline-none transition hover:bg-white/10 placeholder:text-white/20"
+              />
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-white/60">Amount</label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              placeholder="e.g. 10"
+              value={stakeAmount}
+              onChange={(e) => setStakeAmount(e.target.value)}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white outline-none transition hover:bg-white/10 placeholder:text-white/20"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: string; setTimeControl: (value: string) => void }) => (
   <div className="relative">
@@ -53,13 +189,21 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
   const [timeControl, setTimeControl] = useState("10");
-  const { gameMode, setGameMode, status } = useGameStore();
+  const { gameMode, setGameMode, status, setStakeToken } = useGameStore();
   const [selectedOpponent, setSelectedOpponent] = useState<Opponent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [recentOpponents, setRecentOpponents] = useState<any[]>([]);
   const [onlineStatus, setOnlineStatus] = useState<Record<string, string>>({});
+
+  // Staking state
+  const [stakeEnabled, setStakeEnabled] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<`0x${string}` | null>(DEFAULT_STAKE_TOKEN);
+  const [stakeAmount, setStakeAmount] = useState("");
+
+  const { createGameSingle, isLoading: isStaking } = useChessdict();
+  const { data: tokenDecimalsData } = useTokenDecimals(selectedToken);
 
   useEffect(() => {
     if (userId) {
@@ -266,13 +410,34 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
         {gameMode === "online" && activeTab === "new-game" && (
           <div className="flex flex-col gap-6">
             <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
+
+            <StakePanel
+              stakeEnabled={stakeEnabled}
+              setStakeEnabled={setStakeEnabled}
+              selectedToken={selectedToken}
+              setSelectedToken={setSelectedToken}
+              stakeAmount={stakeAmount}
+              setStakeAmount={setStakeAmount}
+            />
+
             <button
-              onClick={onStartGame}
-              className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95"
+              disabled={isStaking || (stakeEnabled && (!selectedToken || !stakeAmount))}
+              onClick={async () => {
+                if (stakeEnabled && selectedToken && stakeAmount) {
+                  const decimals = (tokenDecimalsData as number) ?? 18;
+                  const ok = await createGameSingle(selectedToken, stakeAmount, decimals);
+                  if (!ok) return; // tx rejected or failed — don't start matchmaking
+                  setStakeToken(selectedToken);
+                }
+                onStartGame();
+              }}
+              className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="absolute inset-0 border border-white/20 rounded-full" />
               <div className="absolute inset-px rounded-full bg-linear-to-b from-white/10 to-transparent" />
-              <span className="relative font-medium text-white">Start game</span>
+              <span className="relative font-medium text-white">
+                {isStaking ? "Staking…" : "Start game"}
+              </span>
               <div className="absolute bottom-0 h-px w-1/2 bg-white/50 blur-[2px]" />
             </button>
           </div>
@@ -375,18 +540,39 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
               <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
             </div>
 
+            <StakePanel
+              stakeEnabled={stakeEnabled}
+              setStakeEnabled={setStakeEnabled}
+              selectedToken={selectedToken}
+              setSelectedToken={setSelectedToken}
+              stakeAmount={stakeAmount}
+              setStakeAmount={setStakeAmount}
+            />
+
             <GlassButton
               className="w-full"
-              onClick={() => {
+              onClick={async () => {
                 if (!socket || !userId) {
                   toast.error("Please connect your wallet first");
                   return;
                 }
-                socket.emit("sendChallenge", { toUserId: selectedOpponent.walletAddress, fromUserId: userId });
+                if (stakeEnabled && selectedToken && stakeAmount) {
+                  const decimals = (tokenDecimalsData as number) ?? 18;
+                  const ok = await createGameSingle(selectedToken, stakeAmount, decimals);
+                  if (!ok) return; // tx rejected or failed — don't send challenge
+                  setStakeToken(selectedToken);
+                }
+                socket.emit("sendChallenge", {
+                  toUserId: selectedOpponent.walletAddress,
+                  fromUserId: userId,
+                  stakeEnabled,
+                  stakeToken: selectedToken,
+                  stakeAmount,
+                });
                 toast.success(`Challenge sent to ${selectedOpponent.walletAddress.slice(0, 8)}...`);
               }}
             >
-              Send challenge
+              {isStaking ? "Staking…" : "Send challenge"}
             </GlassButton>
           </div>
         )}
