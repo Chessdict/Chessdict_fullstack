@@ -141,10 +141,10 @@ export function useChessdict() {
       amount: bigint,
       writeFn: () => Promise<`0x${string}`>,
       label: string,
-    ) => {
+    ): Promise<boolean> => {
       if (!address) {
         toast.error("Please connect your wallet first");
-        return;
+        return false;
       }
       try {
         setIsLoading(true);
@@ -154,8 +154,10 @@ export function useChessdict() {
         const hash = await writeFn();
         await publicClient?.waitForTransactionReceipt({ hash });
         toast.success("Transaction confirmed!");
+        return true;
       } catch (err: any) {
         toast.error(err?.shortMessage ?? err?.message ?? "Transaction failed");
+        return false;
       } finally {
         setIsLoading(false);
       }
@@ -168,10 +170,13 @@ export function useChessdict() {
    * Used by cancel and claim prize actions.
    */
   const executeWrite = useCallback(
-    async (writeFn: () => Promise<`0x${string}`>, label: string) => {
+    async (
+      writeFn: () => Promise<`0x${string}`>,
+      label: string,
+    ): Promise<boolean> => {
       if (!address) {
         toast.error("Please connect your wallet first");
-        return;
+        return false;
       }
       try {
         setIsLoading(true);
@@ -180,8 +185,10 @@ export function useChessdict() {
         const hash = await writeFn();
         await publicClient?.waitForTransactionReceipt({ hash });
         toast.success("Transaction confirmed!");
+        return true;
       } catch (err: any) {
         toast.error(err?.shortMessage ?? err?.message ?? "Transaction failed");
+        return false;
       } finally {
         setIsLoading(false);
       }
@@ -192,9 +199,13 @@ export function useChessdict() {
   // ── Public actions ──────────────────────────────────────────────────────────
 
   const createGameSingle = useCallback(
-    async (tokenAddress: `0x${string}`, stakeAmount: string, decimals = 18) => {
+    async (
+      tokenAddress: `0x${string}`,
+      stakeAmount: string,
+      decimals = 18,
+    ): Promise<boolean> => {
       const stakeWei = parseUnits(stakeAmount, decimals);
-      await executeStakedWrite(
+      return executeStakedWrite(
         tokenAddress,
         stakeWei,
         () =>

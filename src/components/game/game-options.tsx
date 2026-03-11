@@ -425,9 +425,9 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
               onClick={async () => {
                 if (stakeEnabled && selectedToken && stakeAmount) {
                   const decimals = (tokenDecimalsData as number) ?? 18;
-                  await createGameSingle(selectedToken, stakeAmount, decimals);
+                  const ok = await createGameSingle(selectedToken, stakeAmount, decimals);
+                  if (!ok) return; // tx rejected or failed — don't start matchmaking
                   setStakeToken(selectedToken);
-                  // onChainGameId will be set after tx confirmation via receipt parsing
                 }
                 onStartGame();
               }}
@@ -558,7 +558,8 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                 }
                 if (stakeEnabled && selectedToken && stakeAmount) {
                   const decimals = (tokenDecimalsData as number) ?? 18;
-                  await createGameSingle(selectedToken, stakeAmount, decimals);
+                  const ok = await createGameSingle(selectedToken, stakeAmount, decimals);
+                  if (!ok) return; // tx rejected or failed — don't send challenge
                   setStakeToken(selectedToken);
                 }
                 socket.emit("sendChallenge", {
