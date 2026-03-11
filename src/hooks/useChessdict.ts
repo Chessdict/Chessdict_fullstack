@@ -14,7 +14,7 @@ import {
   CHESSDICT_CHAIN_ID,
 } from "@/lib/contract";
 import { erc20Abi } from "@/lib/erc20-abi";
-import { parseUnits, maxUint256 } from "viem";
+import { parseUnits } from "viem";
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
 
@@ -117,13 +117,13 @@ export function useChessdict() {
   }, [chainId, switchChain]);
 
   const approveToken = useCallback(
-    async (tokenAddress: `0x${string}`) => {
+    async (tokenAddress: `0x${string}`, amount: bigint) => {
       toast.info("Step 1/2: Approving token…");
       const hash = await writeContractAsync({
         address: tokenAddress,
         abi: erc20Abi,
         functionName: "approve",
-        args: [CHESSDICT_ADDRESS, maxUint256],
+        args: [CHESSDICT_ADDRESS, amount],
         chainId: CHESSDICT_CHAIN_ID,
       });
       await publicClient?.waitForTransactionReceipt({ hash });
@@ -138,6 +138,7 @@ export function useChessdict() {
   const executeStakedWrite = useCallback(
     async (
       tokenAddress: `0x${string}`,
+      amount: bigint,
       writeFn: () => Promise<`0x${string}`>,
       label: string,
     ) => {
@@ -148,7 +149,7 @@ export function useChessdict() {
       try {
         setIsLoading(true);
         await ensureNetwork();
-        await approveToken(tokenAddress);
+        await approveToken(tokenAddress, amount);
         toast.info(label);
         const hash = await writeFn();
         await publicClient?.waitForTransactionReceipt({ hash });
@@ -195,6 +196,7 @@ export function useChessdict() {
       const stakeWei = parseUnits(stakeAmount, decimals);
       await executeStakedWrite(
         tokenAddress,
+        stakeWei,
         () =>
           writeContractAsync({
             address: CHESSDICT_ADDRESS,
@@ -219,6 +221,7 @@ export function useChessdict() {
       const stakeWei = parseUnits(stakeAmount, decimals);
       await executeStakedWrite(
         tokenAddress,
+        stakeWei,
         () =>
           writeContractAsync({
             address: CHESSDICT_ADDRESS,
