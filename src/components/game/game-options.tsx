@@ -122,14 +122,14 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
           setView("setup");
         },
       },
-      {
-        id: "computer",
-        title: "Play computer",
-        onClick: () => {
-          setGameMode("computer");
-          setView("setup");
-        },
-      },
+      // {
+      //   id: "computer",
+      //   title: "Play computer",
+      //   onClick: () => {
+      //     setGameMode("computer");
+      //     setView("setup");
+      //   },
+      // },
       {
         id: "friend",
         title: "Play a friend",
