@@ -54,6 +54,7 @@ export function GameBoard() {
   } = useGameStore();
 
   const [ping, setPing] = useState<number>(0);
+  const [opponentPing, setOpponentPing] = useState<number>(0);
   const [showResignModal, setShowResignModal] = useState(false);
 
   const { address } = useAccount();
@@ -301,9 +302,13 @@ export function GameBoard() {
       setPing(rtt);
     };
 
+    const handleOpponentPing = (data: { ping: number }) => {
+      setOpponentPing(data.ping);
+    };
+
     // Ping interval
     const pingInterval = setInterval(() => {
-      socket.emit("ping");
+      socket.emit("ping", { timestamp: Date.now() });
     }, 5000);
 
     // Set connected when we have an opponent
@@ -316,6 +321,7 @@ export function GameBoard() {
     socket.on('opponentLeft', handleOpponentLeft);
     socket.on('gameOver', handleGameOver);
     socket.on('pong', handlePong);
+    socket.on('opponentPing', handleOpponentPing);
     socket.on('resignError', handleResignError);
     socket.on('drawOffered', handleDrawOffered);
     socket.on('drawDeclined', handleDrawDeclined);
@@ -326,6 +332,7 @@ export function GameBoard() {
       socket.off('opponentLeft', handleOpponentLeft);
       socket.off('gameOver', handleGameOver);
       socket.off('pong', handlePong);
+      socket.off('opponentPing', handleOpponentPing);
       socket.off('resignError', handleResignError);
       socket.off('drawOffered', handleDrawOffered);
       socket.off('drawDeclined', handleDrawDeclined);
@@ -574,9 +581,22 @@ export function GameBoard() {
         </div>
         <div className="flex items-center gap-3">
           {['online', 'friend'].includes(gameMode || '') && (
-            <div className="flex items-center gap-2 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
-              <div className={`h-2 w-2 rounded-full ${ping < 100 ? 'bg-green-500' : ping < 300 ? 'bg-yellow-500' : 'bg-red-500'}`} />
-              <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Opponent Latency: ${opponentPing}ms`}>
+              <div className="flex items-end gap-0.5 h-3.5">
+                {[1, 2, 3, 4].map((bar) => {
+                  const strength = opponentPing < 80 ? 4 : opponentPing < 150 ? 3 : opponentPing < 300 ? 2 : 1;
+                  const color = strength >= 3 ? 'bg-green-500' : strength === 2 ? 'bg-yellow-500' : 'bg-red-500';
+                  const isActive = bar <= strength;
+                  return (
+                    <div
+                      key={bar}
+                      className={`w-0.75 rounded-sm ${isActive ? color : 'bg-white/15'}`}
+                      style={{ height: `${bar * 25}%` }}
+                    />
+                  );
+                })}
+              </div>
+              <span className="text-[10px] font-mono text-white/60">{opponentPing}ms</span>
             </div>
           )}
           {/* Opponent's timer */}
@@ -701,6 +721,25 @@ export function GameBoard() {
             >
               Force Reset
             </button>
+          )}
+          {['online', 'friend'].includes(gameMode || '') && (
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
+              <div className="flex items-end gap-0.5 h-3.5">
+                {[1, 2, 3, 4].map((bar) => {
+                  const strength = ping < 80 ? 4 : ping < 150 ? 3 : ping < 300 ? 2 : 1;
+                  const color = strength >= 3 ? 'bg-green-500' : strength === 2 ? 'bg-yellow-500' : 'bg-red-500';
+                  const isActive = bar <= strength;
+                  return (
+                    <div
+                      key={bar}
+                      className={`w-0.75 rounded-sm ${isActive ? color : 'bg-white/15'}`}
+                      style={{ height: `${bar * 25}%` }}
+                    />
+                  );
+                })}
+              </div>
+              <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
+            </div>
           )}
           {/* Player's timer */}
           <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${isMyTurn && status === 'in-progress'

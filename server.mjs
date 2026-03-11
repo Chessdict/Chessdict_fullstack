@@ -148,8 +148,14 @@ app.prepare().then(() => {
       socket.emit("statusUpdate", { statusMap });
     });
 
-    socket.on("ping", () => {
-      socket.emit("pong", { timestamp: Date.now() });
+    socket.on("ping", ({ timestamp }) => {
+      socket.emit("pong", { timestamp });
+      // Forward this player's ping to their opponent
+      const roomId = activeGames.get(socket.id);
+      if (roomId) {
+        const rtt = Date.now() - timestamp;
+        socket.to(roomId).emit("opponentPing", { ping: rtt });
+      }
     });
 
     socket.on("offerDraw", ({ roomId }) => {
