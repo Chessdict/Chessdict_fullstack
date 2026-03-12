@@ -87,6 +87,13 @@ type TournamentState = {
   setBlackTime: (t: number) => void;
   decrementWhiteTime: () => void;
   decrementBlackTime: () => void;
+
+  // Disconnect tracking
+  disconnectedPlayers: Record<string, number>; // walletAddress -> forfeitDeadline timestamp
+  setDisconnectedPlayer: (walletAddress: string, deadline: number) => void;
+  removeDisconnectedPlayer: (walletAddress: string) => void;
+  clearDisconnectedPlayers: () => void;
+
   reset: () => void;
 };
 
@@ -110,6 +117,7 @@ const initialState = {
   gameResult: null as TournamentState["gameResult"],
   whiteTime: 600,
   blackTime: 600,
+  disconnectedPlayers: {} as Record<string, number>,
 };
 
 export const useTournamentStore = create<TournamentState>((set) => ({
@@ -155,5 +163,15 @@ export const useTournamentStore = create<TournamentState>((set) => ({
     set((state) => ({ whiteTime: Math.max(0, state.whiteTime - 1) })),
   decrementBlackTime: () =>
     set((state) => ({ blackTime: Math.max(0, state.blackTime - 1) })),
+  setDisconnectedPlayer: (walletAddress, deadline) =>
+    set((state) => ({
+      disconnectedPlayers: { ...state.disconnectedPlayers, [walletAddress.toLowerCase()]: deadline },
+    })),
+  removeDisconnectedPlayer: (walletAddress) =>
+    set((state) => {
+      const { [walletAddress.toLowerCase()]: _, ...rest } = state.disconnectedPlayers;
+      return { disconnectedPlayers: rest };
+    }),
+  clearDisconnectedPlayers: () => set({ disconnectedPlayers: {} }),
   reset: () => set({ ...initialState }),
 }));

@@ -34,6 +34,9 @@ export default function TournamentPlayPage({
     setIsFinalBreak,
     setRoundProgress,
     setGameResult,
+    setDisconnectedPlayer,
+    removeDisconnectedPlayer,
+    clearDisconnectedPlayers,
     reset,
   } = useTournamentStore();
 
@@ -90,6 +93,16 @@ export default function TournamentPlayPage({
       setParticipants(updated);
     };
 
+    const handleForfeitCountdown = (data: any) => {
+      // A player disconnected and has 30 seconds to reconnect
+      setDisconnectedPlayer(data.walletAddress, data.forfeitDeadline);
+    };
+
+    const handleForfeitCancelled = (data: any) => {
+      // Player reconnected in time — remove the countdown
+      removeDisconnectedPlayer(data.walletAddress);
+    };
+
     const handleStarting = (data: any) => {
       setPhase("starting");
       setIsFinalBreak(false);
@@ -143,6 +156,7 @@ export default function TournamentPlayPage({
       setPhase("break");
       setBreakEndTime(data.breakEndTime);
       setIsFinalBreak(Boolean(data.isLastRound));
+      clearDisconnectedPlayers();
       setRoundInfo(data.round, data.isLastRound ? data.round : data.round + 0); // keep current round info
       if (data.standings) setStandings(data.standings);
     };
@@ -161,6 +175,8 @@ export default function TournamentPlayPage({
     socket.on("tournament:state", handleState);
     socket.on("tournament:playerConnected", handlePlayerConnected);
     socket.on("tournament:playerDisconnected", handlePlayerDisconnected);
+    socket.on("tournament:forfeitCountdown", handleForfeitCountdown);
+    socket.on("tournament:forfeitCancelled", handleForfeitCancelled);
     socket.on("tournament:starting", handleStarting);
     socket.on("tournament:roundStart", handleRoundStart);
     socket.on("tournament:gameStart", handleGameStart);
@@ -175,6 +191,8 @@ export default function TournamentPlayPage({
       socket.off("tournament:state", handleState);
       socket.off("tournament:playerConnected", handlePlayerConnected);
       socket.off("tournament:playerDisconnected", handlePlayerDisconnected);
+      socket.off("tournament:forfeitCountdown", handleForfeitCountdown);
+      socket.off("tournament:forfeitCancelled", handleForfeitCancelled);
       socket.off("tournament:starting", handleStarting);
       socket.off("tournament:roundStart", handleRoundStart);
       socket.off("tournament:gameStart", handleGameStart);
@@ -201,6 +219,9 @@ export default function TournamentPlayPage({
     setIsFinalBreak,
     setRoundProgress,
     setGameResult,
+    setDisconnectedPlayer,
+    removeDisconnectedPlayer,
+    clearDisconnectedPlayers,
   ]);
 
   const showBoard = phase === "playing";

@@ -103,6 +103,42 @@ function StandingsTable({
   );
 }
 
+function DisconnectedPlayersBanner({ disconnectedPlayers }: { disconnectedPlayers: Record<string, number> }) {
+  const entries = Object.entries(disconnectedPlayers);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (entries.length === 0) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 200);
+    return () => clearInterval(interval);
+  }, [entries.length]);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {entries.map(([wallet, deadline]) => {
+        const secs = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        return (
+          <div
+            key={wallet}
+            className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2"
+          >
+            <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className="text-xs text-amber-300 truncate flex-1">
+              {`${wallet.slice(0, 6)}...${wallet.slice(-4)}`}
+              <span className="text-amber-400/60"> disconnected</span>
+            </span>
+            <span className="font-mono text-xs font-bold text-amber-400 tabular-nums">
+              {secs}s
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function TournamentLobby({ myAddress }: { myAddress?: string }) {
   const {
     phase,
@@ -119,6 +155,7 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
     totalGames,
     opponentAddress,
     gameResult,
+    disconnectedPlayers,
   } = useTournamentStore();
 
   const startingRemaining = useCountdown(startingEndTime);
@@ -347,6 +384,9 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
           </div>
         </div>
 
+        {/* Disconnected players */}
+        <DisconnectedPlayersBanner disconnectedPlayers={disconnectedPlayers} />
+
         <StandingsTable standings={standings} myAddress={myAddress} />
       </div>
     );
@@ -504,6 +544,9 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
           />
         </div>
       </div>
+
+      {/* Disconnected players */}
+      <DisconnectedPlayersBanner disconnectedPlayers={disconnectedPlayers} />
 
       <StandingsTable standings={standings} myAddress={myAddress} />
     </div>

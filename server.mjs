@@ -255,6 +255,8 @@ app.prepare().then(() => {
       roundEndTime: null,
       connectedPlayers: new Set(), // walletAddresses of currently connected players
       lastActivityTime: Date.now(), // Track last meaningful activity
+      disconnectTimers: new Map(), // walletAddress (lowercase) -> { timer, gameId, deadline }
+      startingEndTime: null, // timestamp when the starting countdown ends
     };
 
     activeTournaments.set(tournamentId, tournamentState);
@@ -274,6 +276,8 @@ app.prepare().then(() => {
     const roomName = `tournament:${tournamentId}`;
     console.log(`[TOURNAMENT] Starting tournament ${tournamentId} with ${tournamentState.participants.length} players, ${tournamentState.totalRounds} rounds`);
 
+    tournamentState.startingEndTime = Date.now() + 10000;
+
     io.to(roomName).emit("tournament:starting", {
       tournamentId,
       totalRounds: tournamentState.totalRounds,
@@ -287,7 +291,10 @@ app.prepare().then(() => {
     io.emit("tournament:listChanged");
 
     // Start first round after 10 seconds
-    setTimeout(() => startTournamentRound(tournamentId), 10000);
+    setTimeout(() => {
+      tournamentState.startingEndTime = null;
+      startTournamentRound(tournamentId);
+    }, 10000);
   }
 
   async function startTournamentRound(tournamentId) {
@@ -422,33 +429,19 @@ app.prepare().then(() => {
         }
 
         if (!whiteConnected && !blackConnected) {
-          console.log(`[ROUND-START] ⚠ BOTH ABSENT → DRAW for game ${game.id} (white: ${whitePlayer.walletAddress}, black: ${blackPlayer.walletAddress})`);
-          roundStartResolutions.push({
-            gameId: game.id,
-            winner: null,
-            isDraw: true,
-            reason: "players_not_connected",
-            whiteWalletAddress: whitePlayer.walletAddress,
-            blackWalletAddress: blackPlayer.walletAddress,
-          });
+          console.log(`[ROUND-START] ⚠ BOTH ABSENT — will start 30s countdown for both players (game ${game.id})`);
+          // Defer countdown start until after roundStart event
+          state._pendingForfeitCountdowns = state._pendingForfeitCountdowns || [];
+          state._pendingForfeitCountdowns.push(whitePlayer.walletAddress);
+          state._pendingForfeitCountdowns.push(blackPlayer.walletAddress);
         } else if (!whiteConnected) {
-          console.log(`[ROUND-START] ⚠ WHITE ABSENT → BLACK WINS (forfeit) for game ${game.id} (absent: ${whitePlayer.walletAddress})`);
-          roundStartResolutions.push({
-            gameId: game.id,
-            winner: "black",
-            isDraw: false,
-            reason: "player_not_connected",
-            absentWalletAddress: whitePlayer.walletAddress,
-          });
+          console.log(`[ROUND-START] ⚠ WHITE ABSENT — will start 30s countdown for ${whitePlayer.walletAddress} (game ${game.id})`);
+          state._pendingForfeitCountdowns = state._pendingForfeitCountdowns || [];
+          state._pendingForfeitCountdowns.push(whitePlayer.walletAddress);
         } else if (!blackConnected) {
-          console.log(`[ROUND-START] ⚠ BLACK ABSENT → WHITE WINS (forfeit) for game ${game.id} (absent: ${blackPlayer.walletAddress})`);
-          roundStartResolutions.push({
-            gameId: game.id,
-            winner: "white",
-            isDraw: false,
-            reason: "player_not_connected",
-            absentWalletAddress: blackPlayer.walletAddress,
-          });
+          console.log(`[ROUND-START] ⚠ BLACK ABSENT — will start 30s countdown for ${blackPlayer.walletAddress} (game ${game.id})`);
+          state._pendingForfeitCountdowns = state._pendingForfeitCountdowns || [];
+          state._pendingForfeitCountdowns.push(blackPlayer.walletAddress);
         } else {
           console.log(`[ROUND-START] ✓ Both connected for game ${game.id} — normal play`);
         }
@@ -501,6 +494,13 @@ app.prepare().then(() => {
     // Set round timeout to force-end any remaining games
     state.roundTimer = setTimeout(() => forceEndTournamentRound(tournamentId), roundDurationMs);
 
+    // Now start any deferred forfeit countdowns AFTER roundStart was emitted
+    const pendingCountdowns = state._pendingForfeitCountdowns || [];
+    delete state._pendingForfeitCountdowns;
+    for (const walletAddr of pendingCountdowns) {
+      startForfeitCountdown(tournamentId, walletAddr);
+    }
+
     for (const resolution of roundStartResolutions) {
       if (resolution.isDraw) {
         console.log(`[ROUND-START] Processing DRAW: game ${resolution.gameId} (white: ${resolution.whiteWalletAddress}, black: ${resolution.blackWalletAddress})`);
@@ -545,35 +545,7 @@ app.prepare().then(() => {
       if (white) { white.losses += 1; }
     }
 
-    // Update DB - participant stats
-    if (white) {
-      await prisma.tournamentParticipant.updateMany({
-        where: { tournamentId, userId: white.userId },
-        data: { points: white.points, wins: white.wins, draws: white.draws, losses: white.losses },
-      });
-    }
-    if (black) {
-      await prisma.tournamentParticipant.updateMany({
-        where: { tournamentId, userId: black.userId },
-        data: { points: black.points, wins: black.wins, draws: black.draws, losses: black.losses },
-      });
-    }
-
-    // Update tournament match
-    let winnerId = null;
-    if (winner === "white") winnerId = gameState.whiteId;
-    else if (winner === "black") winnerId = gameState.blackId;
-
-    await prisma.tournamentMatch.updateMany({
-      where: { tournamentId, gameId },
-      data: { status: "COMPLETED", winnerId, isDraw },
-    });
-
-    await prisma.game.update({
-      where: { id: gameId },
-      data: { status: isDraw ? "DRAW" : "COMPLETED", winnerId },
-    });
-
+    // Calculate round progress FIRST (before DB calls that might fail)
     const roomName = `tournament:${tournamentId}`;
     const gamesCompleted = [...state.roundGames.values()].filter((g) => g.status === "completed").length;
     const totalGames = state.roundGames.size;
@@ -600,13 +572,45 @@ app.prepare().then(() => {
       totalGames,
     });
 
-    // Check if all games are done
+    // Check if all games are done — advance BEFORE DB calls
     if (gamesCompleted >= totalGames) {
       if (state.roundTimer) {
         clearTimeout(state.roundTimer);
         state.roundTimer = null;
       }
       startTournamentBreak(tournamentId);
+    }
+
+    // Persist to DB (non-blocking for round advancement)
+    try {
+      if (white) {
+        await prisma.tournamentParticipant.updateMany({
+          where: { tournamentId, userId: white.userId },
+          data: { points: white.points, wins: white.wins, draws: white.draws, losses: white.losses },
+        });
+      }
+      if (black) {
+        await prisma.tournamentParticipant.updateMany({
+          where: { tournamentId, userId: black.userId },
+          data: { points: black.points, wins: black.wins, draws: black.draws, losses: black.losses },
+        });
+      }
+
+      let winnerId = null;
+      if (winner === "white") winnerId = gameState.whiteId;
+      else if (winner === "black") winnerId = gameState.blackId;
+
+      await prisma.tournamentMatch.updateMany({
+        where: { tournamentId, gameId },
+        data: { status: "COMPLETED", winnerId, isDraw },
+      });
+
+      await prisma.game.update({
+        where: { id: gameId },
+        data: { status: isDraw ? "DRAW" : "COMPLETED", winnerId },
+      });
+    } catch (e) {
+      console.error(`[TOURNAMENT] DB error persisting game ${gameId} result:`, e);
     }
   }
 
@@ -698,6 +702,73 @@ app.prepare().then(() => {
     startTournamentBreak(tournamentId);
   }
 
+  // ── 30-second disconnect grace period helpers ──
+
+  function startForfeitCountdown(tournamentId, walletAddress) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    const key = normalizeWalletAddress(walletAddress);
+
+    // Don't start a second timer if one is already running
+    if (state.disconnectTimers.has(key)) return;
+
+    // Find the player's active game in the current round
+    let targetGameId = null;
+    const player = state.participants.find(
+      (p) => normalizeWalletAddress(p.walletAddress) === key,
+    );
+    if (player) {
+      for (const [gameId, gs] of state.roundGames.entries()) {
+        if (gs.status === "playing" && (gs.whiteId === player.userId || gs.blackId === player.userId)) {
+          targetGameId = gameId;
+          break;
+        }
+      }
+    }
+
+    const deadline = Date.now() + 30000;
+    const roomName = `tournament:${tournamentId}`;
+
+    console.log(`[TOURNAMENT] Starting 30s forfeit countdown for ${walletAddress} (game=${targetGameId})`);
+
+    io.to(roomName).emit("tournament:forfeitCountdown", {
+      walletAddress,
+      forfeitDeadline: deadline,
+      gameId: targetGameId,
+    });
+
+    const timer = setTimeout(async () => {
+      state.disconnectTimers.delete(key);
+      console.log(`[TOURNAMENT] 30s expired for ${walletAddress} — forfeiting`);
+      await forfeitTournamentGame(tournamentId, walletAddress);
+    }, 30000);
+
+    state.disconnectTimers.set(key, { timer, gameId: targetGameId, deadline });
+  }
+
+  function cancelForfeitCountdown(tournamentId, walletAddress) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return false;
+
+    const key = normalizeWalletAddress(walletAddress);
+    const existing = state.disconnectTimers.get(key);
+    if (!existing) return false;
+
+    clearTimeout(existing.timer);
+    state.disconnectTimers.delete(key);
+
+    const roomName = `tournament:${tournamentId}`;
+    console.log(`[TOURNAMENT] Cancelled forfeit countdown for ${walletAddress} (reconnected)`);
+
+    io.to(roomName).emit("tournament:forfeitCancelled", {
+      walletAddress,
+      gameId: existing.gameId,
+    });
+
+    return true;
+  }
+
   // Forfeit a player's active tournament game when they disconnect
   async function forfeitTournamentGame(tournamentId, walletAddress) {
     const state = activeTournaments.get(tournamentId);
@@ -718,18 +789,30 @@ app.prepare().then(() => {
       }
 
       if (winner) {
-        console.log(`[TOURNAMENT] Player ${walletAddress} disconnected, forfeiting game ${gameId} in tournament ${tournamentId}`);
+        // Check if the opponent is also disconnected
+        const opponentId = winner === "black" ? gameState.blackId : gameState.whiteId;
+        const opponent = state.participants.find((p) => p.userId === opponentId);
+        const opponentConnected = opponent ? hasConnectedTournamentPlayer(state, opponent.walletAddress) : false;
+        const opponentKey = opponent ? normalizeWalletAddress(opponent.walletAddress) : null;
+        const opponentAlsoPendingForfeit = opponentKey && state.disconnectTimers.has(opponentKey);
 
-        // Notify the opponent
-        io.to(gameId).emit("tournament:gameOver", {
-          tournamentId,
-          gameId,
-          winner,
-          isDraw: false,
-          reason: "opponent_disconnected",
-        });
+        if (!opponentConnected && opponentAlsoPendingForfeit) {
+          // Both players absent — cancel opponent's timer and record a draw
+          if (opponentKey) {
+            const otherTimer = state.disconnectTimers.get(opponentKey);
+            if (otherTimer) {
+              clearTimeout(otherTimer.timer);
+              state.disconnectTimers.delete(opponentKey);
+            }
+          }
+          console.log(`[TOURNAMENT] Both players absent for game ${gameId} — recording draw (${walletAddress} + ${opponent?.walletAddress})`);
 
-        await handleTournamentGameEnd(tournamentId, gameId, winner, false);
+          await handleTournamentGameEnd(tournamentId, gameId, null, true, "both_players_disconnected");
+        } else {
+          console.log(`[TOURNAMENT] Player ${walletAddress} disconnected, forfeiting game ${gameId} in tournament ${tournamentId}`);
+
+          await handleTournamentGameEnd(tournamentId, gameId, winner, false, "opponent_disconnected");
+        }
         return; // A player can only be in one game per round
       }
     }
@@ -829,6 +912,11 @@ app.prepare().then(() => {
     }
     if (state.roundTimer) clearTimeout(state.roundTimer);
     if (state.breakTimer) clearTimeout(state.breakTimer);
+    // Clear any pending disconnect timers
+    for (const [, entry] of state.disconnectTimers) {
+      clearTimeout(entry.timer);
+    }
+    state.disconnectTimers.clear();
     activeTournaments.delete(tournamentId);
   }
 
@@ -1299,13 +1387,92 @@ app.prepare().then(() => {
       if (state) {
         addConnectedTournamentPlayer(state, uid);
         state.lastActivityTime = Date.now();
+
+        // Cancel any pending forfeit countdown for this player (reconnected in time)
+        const wasPending = cancelForfeitCountdown(tournamentId, uid);
+
+        // Re-join them to their active game room if they have one
+        if (wasPending) {
+          const player = state.participants.find(
+            (p) => normalizeWalletAddress(p.walletAddress) === normalizeWalletAddress(uid),
+          );
+          if (player) {
+            for (const [gameId, gs] of state.roundGames.entries()) {
+              if (gs.status === "playing" && (gs.whiteId === player.userId || gs.blackId === player.userId)) {
+                socket.join(gameId);
+                // Determine their color and opponent
+                const isWhite = gs.whiteId === player.userId;
+                const opponentParticipant = state.participants.find(
+                  (p) => p.userId === (isWhite ? gs.blackId : gs.whiteId),
+                );
+                socket.emit("tournament:gameStart", {
+                  tournamentId,
+                  gameId,
+                  color: isWhite ? "white" : "black",
+                  opponentAddress: opponentParticipant?.walletAddress ?? "",
+                  round: state.currentRound,
+                  totalRounds: state.totalRounds,
+                  timeControl: state.timeControl,
+                });
+                console.log(`[TOURNAMENT] Re-joined reconnected player ${uid} to game ${gameId}`);
+                break;
+              }
+            }
+          }
+        }
       }
 
       // Send current state if tournament is active
       if (state) {
+        // Determine the correct phase for this specific player
+        let playerPhase = "lobby";
+        if (state.startingEndTime && state.startingEndTime > Date.now()) {
+          // Tournament is in the starting countdown
+          playerPhase = "starting";
+          const remainingMs = state.startingEndTime - Date.now();
+          socket.emit("tournament:starting", {
+            tournamentId,
+            totalRounds: state.totalRounds,
+            totalPlayers: state.participants.length,
+            timeControl: state.timeControl,
+            startsIn: Math.ceil(remainingMs / 1000),
+            standings: getTournamentStandings(state),
+          });
+        } else if (state.currentRound > 0) {
+          const regPlayer = state.participants.find(
+            (p) => normalizeWalletAddress(p.walletAddress) === normalizeWalletAddress(uid),
+          );
+          if (regPlayer) {
+            let inActiveGame = false;
+            let hasBye = true; // assume bye unless we find them in a pairing
+            for (const [, gs] of state.roundGames.entries()) {
+              if (gs.whiteId === regPlayer.userId || gs.blackId === regPlayer.userId) {
+                hasBye = false;
+                if (gs.status === "playing") inActiveGame = true;
+                break;
+              }
+            }
+            if (hasBye) {
+              playerPhase = "bye";
+              // Re-send bye event so client gets correct phase
+              socket.emit("tournament:bye", {
+                tournamentId,
+                round: state.currentRound,
+                totalRounds: state.totalRounds,
+              });
+            } else if (inActiveGame) {
+              playerPhase = "playing";
+            } else {
+              playerPhase = "round-waiting";
+            }
+          } else {
+            playerPhase = "playing";
+          }
+        }
+
         socket.emit("tournament:state", {
           tournamentId,
-          phase: state.currentRound === 0 ? "lobby" : "playing",
+          phase: playerPhase,
           currentRound: state.currentRound,
           totalRounds: state.totalRounds,
           timeControl: state.timeControl,
@@ -1421,10 +1588,24 @@ app.prepare().then(() => {
             removeConnectedTournamentPlayer(tState, disconnectingUserId);
             console.log(`[TOURNAMENT] Player ${disconnectingUserId} disconnected from tournament ${tournamentId}. Connected: ${tState.connectedPlayers.size}/${tState.participants.length}`);
 
-            // Forfeit their active game
-            forfeitTournamentGame(tournamentId, disconnectingUserId).catch((e) => {
-              console.error(`[TOURNAMENT] Error handling tournament disconnect for ${disconnectingUserId}:`, e);
-            });
+            // Only start forfeit countdown if player has an active game this round
+            const disconnPlayer = tState.participants.find(
+              (p) => normalizeWalletAddress(p.walletAddress) === normalizeWalletAddress(disconnectingUserId),
+            );
+            if (disconnPlayer) {
+              let hasActiveGame = false;
+              for (const [, gs] of tState.roundGames.entries()) {
+                if (gs.status === "playing" && (gs.whiteId === disconnPlayer.userId || gs.blackId === disconnPlayer.userId)) {
+                  hasActiveGame = true;
+                  break;
+                }
+              }
+              if (hasActiveGame) {
+                startForfeitCountdown(tournamentId, disconnectingUserId);
+              } else {
+                console.log(`[TOURNAMENT] Player ${disconnectingUserId} disconnected but has no active game — skipping forfeit countdown`);
+              }
+            }
 
             // Update lastActivityTime so the periodic cleanup interval can detect stale tournaments
             tState.lastActivityTime = Date.now();
