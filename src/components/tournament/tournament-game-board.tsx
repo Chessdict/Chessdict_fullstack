@@ -34,6 +34,7 @@ export function TournamentGameBoard({
     setGameResult,
     setPhase,
     gameResult,
+    disconnectedPlayers,
   } = useTournamentStore();
 
   const game = useMemo(() => new Chess(), []);
@@ -308,6 +309,26 @@ export function TournamentGameBoard({
   const currentTurn = game.turn();
   const isMyTurn = currentTurn === (playerColor === "black" ? "b" : "w");
 
+  // Opponent disconnect countdown
+  const opponentDeadline = opponentAddress
+    ? disconnectedPlayers[opponentAddress.toLowerCase()] ?? null
+    : null;
+  const [opponentCountdown, setOpponentCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!opponentDeadline) {
+      setOpponentCountdown(null);
+      return;
+    }
+    const update = () => {
+      const remaining = Math.max(0, Math.ceil((opponentDeadline - Date.now()) / 1000));
+      setOpponentCountdown(remaining);
+    };
+    update();
+    const interval = setInterval(update, 200);
+    return () => clearInterval(interval);
+  }, [opponentDeadline]);
+
   return (
     <div className="flex flex-col gap-4">
       {/* Opponent timer + info */}
@@ -339,6 +360,32 @@ export function TournamentGameBoard({
           {formatTime(playerColor === "white" ? blackTime : whiteTime)}
         </div>
       </div>
+
+      {/* Opponent disconnected banner */}
+      {opponentCountdown !== null && opponentCountdown > 0 && !gameResult && (
+        <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 animate-pulse">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/20 border border-amber-500/30">
+            <svg className="h-4 w-4 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-300">Opponent disconnected</p>
+            <p className="text-xs text-amber-400/60">
+              Forfeit in{" "}
+              <span className="font-mono font-bold text-amber-400 tabular-nums">
+                {opponentCountdown}s
+              </span>
+              {" "}if they don&apos;t reconnect
+            </p>
+          </div>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/20 border border-amber-500/40">
+            <span className="text-lg font-bold font-mono tabular-nums text-amber-400">
+              {opponentCountdown}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Chess Board */}
       <div className="relative group mx-auto w-full max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
