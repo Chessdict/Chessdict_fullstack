@@ -259,6 +259,19 @@ app.prepare().then(() => {
       }
     });
 
+    socket.on("cancelDraw", ({ roomId }) => {
+      console.log(`[SERVER] Draw offer cancelled in room ${roomId} by socket ${socket.id}`);
+      socket.to(roomId).emit("drawCancelled");
+      const roomSockets = io.sockets.adapter.rooms.get(roomId);
+      if (roomSockets) {
+        roomSockets.forEach(sid => {
+          if (sid !== socket.id) {
+            io.to(sid).emit("drawCancelled");
+          }
+        });
+      }
+    });
+
     socket.on("declineDraw", ({ roomId }) => {
       console.log(`[SERVER] Draw declined in room ${roomId} by socket ${socket.id}`);
       socket.to(roomId).emit("drawDeclined");
