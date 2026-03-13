@@ -93,7 +93,7 @@ export default function PlayPage() {
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
 
       {/* Main Content */}
-      <div className="container relative mx-auto flex flex-1 flex-col items-start gap-12 px-6 pt-32 pb-6 lg:flex-row lg:justify-center">
+      <div className="container relative mx-auto flex flex-1 flex-col items-center gap-6 px-3 pt-20 pb-6 sm:px-6 sm:pt-32 sm:gap-12 lg:flex-row lg:items-start lg:justify-center">
         {incomingChallenge && (
           <ChallengeModal
             from={incomingChallenge}

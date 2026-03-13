@@ -2,6 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect } from "react";
+import { GlassBg } from "../glass-bg";
 
 interface OpponentSearchModalProps {
     isOpen: boolean;
@@ -24,7 +25,7 @@ export function OpponentSearchModal({ isOpen, onClose }: OpponentSearchModalProp
     return (
         <AnimatePresence>
             {isOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
                     {/* Backdrop with blur */}
                     <motion.div
                         initial={{ opacity: 0 }}
@@ -39,45 +40,56 @@ export function OpponentSearchModal({ isOpen, onClose }: OpponentSearchModalProp
                         initial={{ scale: 0.95, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}
                         exit={{ scale: 0.95, opacity: 0 }}
-                        className="relative w-full max-w-md overflow-hidden rounded-[32px] border border-white/10 bg-[#0A0A0A] shadow-2xl"
+                        className="relative w-full max-w-sm"
                     >
-                        {/* Header */}
-                        <div className="relative flex items-center justify-center border-b border-white/5 p-6">
-                            <h2 className="text-lg font-medium text-white">Searching for Opponent</h2>
-                            <button
-                                onClick={onClose}
-                                className="absolute right-6 top-1/2 -translate-y-1/2 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white transition-colors"
-                            >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    width="20"
-                                    height="20"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
+                        <GlassBg className="p-5 sm:p-8 text-center" height="auto">
+                            <div className="flex flex-col items-center gap-4 sm:gap-6">
+                                {/* Close button */}
+                                <button
+                                    onClick={onClose}
+                                    className="absolute right-6 top-6 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white transition-colors z-20"
                                 >
-                                    <line x1="18" y1="6" x2="6" y2="18" />
-                                    <line x1="6" y1="6" x2="18" y2="18" />
-                                </svg>
-                            </button>
-                        </div>
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        width="20"
+                                        height="20"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    >
+                                        <line x1="18" y1="6" x2="6" y2="18" />
+                                        <line x1="6" y1="6" x2="18" y2="18" />
+                                    </svg>
+                                </button>
 
-                        {/* Content */}
-                        <div className="flex flex-col p-8">
-                            <div className="flex flex-col items-center justify-center gap-6 py-8">
-                                <div className="relative h-20 w-20">
-                                    <div className="absolute inset-0 rounded-full border-4 border-white/5" />
-                                    <div className="absolute inset-0 rounded-full border-4 border-t-white animate-spin" />
+                                <div className="relative">
+                                    <div className="h-20 w-20 rounded-full bg-linear-to-br from-blue-500/20 to-purple-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-blue-500/10">
+                                        <div className="absolute inset-0 rounded-full border-4 border-white/5" />
+                                        <div className="absolute inset-0 rounded-full border-4 border-t-white animate-spin" />
+                                    </div>
                                 </div>
-                                <div className="text-center">
-                                    <p className="text-white font-medium">Matching you with an opponent...</p>
-                                    <p className="text-white/40 text-sm mt-1">This usually takes a few seconds</p>
+
+                                <div className="space-y-1 sm:space-y-2">
+                                    <h2 className="text-lg sm:text-xl font-bold text-white">Searching for Opponent</h2>
+                                    <p className="text-xs sm:text-sm text-white/60">
+                                        Matching you with an opponent...
+                                    </p>
+                                    <p className="text-[10px] sm:text-xs text-white/30 mt-1">
+                                        This usually takes a few seconds
+                                    </p>
                                 </div>
+
+                                <button
+                                    onClick={onClose}
+                                    className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10 mt-4"
+                                >
+                                    Cancel
+                                </button>
                             </div>
-                        </div>
+                        </GlassBg>
                     </motion.div>
                 </div>
             )}

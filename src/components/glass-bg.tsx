@@ -38,8 +38,9 @@ export function GlassBg({
             style={{
                 height: heightValue,
                 minWidth: minWidthValue,
+                width: "100%",
             }}
-            className={`group relative inline-flex items-center justify-start rounded-full text-sm tracking-wide text-white ${onClick ? "cursor-pointer" : "cursor-default"} ${className}`}
+            className={`group relative inline-flex items-center justify-center rounded-full text-sm tracking-wide text-white ${onClick ? "cursor-pointer" : "cursor-default"} ${className}`}
         >
             {/* Decorative SVG border/background */}
             <svg
@@ -104,7 +105,7 @@ export function GlassBg({
                     fill="none"
                 />
             </svg>
-            <span className="relative z-10 select-none">
+            <span className="relative z-10 select-none w-full">
                 {children}
             </span>
         </Component>

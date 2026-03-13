@@ -14,24 +14,24 @@ export function DrawOfferModal({ isOpen, onAccept, onDecline }: DrawOfferModalPr
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
             <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
-                <GlassBg className="p-8 text-center" height={280}>
-                    <div className="flex flex-col items-center gap-6">
+                <GlassBg className="p-5 sm:p-8 text-center" height={280}>
+                    <div className="flex flex-col items-center gap-4 sm:gap-6">
                         <div className="relative">
-                            <div className="h-20 w-20 rounded-full bg-linear-to-br from-yellow-500/20 to-orange-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-yellow-500/10">
-                                <svg className="h-10 w-10 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full bg-linear-to-br from-yellow-500/20 to-orange-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-yellow-500/10">
+                                <svg className="h-8 w-8 sm:h-10 sm:w-10 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <h2 className="text-xl font-bold text-white">Draw Offered</h2>
-                            <p className="text-sm text-white/60">
+                        <div className="space-y-1 sm:space-y-2">
+                            <h2 className="text-lg sm:text-xl font-bold text-white">Draw Offered</h2>
+                            <p className="text-xs sm:text-sm text-white/60">
                                 Your opponent is offering a draw. Do you accept?
                             </p>
                         </div>
 
-                        <div className="flex w-full gap-3 mt-4">
+                        <div className="flex w-full gap-3 mt-2 sm:mt-4">
                             <button
                                 onClick={onDecline}
                                 className="flex-1 rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"

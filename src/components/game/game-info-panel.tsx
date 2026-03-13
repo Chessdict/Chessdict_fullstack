@@ -32,6 +32,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const [showResignModal, setShowResignModal] = useState(false);
 
   const movesEndRef = useRef<HTMLDivElement>(null);
+  const movesContainerRef = useRef<HTMLDivElement>(null);
 
   // Handle resign action
   const handleResign = useCallback(() => {
@@ -53,9 +54,12 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     setShowResignModal(false);
   }, [socket, roomId, address]);
 
-  // Auto-scroll to latest move
+  // Auto-scroll to latest move within the container only
   useEffect(() => {
-    movesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = movesContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
   }, [moves]);
 
   // Group moves into pairs (white, black)
@@ -165,7 +169,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       {isGameActive && (
         <div className="flex flex-col gap-3">
           <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Move History</h3>
-          <div className="max-h-[200px] overflow-y-auto rounded-xl bg-white/5 p-3 scrollbar-thin scrollbar-thumb-white/10">
+          <div ref={movesContainerRef} className="max-h-[200px] overflow-y-auto rounded-xl bg-white/5 p-3 scrollbar-thin scrollbar-thumb-white/10">
             {movePairs.length === 0 ? (
               <p className="text-center text-sm text-white/30 py-4">No moves yet</p>
             ) : (
@@ -201,26 +205,37 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       {isGameActive && gameMode !== "computer" && (
         <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
           <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => {
-                if (!socket || !roomId || drawOfferSent) return;
-                socket.emit("offerDraw", { roomId });
-                setDrawOfferSent(true);
-                console.log("[INFO-PANEL] Draw offer sent");
-              }}
-              disabled={drawOfferSent}
-              className={cn(
-                "flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition",
-                drawOfferSent
-                  ? "bg-yellow-500/10 text-yellow-400/60 cursor-not-allowed"
-                  : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
-              )}
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              {drawOfferSent ? "Draw Offered..." : "Offer Draw"}
-            </button>
+            {drawOfferSent ? (
+              <button
+                onClick={() => {
+                  if (!socket || !roomId) return;
+                  socket.emit("cancelDraw", { roomId });
+                  setDrawOfferSent(false);
+                  console.log("[INFO-PANEL] Draw offer cancelled");
+                }}
+                className="flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Cancel Draw
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (!socket || !roomId) return;
+                  socket.emit("offerDraw", { roomId });
+                  setDrawOfferSent(true);
+                  console.log("[INFO-PANEL] Draw offer sent");
+                }}
+                className="flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Offer Draw
+              </button>
+            )}
             <button
               onClick={() => {
                 console.log("[INFO-PANEL] Resign button clicked - opening modal");

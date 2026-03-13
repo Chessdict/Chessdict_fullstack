@@ -9,6 +9,8 @@ import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { DrawOfferModal } from "./draw-offer-modal";
+import { GlassBg } from "../glass-bg";
+import { useChessSounds } from "@/hooks/useChessSounds";
 
 
 // Helper to format time as MM:SS
@@ -63,6 +65,7 @@ export function GameBoard() {
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
+  const { playMoveSound, playGameOver } = useChessSounds();
 
 
   // Initialize the chess instance once and keep it stable.
@@ -129,13 +132,16 @@ export function GameBoard() {
         setMoveSquares({});
         setSourceSquare(null);
 
+        // Play sound based on move type
+        playMoveSound(result);
+
         return result;
       }
     } catch (e) {
       console.error(e);
     }
     return null;
-  }, [game, syncState, addMove]);
+  }, [game, syncState, addMove, playMoveSound]);
 
   // Handle Game Initialization / Resets
   useEffect(() => {
@@ -248,8 +254,9 @@ export function GameBoard() {
       // Update local state
       setGameOver(winner, reason);
       setStatus("finished");
+      playGameOver();
     }
-  }, [fen, status, game, gameMode, socket, roomId, setGameOver, setStatus]);
+  }, [fen, status, game, gameMode, socket, roomId, setGameOver, setStatus, playGameOver]);
 
   // Join room when entering multiplayer game
   useEffect(() => {
@@ -303,6 +310,7 @@ export function GameBoard() {
       console.log("[CLIENT] gameOver event received:", { winner, reason, ratings });
       setGameOver(winner, reason);
       setStatus("finished");
+      playGameOver();
       if (ratings && address) {
         const newRating = ratings[address];
         const oldRating = player?.rating;
@@ -320,6 +328,11 @@ export function GameBoard() {
     const handleDrawDeclined = () => {
       console.log("[CLIENT] Draw offer declined by opponent");
       setDrawOfferSent(false);
+    };
+
+    const handleDrawCancelled = () => {
+      console.log("[CLIENT] Draw offer cancelled by opponent");
+      setDrawOfferReceived(false);
     };
 
     const handleResignError = ({ error }: { error: string }) => {
@@ -356,6 +369,7 @@ export function GameBoard() {
     socket.on('resignError', handleResignError);
     socket.on('drawOffered', handleDrawOffered);
     socket.on('drawDeclined', handleDrawDeclined);
+    socket.on('drawCancelled', handleDrawCancelled);
 
     return () => {
       clearInterval(pingInterval);
@@ -367,8 +381,9 @@ export function GameBoard() {
       socket.off('resignError', handleResignError);
       socket.off('drawOffered', handleDrawOffered);
       socket.off('drawDeclined', handleDrawDeclined);
+      socket.off('drawCancelled', handleDrawCancelled);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating]);
 
   // Flash the king square red when in check and player tries an invalid action
   const flashKingCheck = useCallback(() => {
@@ -614,33 +629,33 @@ export function GameBoard() {
   const isMyTurn = currentTurn === playerTurnCode;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-2 sm:gap-4 w-full">
       {/* Top Info (Opponent) */}
-      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-4 backdrop-blur-xl border border-white/5 shadow-2xl">
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 overflow-hidden rounded-full bg-linear-to-br from-red-500/20 to-transparent border border-white/10 ring-2 ring-red-500/20">
-            <div className="h-full w-full flex items-center justify-center text-xs font-bold text-white/40 uppercase">
+      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-2 sm:p-4 backdrop-blur-xl border border-white/5 shadow-2xl">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 overflow-hidden rounded-full bg-linear-to-br from-red-500/20 to-transparent border border-white/10 ring-2 ring-red-500/20">
+            <div className="h-full w-full flex items-center justify-center text-[10px] sm:text-xs font-bold text-white/40 uppercase">
               {gameMode === 'computer' ? 'AI' : opponent?.address.slice(2, 4) || '??'}
             </div>
           </div>
-          <div>
-            <div className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
-              {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
-              {opponent && <span className="text-[10px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 rounded">{opponent.rating}</span>}
+          <div className="min-w-0">
+            <div className="text-xs sm:text-sm font-bold text-white tracking-tight flex items-center gap-1 sm:gap-2">
+              <span className="truncate">{gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}</span>
+              {opponent && <span className="text-[8px] sm:text-[10px] font-mono text-white/40 bg-white/5 px-1 sm:px-1.5 py-0.5 rounded shrink-0">{opponent.rating}</span>}
             </div>
-            <div className="text-[10px] uppercase font-bold tracking-widest text-white/30">
+            <div className="text-[8px] sm:text-[10px] uppercase font-bold tracking-widest text-white/30">
               {status === 'in-progress' && !isMyTurn ? 'Thinking...' :
                 lastMove && lastMove.color !== playerTurnCode
                   ? <span className="normal-case tracking-normal text-white/50">
-                    played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                    played <span className="text-sm sm:text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
                   </span>
                   : 'Waiting'}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {['online', 'friend'].includes(gameMode || '') && (
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Opponent Latency: ${opponentPing}ms`}>
+            <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Opponent Latency: ${opponentPing}ms`}>
               <div className="flex items-end gap-0.5 h-3.5">
                 {[1, 2, 3, 4].map((bar) => {
                   const strength = opponentPing < 80 ? 4 : opponentPing < 150 ? 3 : opponentPing < 300 ? 2 : 1;
@@ -659,7 +674,7 @@ export function GameBoard() {
             </div>
           )}
           {/* Opponent's timer */}
-          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${!isMyTurn && status === 'in-progress'
+          <div className={`text-base sm:text-xl font-mono tabular-nums px-2 sm:px-3 py-1 rounded-lg border ${!isMyTurn && status === 'in-progress'
             ? 'bg-red-500/20 border-red-500/30 text-red-400'
             : 'bg-black/40 border-white/10 text-white/90'
             } ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
@@ -669,7 +684,7 @@ export function GameBoard() {
       </div>
 
       {/* Main Board Container */}
-      <div className="relative group mx-auto w-full max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
+      <div className="relative group mx-auto w-full max-w-[min(720px,calc(100vw-24px))] sm:max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
         <div className="absolute -inset-1 bg-linear-to-r from-blue-600/20 to-purple-600/20 rounded-xl blur-lg group-hover:opacity-100 opacity-50 transition-opacity" />
         <div className="relative h-full w-full overflow-hidden rounded-xl border border-white/10 shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] bg-[#1a1816]">
           <Chessboard
@@ -700,38 +715,50 @@ export function GameBoard() {
           )}
 
           {gameOver && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in zoom-in-95 duration-300">
-              <div className="bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
-                <div className={`mx-auto h-16 w-16 flex items-center justify-center rounded-full mb-4 ${gameOver.winner === 'draw' ? 'bg-yellow-500/20 text-yellow-400' : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                  {gameOver.winner === 'draw' ? (
-                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  ) : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? (
-                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                  ) : (
-                    <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                  )}
-                </div>
-                <h2 className="text-2xl font-black text-white mb-2">
-                  {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
-                </h2>
-                <p className="text-white/60 mb-4 capitalize">
-                  {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
-                    gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
-                      gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
-                        gameOver.reason === 'draw' ? 'Draw by Agreement' :
-                          gameOver.reason}
-                </p>
-                {ratingChange !== null && (
-                  <div className={`mb-4 px-3 py-2 rounded-lg text-sm font-bold ${ratingChange > 0 ? 'bg-green-500/20 text-green-400' : ratingChange < 0 ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
-                    Rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+              <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
+                <GlassBg className="p-5 sm:p-8 text-center" height="auto">
+                  <div className="flex flex-col items-center gap-4 sm:gap-6">
+                    <div className="relative">
+                      <div className={`h-16 w-16 sm:h-20 sm:w-20 rounded-full flex items-center justify-center border border-white/10 shadow-xl ${gameOver.winner === 'draw' ? 'bg-linear-to-br from-yellow-500/20 to-orange-500/20 shadow-yellow-500/10' : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'bg-linear-to-br from-green-500/20 to-blue-500/20 shadow-green-500/10' : 'bg-linear-to-br from-red-500/20 to-orange-500/20 shadow-red-500/10'}`}>
+                        {gameOver.winner === 'draw' ? (
+                          <svg className="h-8 w-8 sm:h-10 sm:w-10 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        ) : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? (
+                          <svg className="h-8 w-8 sm:h-10 sm:w-10 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                        ) : (
+                          <svg className="h-8 w-8 sm:h-10 sm:w-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 sm:space-y-2">
+                      <h2 className="text-lg sm:text-xl font-bold text-white">
+                        {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
+                      </h2>
+                      <p className="text-xs sm:text-sm text-white/60 capitalize">
+                        {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
+                          gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
+                            gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
+                              gameOver.reason === 'draw' ? 'Draw by Agreement' :
+                                gameOver.reason}
+                      </p>
+                    </div>
+
+                    {ratingChange !== null && (
+                      <div className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-bold border ${ratingChange > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : ratingChange < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}`}>
+                        Rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => window.location.reload()}
+                      className="w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 mt-1 sm:mt-2"
+                    >
+                      <div className="absolute inset-0 bg-linear-to-r from-blue-600 to-purple-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                      <span className="relative text-sm font-bold text-white">Play Again</span>
+                    </button>
                   </div>
-                )}
-                <button
-                  onClick={() => window.location.reload()}
-                  className="w-full py-3 rounded-xl bg-white text-black font-bold hover:bg-gray-200 transition-colors"
-                >
-                  Play Again
-                </button>
+                </GlassBg>
               </div>
             </div>
           )}
@@ -739,39 +766,39 @@ export function GameBoard() {
       </div>
 
       {/* Bottom Info (Player) */}
-      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-4 backdrop-blur-xl border border-white/5 shadow-2xl transition-all">
-        <div className="flex items-center gap-3">
-          <div className="relative h-10 w-10 overflow-hidden rounded-full bg-linear-to-br from-blue-500/20 to-transparent border border-white/10 ring-2 ring-blue-500/20">
-            <div className="h-full w-full flex items-center justify-center text-xs font-bold text-white/40">YOU</div>
-            <div className="absolute bottom-1 right-1 h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-2 sm:p-4 backdrop-blur-xl border border-white/5 shadow-2xl transition-all">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="relative h-8 w-8 sm:h-10 sm:w-10 shrink-0 overflow-hidden rounded-full bg-linear-to-br from-blue-500/20 to-transparent border border-white/10 ring-2 ring-blue-500/20">
+            <div className="h-full w-full flex items-center justify-center text-[10px] sm:text-xs font-bold text-white/40">YOU</div>
+            <div className="absolute bottom-0.5 right-0.5 sm:bottom-1 sm:right-1 h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-green-500 animate-pulse" />
           </div>
-          <div>
-            <div className="text-sm font-bold text-white flex items-center gap-2">
-              You ({playerColor || 'White'})
-              {player && <span className="text-[10px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 rounded">{player.rating}</span>}
-              {isMyTurn && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,1)]" />}
+          <div className="min-w-0">
+            <div className="text-xs sm:text-sm font-bold text-white flex items-center gap-1 sm:gap-2">
+              <span className="truncate">You ({playerColor || 'White'})</span>
+              {player && <span className="text-[8px] sm:text-[10px] font-mono text-white/40 bg-white/5 px-1 sm:px-1.5 py-0.5 rounded shrink-0">{player.rating}</span>}
+              {isMyTurn && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,1)] shrink-0" />}
             </div>
-            <div className="text-[10px] uppercase font-bold tracking-widest text-blue-400">
+            <div className="text-[8px] sm:text-[10px] uppercase font-bold tracking-widest text-blue-400">
               {status === 'in-progress' ? (isMyTurn ? 'Your Turn' :
                 lastMove && lastMove.color === playerTurnCode
                   ? <span className="normal-case tracking-normal text-white/50">
-                    played <span className="text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
+                    played <span className="text-sm sm:text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
                   </span>
                   : 'Waiting for opponent') : 'Online'}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {status === 'in-progress' && ['online', 'friend'].includes(gameMode || '') && (
             <button
               onClick={() => {
                 console.log("[CLIENT] Resign button clicked - opening modal");
                 setShowResignModal(true);
               }}
-              className="flex items-center gap-1 text-[10px] font-bold text-red-500/80 hover:text-red-400 uppercase tracking-widest px-2 py-1 hover:bg-red-500/10 rounded transition-all"
+              className="flex items-center gap-1 text-[8px] sm:text-[10px] font-bold text-red-500/80 hover:text-red-400 uppercase tracking-widest px-1.5 sm:px-2 py-1 hover:bg-red-500/10 rounded transition-all"
             >
               <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>
-              Resign
+              <span className="hidden sm:inline">Resign</span>
             </button>
           )}
           {status === 'in-progress' && gameMode === 'computer' && (
@@ -782,13 +809,13 @@ export function GameBoard() {
                   syncState();
                 }
               }}
-              className="text-[10px] uppercase font-black text-white/20 hover:text-white/60 transition-colors"
+              className="text-[8px] sm:text-[10px] uppercase font-black text-white/20 hover:text-white/60 transition-colors"
             >
-              Force Reset
+              Reset
             </button>
           )}
           {['online', 'friend'].includes(gameMode || '') && (
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
+            <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
               <div className="flex items-end gap-0.5 h-3.5">
                 {[1, 2, 3, 4].map((bar) => {
                   const strength = ping < 80 ? 4 : ping < 150 ? 3 : ping < 300 ? 2 : 1;
@@ -807,7 +834,7 @@ export function GameBoard() {
             </div>
           )}
           {/* Player's timer */}
-          <div className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${isMyTurn && status === 'in-progress'
+          <div className={`text-base sm:text-xl font-mono tabular-nums px-2 sm:px-3 py-1 rounded-lg border ${isMyTurn && status === 'in-progress'
             ? 'bg-blue-500/20 border-blue-500/30 text-blue-400'
             : 'bg-black/40 border-white/10 text-white/90'
             } ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
