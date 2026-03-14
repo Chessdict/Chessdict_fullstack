@@ -79,6 +79,126 @@ app.prepare().then(() => {
   const matchmakingQueue = [];
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
 
+  // ─── Server-Authoritative Game Timers ───
+  const DEFAULT_GAME_TIME = 600; // 10 minutes in seconds
+  const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
+
+  // ─── Reconnection / Disconnect Grace Period (regular games) ───
+  const userActiveGames = new Map(); // walletAddress -> { roomId, color, opponentWallet, opponentRating, playerRating }
+  const gameDisconnectTimers = new Map(); // walletAddress -> { roomId, timer, deadline }
+  const gameStateStore = new Map(); // roomId -> { fen, moves[] }
+
+  function cleanupRegularGame(roomId) {
+    gameStateStore.delete(roomId);
+    for (const [wallet, data] of userActiveGames.entries()) {
+      if (data.roomId === roomId) userActiveGames.delete(wallet);
+    }
+    for (const [wallet, data] of gameDisconnectTimers.entries()) {
+      if (data.roomId === roomId) {
+        clearTimeout(data.timer);
+        gameDisconnectTimers.delete(wallet);
+      }
+    }
+    cleanupGameTimer(roomId);
+  }
+
+  function initGameTimer(roomId, timeInSeconds = DEFAULT_GAME_TIME) {
+    const existing = gameTimers.get(roomId);
+    if (existing?.timeoutHandle) clearTimeout(existing.timeoutHandle);
+
+    const timerState = {
+      whiteTime: timeInSeconds,
+      blackTime: timeInSeconds,
+      turn: 'w',
+      lastMoveTimestamp: Date.now(),
+      timeoutHandle: null,
+    };
+    timerState.timeoutHandle = setTimeout(() => handleServerTimeout(roomId), timeInSeconds * 1000);
+    gameTimers.set(roomId, timerState);
+    console.log(`[TIMER] Initialized for room ${roomId}: ${timeInSeconds}s each`);
+  }
+
+  function cleanupGameTimer(roomId) {
+    const timer = gameTimers.get(roomId);
+    if (timer?.timeoutHandle) clearTimeout(timer.timeoutHandle);
+    gameTimers.delete(roomId);
+  }
+
+  function handleServerTimeout(roomId) {
+    const timer = gameTimers.get(roomId);
+    if (!timer) return;
+
+    const loserColor = timer.turn === 'w' ? 'white' : 'black';
+    const winnerColor = timer.turn === 'w' ? 'black' : 'white';
+    if (timer.turn === 'w') timer.whiteTime = 0; else timer.blackTime = 0;
+
+    console.log(`[TIMER] Server timeout in room ${roomId}: ${loserColor} ran out of time`);
+
+    // Emit timeSync so both clients see 0
+    io.to(roomId).emit('timeSync', { whiteTime: Math.round(timer.whiteTime), blackTime: Math.round(timer.blackTime) });
+
+    (async () => {
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game || game.status !== 'IN_PROGRESS') return;
+
+        const winnerId = loserColor === 'white' ? game.blackPlayerId : game.whitePlayerId;
+        await prisma.game.update({ where: { id: roomId }, data: { status: 'COMPLETED', winnerId } });
+
+        const updatedGame = { ...game, winnerId };
+        const newRatings = await updateRatings(updatedGame);
+
+        recentlyCompletedGames.add(roomId);
+        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
+
+        const payload = { winner: winnerColor, reason: 'timeout', ratings: newRatings };
+        io.to(roomId).emit('gameOver', payload);
+
+        // Direct emit for reliability
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+        const wSid = userSocketMap.get(whitePlayer?.walletAddress);
+        const bSid = userSocketMap.get(blackPlayer?.walletAddress);
+        if (wSid) io.to(wSid).emit('gameOver', payload);
+        if (bSid) io.to(bSid).emit('gameOver', payload);
+
+        console.log(`[TIMER] gameOver emitted for timeout in room ${roomId}`);
+      } catch (error) {
+        console.error('[TIMER] Error processing server timeout:', error);
+      } finally {
+        cleanupRegularGame(roomId);
+      }
+    })();
+  }
+
+  function processMoveTiming(roomId) {
+    const timer = gameTimers.get(roomId);
+    if (!timer) return null;
+
+    const now = Date.now();
+    const elapsed = (now - timer.lastMoveTimestamp) / 1000;
+
+    if (timer.turn === 'w') {
+      timer.whiteTime = Math.max(0, timer.whiteTime - elapsed);
+    } else {
+      timer.blackTime = Math.max(0, timer.blackTime - elapsed);
+    }
+
+    timer.turn = timer.turn === 'w' ? 'b' : 'w';
+    timer.lastMoveTimestamp = now;
+
+    if (timer.timeoutHandle) clearTimeout(timer.timeoutHandle);
+    const nextPlayerTime = timer.turn === 'w' ? timer.whiteTime : timer.blackTime;
+
+    if (nextPlayerTime <= 0) {
+      handleServerTimeout(roomId);
+      return null;
+    }
+
+    timer.timeoutHandle = setTimeout(() => handleServerTimeout(roomId), nextPlayerTime * 1000);
+    return { whiteTime: Math.round(timer.whiteTime), blackTime: Math.round(timer.blackTime) };
+  }
+
   // ─── Tournament Management ───
   const activeTournaments = new Map(); // tournamentId -> tournament state
   const playerTournamentMap = new Map(); // walletAddress -> tournamentId (tracks which tournament a player is in)
@@ -969,6 +1089,13 @@ app.prepare().then(() => {
             activeGames.set(s2.id, roomId);
           }
 
+          initGameTimer(roomId, DEFAULT_GAME_TIME);
+
+          // Track active game for reconnection
+          userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
+          userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
+          gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [] });
+
           console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId}`);
         }
       } catch (error) {
@@ -983,6 +1110,45 @@ app.prepare().then(() => {
 
     if (userId) {
       userSocketMap.set(userId, socket.id);
+
+      // ─── Reconnection: cancel disconnect grace period if exists ───
+      const disconnectData = gameDisconnectTimers.get(userId);
+      if (disconnectData) {
+        clearTimeout(disconnectData.timer);
+        gameDisconnectTimers.delete(userId);
+        console.log(`[RECONNECT] Cancelled disconnect grace timer for ${userId} in game ${disconnectData.roomId}`);
+      }
+
+      // ─── Reconnection: rejoin active game (refresh or reconnect) ───
+      const activeGame = userActiveGames.get(userId);
+      if (activeGame) {
+        const gs = gameStateStore.get(activeGame.roomId);
+        const timer = gameTimers.get(activeGame.roomId);
+
+        let whiteTime = DEFAULT_GAME_TIME, blackTime = DEFAULT_GAME_TIME;
+        if (timer) {
+          const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
+          whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
+          blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
+        }
+
+        socket.join(activeGame.roomId);
+        activeGames.set(socket.id, activeGame.roomId);
+        socket.to(activeGame.roomId).emit("opponentReconnected");
+
+        socket.emit("gameRejoined", {
+          roomId: activeGame.roomId,
+          color: activeGame.color,
+          opponentAddress: activeGame.opponentWallet,
+          opponentRating: activeGame.opponentRating,
+          playerRating: activeGame.playerRating,
+          fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+          moves: gs?.moves || [],
+          whiteTime: Math.round(whiteTime),
+          blackTime: Math.round(blackTime),
+        });
+        console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
+      }
     }
 
     socket.on("joinQueue", (data) => {
@@ -1002,6 +1168,52 @@ app.prepare().then(() => {
       activeGames.set(socket.id, roomId);
       console.log(`Socket ${socket.id} joined room ${roomId}`);
       socket.to(roomId).emit("opponentJoined", { socketId: socket.id });
+
+      // Send current timer state so late-joining players sync immediately
+      const timer = gameTimers.get(roomId);
+      if (timer) {
+        const now = Date.now();
+        const elapsed = (now - timer.lastMoveTimestamp) / 1000;
+        const whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
+        const blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
+        socket.emit('timeSync', { whiteTime: Math.round(whiteTime), blackTime: Math.round(blackTime) });
+      }
+    });
+
+    // Explicit rejoin for URL-based game reconnection (/play/game/[id])
+    socket.on("rejoinGame", ({ roomId: requestedRoomId }) => {
+      const activeGame = userActiveGames.get(userId);
+      if (!activeGame || activeGame.roomId !== requestedRoomId) {
+        socket.emit("rejoinError", { error: "No active game found for this room" });
+        return;
+      }
+
+      const gs = gameStateStore.get(activeGame.roomId);
+      const timer = gameTimers.get(activeGame.roomId);
+
+      let whiteTime = DEFAULT_GAME_TIME, blackTime = DEFAULT_GAME_TIME;
+      if (timer) {
+        const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
+        whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
+        blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
+      }
+
+      socket.join(activeGame.roomId);
+      activeGames.set(socket.id, activeGame.roomId);
+      socket.to(activeGame.roomId).emit("opponentReconnected");
+
+      socket.emit("gameRejoined", {
+        roomId: activeGame.roomId,
+        color: activeGame.color,
+        opponentAddress: activeGame.opponentWallet,
+        opponentRating: activeGame.opponentRating,
+        playerRating: activeGame.playerRating,
+        fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+        moves: gs?.moves || [],
+        whiteTime: Math.round(whiteTime),
+        blackTime: Math.round(blackTime),
+      });
+      console.log(`[REJOIN] Player ${userId} explicitly rejoined game ${activeGame.roomId}`);
     });
 
     socket.on("leaveRoom", ({ roomId }) => {
@@ -1010,9 +1222,22 @@ app.prepare().then(() => {
       socket.to(roomId).emit("opponentLeft", { socketId: socket.id });
     });
 
-    socket.on("movePiece", ({ roomId, move }) => {
+    socket.on("movePiece", ({ roomId, move, fen, moveRecord }) => {
       console.log(`Move in ${roomId}:`, move);
       socket.to(roomId).emit("opponentMove", move);
+
+      // Store game state for reconnection
+      const gs = gameStateStore.get(roomId);
+      if (gs) {
+        if (fen) gs.fen = fen;
+        if (moveRecord) gs.moves.push(moveRecord);
+      }
+
+      // Update server-authoritative timer and broadcast synced times
+      const times = processMoveTiming(roomId);
+      if (times) {
+        io.to(roomId).emit("timeSync", times);
+      }
     });
 
     socket.on("sendChallenge", ({ toUserId, fromUserId }) => {
@@ -1023,6 +1248,15 @@ app.prepare().then(() => {
       } else {
         socket.emit("challengeError", { error: "User is offline", toUserId });
       }
+    });
+
+    // ─── In-Game Chat ───
+    socket.on("chatMessage", ({ roomId, message }) => {
+      if (!roomId || !message || !userId) return;
+      const text = String(message).slice(0, 500);
+      const payload = { sender: userId, text, timestamp: Date.now() };
+      // Broadcast to others in room only; sender adds message optimistically
+      socket.to(roomId).emit("chatMessage", payload);
     });
 
     socket.on("declineChallenge", ({ toUserId, fromUserId }) => {
@@ -1068,6 +1302,7 @@ app.prepare().then(() => {
 
     socket.on("acceptDraw", async ({ roomId }) => {
       console.log(`[SERVER] Draw accepted in room ${roomId} by socket ${socket.id}`);
+      cleanupRegularGame(roomId);
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "IN_PROGRESS") {
@@ -1133,6 +1368,7 @@ app.prepare().then(() => {
     socket.on("resign", async ({ roomId, userId }) => {
       console.log(`[SERVER] Resignation received from ${userId} in room ${roomId}`);
       console.log(`[SERVER] Socket ${socket.id} rooms:`, Array.from(socket.rooms));
+      cleanupRegularGame(roomId);
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         console.log(`[SERVER] Game found:`, game ? { id: game.id, status: game.status, whitePlayerId: game.whitePlayerId, blackPlayerId: game.blackPlayerId } : null);
@@ -1220,6 +1456,7 @@ app.prepare().then(() => {
 
     socket.on("gameComplete", async ({ roomId, winner, reason }) => {
       console.log(`[SERVER] Game complete received for room ${roomId}: winner=${winner}, reason=${reason}`);
+      cleanupRegularGame(roomId);
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game) {
@@ -1285,65 +1522,9 @@ app.prepare().then(() => {
       }
     });
 
-    socket.on("gameTimeout", async ({ roomId, loser }) => {
-      console.log(`[SERVER] Timeout received for room ${roomId}: loser=${loser}`);
-      try {
-        const game = await prisma.game.findUnique({ where: { id: roomId } });
-        if (!game) {
-          console.error(`[SERVER] Game not found for roomId: ${roomId}`);
-          return;
-        }
-
-        if (game.status !== "IN_PROGRESS") {
-          console.log(`[SERVER] Game ${roomId} is not in progress, status: ${game.status}`);
-          return;
-        }
-
-        // Determine winner ID (opposite of loser)
-        const winnerId = loser === "white" ? game.blackPlayerId : game.whitePlayerId;
-        const winnerColor = loser === "white" ? "black" : "white";
-
-        // Update game in database
-        await prisma.game.update({
-          where: { id: roomId },
-          data: {
-            status: "COMPLETED",
-            winnerId: winnerId
-          }
-        });
-
-        // Update ELO ratings
-        const updatedGame = { ...game, winnerId };
-        const newRatings = await updateRatings(updatedGame);
-
-        console.log(`[SERVER] Game ${roomId} marked as COMPLETED due to timeout. Winner: ${winnerColor}`);
-
-        // Mark game as recently completed to prevent false disconnect forfeits
-        recentlyCompletedGames.add(roomId);
-        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
-
-        // Emit gameOver to both players
-        const gameOverPayload = { winner: winnerColor, reason: "timeout", ratings: newRatings };
-        io.to(roomId).emit("gameOver", gameOverPayload);
-
-        // Also emit directly to both player sockets for reliability
-        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
-        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
-
-        const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
-        const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
-
-        if (whiteSocketId) {
-          io.to(whiteSocketId).emit("gameOver", gameOverPayload);
-        }
-        if (blackSocketId) {
-          io.to(blackSocketId).emit("gameOver", gameOverPayload);
-        }
-
-        console.log(`[SERVER] gameOver event emitted for timeout`);
-      } catch (error) {
-        console.error("Error processing game timeout:", error);
-      }
+    socket.on("gameTimeout", ({ roomId, loser }) => {
+      // Legacy: server now handles timeouts authoritatively via gameTimers
+      console.log(`[SERVER] Client gameTimeout for room ${roomId} (loser=${loser}) - server handles this now`);
     });
 
     socket.on("acceptChallenge", async ({ opponentId, userId: myId }) => {
@@ -1376,6 +1557,13 @@ app.prepare().then(() => {
 
               io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
               io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
+              initGameTimer(roomId, DEFAULT_GAME_TIME);
+
+              // Track active game for reconnection
+              userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
+              userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
+              gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [] });
+
               console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
             }
           }
@@ -1641,12 +1829,12 @@ app.prepare().then(() => {
       if (index !== -1) {
         matchmakingQueue.splice(index, 1);
       }
-      // Remove from socket map
+
+      // ─── Regular game disconnect: 30s grace period ───
       const activeRoomId = activeGames.get(socket.id);
       if (activeRoomId) {
         console.log(`Socket ${socket.id} disconnected from active room ${activeRoomId}`);
 
-        // Capture user ID synchronously before cleanup
         let disconnectedUserId = null;
         for (const [uid, sid] of userSocketMap.entries()) {
           if (sid === socket.id) {
@@ -1655,73 +1843,89 @@ app.prepare().then(() => {
           }
         }
 
-        // Handle disconnect forfeit - check game status FIRST before emitting
-        (async () => {
-          try {
-            // Skip if this game was recently completed (prevents race condition with gameComplete)
-            if (recentlyCompletedGames.has(activeRoomId)) {
-              console.log(`[SERVER] Game ${activeRoomId} was recently completed, skipping disconnect forfeit`);
-              return;
-            }
-
-            const game = await prisma.game.findUnique({ where: { id: activeRoomId } });
-
-            // Only process if game exists and is still IN_PROGRESS
-            if (game && game.status === "IN_PROGRESS") {
-              console.log(`[SERVER] Game ${activeRoomId} is still in progress, processing disconnect forfeit`);
-
-              // Emit gameOver to room
-              io.to(activeRoomId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
-
-              // Also emit directly to all sockets in the room for reliability
-              const roomSockets = io.sockets.adapter.rooms.get(activeRoomId);
-              if (roomSockets) {
-                roomSockets.forEach(socketId => {
-                  if (socketId !== socket.id) {
-                    io.to(socketId).emit("gameOver", { winner: "opponent", reason: "disconnection" });
+        // Skip if recently completed or no user
+        if (!recentlyCompletedGames.has(activeRoomId) && disconnectedUserId) {
+          // Check if it's a tournament game — if so, tournament handler above already dealt with it
+          const isTournamentGame = disconnectingUserId && playerTournamentMap.has(disconnectingUserId);
+          if (!isTournamentGame) {
+            (async () => {
+              try {
+                const game = await prisma.game.findUnique({ where: { id: activeRoomId } });
+                if (game && game.status === "IN_PROGRESS") {
+                  // Race condition guard: check if player already reconnected during the async DB wait
+                  const currentSocketId = userSocketMap.get(disconnectedUserId);
+                  if (currentSocketId && currentSocketId !== socket.id) {
+                    console.log(`[DISCONNECT] Player ${disconnectedUserId} already reconnected (new socket ${currentSocketId}), skipping grace period`);
+                    return;
                   }
-                });
-              }
 
-              // Update game in database
-              if (disconnectedUserId) {
-                const whiteUser = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
-                const blackUser = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+                  const deadline = Date.now() + 30000;
 
-                let winnerId = null;
-                if (whiteUser?.walletAddress === disconnectedUserId) winnerId = game.blackPlayerId;
-                else if (blackUser?.walletAddress === disconnectedUserId) winnerId = game.whitePlayerId;
+                  console.log(`[DISCONNECT] Starting 30s grace period for ${disconnectedUserId} in game ${activeRoomId}`);
 
-                if (winnerId) {
-                  await prisma.game.update({
-                    where: { id: activeRoomId },
-                    data: { status: "COMPLETED", winnerId }
-                  });
-
-                  // Update ELO ratings
-                  const updatedGame = { ...game, winnerId };
-                  const newRatings = await updateRatings(updatedGame);
-
-                  // Re-emit with ratings
-                  const gameOverPayload = { winner: "opponent", reason: "disconnection", ratings: newRatings };
-                  io.to(activeRoomId).emit("gameOver", gameOverPayload);
-                  const roomSockets2 = io.sockets.adapter.rooms.get(activeRoomId);
-                  if (roomSockets2) {
-                    roomSockets2.forEach(sid => {
-                      if (sid !== socket.id) io.to(sid).emit("gameOver", gameOverPayload);
+                  // Notify opponent
+                  socket.to(activeRoomId).emit("opponentDisconnecting", { deadline });
+                  const roomSockets = io.sockets.adapter.rooms.get(activeRoomId);
+                  if (roomSockets) {
+                    roomSockets.forEach(sid => {
+                      if (sid !== socket.id) io.to(sid).emit("opponentDisconnecting", { deadline });
                     });
                   }
 
-                  console.log(`[SERVER] Game ${activeRoomId} marked as COMPLETED due to disconnect`);
+                  const timer = setTimeout(async () => {
+                    gameDisconnectTimers.delete(disconnectedUserId);
+
+                    // Safety: check if player reconnected before forfeiting
+                    const currentSid = userSocketMap.get(disconnectedUserId);
+                    if (currentSid) {
+                      console.log(`[DISCONNECT] Player ${disconnectedUserId} has reconnected, skipping forfeit`);
+                      return;
+                    }
+
+                    // Re-check game status in case it ended during grace period
+                    const freshGame = await prisma.game.findUnique({ where: { id: activeRoomId } });
+                    if (!freshGame || freshGame.status !== "IN_PROGRESS") return;
+
+                    console.log(`[DISCONNECT] 30s expired for ${disconnectedUserId} — forfeiting game ${activeRoomId}`);
+
+                    const whiteUser = await prisma.user.findUnique({ where: { id: freshGame.whitePlayerId } });
+                    const blackUser = await prisma.user.findUnique({ where: { id: freshGame.blackPlayerId } });
+
+                    let winnerId = null;
+                    let winnerColor = null;
+                    if (whiteUser?.walletAddress === disconnectedUserId) { winnerId = freshGame.blackPlayerId; winnerColor = "black"; }
+                    else if (blackUser?.walletAddress === disconnectedUserId) { winnerId = freshGame.whitePlayerId; winnerColor = "white"; }
+
+                    if (winnerId) {
+                      await prisma.game.update({ where: { id: activeRoomId }, data: { status: "COMPLETED", winnerId } });
+                      const updatedGame = { ...freshGame, winnerId };
+                      const newRatings = await updateRatings(updatedGame);
+
+                      recentlyCompletedGames.add(activeRoomId);
+                      setTimeout(() => recentlyCompletedGames.delete(activeRoomId), 10000);
+
+                      const gameOverPayload = { winner: "opponent", reason: "disconnection", ratings: newRatings };
+                      io.to(activeRoomId).emit("gameOver", gameOverPayload);
+
+                      // Direct emit to opponent for reliability
+                      const opponentWallet = whiteUser?.walletAddress === disconnectedUserId ? blackUser?.walletAddress : whiteUser?.walletAddress;
+                      const opponentSid = opponentWallet ? userSocketMap.get(opponentWallet) : null;
+                      if (opponentSid) io.to(opponentSid).emit("gameOver", gameOverPayload);
+
+                      console.log(`[DISCONNECT] Game ${activeRoomId} forfeited by ${disconnectedUserId}. Winner: ${winnerColor}`);
+                    }
+
+                    cleanupRegularGame(activeRoomId);
+                  }, 30000);
+
+                  gameDisconnectTimers.set(disconnectedUserId, { roomId: activeRoomId, timer, deadline });
                 }
+              } catch (e) {
+                console.error("Error handling disconnect grace period:", e);
               }
-            } else {
-              console.log(`[SERVER] Game ${activeRoomId} is not in progress (status: ${game?.status}), skipping disconnect forfeit`);
-            }
-          } catch (e) {
-            console.error("Error handling disconnect forfeit:", e);
+            })();
           }
-        })();
+        }
 
         activeGames.delete(socket.id);
       }

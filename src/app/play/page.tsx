@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { GameBoard } from "../../components/game/game-board";
 import { GameOptions } from "../../components/game/game-options";
 import { OpponentSearchModal } from "../../components/game/opponent-search-modal";
@@ -14,8 +15,12 @@ import { MatchFoundModal } from "@/components/game/match-found-modal";
 import { toast } from "sonner";
 
 export default function PlayPage() {
+  const router = useRouter();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer } = useGameStore();
+  const setWhiteTime = useGameStore((s) => s.setWhiteTime);
+  const setBlackTime = useGameStore((s) => s.setBlackTime);
+  const setRejoinData = useGameStore((s) => s.setRejoinData);
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
   const [pendingMatch, setPendingMatch] = useState<{ roomId: string, color: "white" | "black", opponent: string, playerRating: number, opponentRating: number } | null>(null);
 
@@ -59,13 +64,29 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
+    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; whiteTime: number; blackTime: number }) => {
+      console.log("GAME REJOINED EVENT:", data);
+      setRoomId(data.roomId);
+      setPlayerColor(data.color as "white" | "black");
+      setOpponent({ address: data.opponentAddress, rating: data.opponentRating });
+      if (address) setPlayer({ address, rating: data.playerRating });
+      setWhiteTime(data.whiteTime);
+      setBlackTime(data.blackTime);
+      setRejoinData(data.fen, data.moves);
+      if (!gameMode) setGameMode("online");
+      setStatus("in-progress");
+      toast.success("Reconnected to your game!");
+      router.push(`/play/game/${data.roomId}`);
+    });
+
     return () => {
       socket.off('matchFound');
       socket.off('challengeReceived');
       socket.off('challengeDeclined');
       socket.off('challengeError');
+      socket.off('gameRejoined');
     };
-  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address]);
+  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, gameMode, setGameMode]);
 
   const handleStartGame = () => {
     if (!isConnected) {
@@ -126,6 +147,7 @@ export default function PlayPage() {
               if (!gameMode) setGameMode("online");
               setStatus("in-progress");
               setPendingMatch(null);
+              router.push(`/play/game/${pendingMatch.roomId}`);
             }}
           />
         )}

@@ -84,6 +84,14 @@ type GameState = {
       | "draw"
       | null,
   ) => void;
+  // Rejoin state (for reconnecting after refresh)
+  rejoinFen: string | null;
+  rejoinMoves: MoveRecord[];
+  setRejoinData: (fen: string, moves: MoveRecord[]) => void;
+  clearRejoinData: () => void;
+  // Opponent disconnect countdown
+  opponentDisconnectDeadline: number | null;
+  setOpponentDisconnectDeadline: (deadline: number | null) => void;
   reset: () => void;
 };
 
@@ -107,6 +115,9 @@ const initialState = {
   whiteTime: DEFAULT_TIME,
   blackTime: DEFAULT_TIME,
   gameOver: null,
+  rejoinFen: null,
+  rejoinMoves: [] as MoveRecord[],
+  opponentDisconnectDeadline: null,
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -141,6 +152,9 @@ export const useGameStore = create<GameState>((set) => ({
       blackTime: state.initialTime,
     })),
   setGameOver: (winner, reason) => set({ gameOver: { winner, reason } }),
+  setRejoinData: (fen, moves) => set({ rejoinFen: fen, rejoinMoves: moves }),
+  clearRejoinData: () => set({ rejoinFen: null, rejoinMoves: [] }),
+  setOpponentDisconnectDeadline: (deadline) => set({ opponentDisconnectDeadline: deadline }),
   reset: () =>
     set({
       ...initialState,
@@ -155,5 +169,8 @@ export const useGameStore = create<GameState>((set) => ({
       gameOver: null,
       onChainGameId: null,
       stakeToken: null,
+      rejoinFen: null,
+      rejoinMoves: [],
+      opponentDisconnectDeadline: null,
     }),
 }));

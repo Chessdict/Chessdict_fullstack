@@ -190,3 +190,54 @@ export async function createGame(
     return { success: false, error: "Failed to create game" };
   }
 }
+
+export async function getGameHistory(walletAddress: string) {
+  if (!walletAddress) return { success: false, error: "Wallet address is required" };
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { walletAddress },
+      select: { id: true },
+    });
+
+    if (!user) return { success: true, games: [] };
+
+    const games = await prisma.game.findMany({
+      where: {
+        status: "COMPLETED",
+        OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 20,
+      include: {
+        whitePlayer: { select: { id: true, walletAddress: true, rating: true } },
+        blackPlayer: { select: { id: true, walletAddress: true, rating: true } },
+        winner: { select: { id: true, walletAddress: true } },
+      },
+    });
+
+    const mapped = games.map((g) => {
+      const isWhite = g.whitePlayerId === user.id;
+      const opponentPlayer = isWhite ? g.blackPlayer : g.whitePlayer;
+      const result = !g.winnerId
+        ? ("draw" as const)
+        : g.winnerId === user.id
+          ? ("win" as const)
+          : ("loss" as const);
+
+      return {
+        id: g.id,
+        result,
+        playedAs: isWhite ? ("white" as const) : ("black" as const),
+        opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
+        opponentRating: opponentPlayer?.rating ?? 1200,
+        date: g.updatedAt.toISOString(),
+      };
+    });
+
+    return { success: true, games: mapped };
+  } catch (error) {
+    console.error("Error fetching game history:", error);
+    return { success: false, error: "Failed to fetch game history" };
+  }
+}

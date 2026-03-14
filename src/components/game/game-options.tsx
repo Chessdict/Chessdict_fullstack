@@ -322,7 +322,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
           <div className="text-base font-medium text-white">Tournament</div>
         ) : gameMode === "online" || gameMode === "friend" ? (
           <div className="flex items-center gap-6">
-            <button
+            {/* <button
               onClick={() => setActiveTab("new-game")}
               className={cn(
                 "text-base font-medium transition-colors hover:text-white",
@@ -330,7 +330,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
               )}
             >
               New game
-            </button>
+            </button> */}
             <button
               onClick={() => setActiveTab("games")}
               className={cn(
@@ -338,9 +338,9 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                 activeTab === "games" ? "text-white pb-4 -mb-4.5 border-b-2 border-white" : "text-white/40"
               )}
             >
-              Games
+              Game History
             </button>
-            <button
+            {/* <button
               onClick={() => setActiveTab("players")}
               className={cn(
                 "text-base font-medium transition-colors hover:text-white",
@@ -348,7 +348,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
               )}
             >
               Players
-            </button>
+            </button> */}
           </div>
         ) : (
           <div className="text-base font-medium text-white">Play vs Computer</div>

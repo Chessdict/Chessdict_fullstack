@@ -6,6 +6,22 @@ import { cn } from "@/lib/utils";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
+import { getGameHistory } from "@/app/actions";
+
+type ChatMessage = {
+  sender: string;
+  text: string;
+  timestamp: number;
+};
+
+type GameHistoryEntry = {
+  id: string;
+  result: "win" | "loss" | "draw";
+  playedAs: "white" | "black";
+  opponentAddress: string;
+  opponentRating: number;
+  date: string;
+};
 
 interface GameInfoPanelProps {
   isSocketConnected: boolean;
@@ -30,6 +46,17 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
   const [showResignModal, setShowResignModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<"play" | "history">("play");
+  const [activeSubTab, setActiveSubTab] = useState<"moves" | "info">("moves");
+
+  // Game History state
+  const [gameHistory, setGameHistory] = useState<GameHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const movesEndRef = useRef<HTMLDivElement>(null);
   const movesContainerRef = useRef<HTMLDivElement>(null);
@@ -54,6 +81,49 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     setShowResignModal(false);
   }, [socket, roomId, address]);
 
+  // Fetch game history when tab is switched
+  useEffect(() => {
+    if (activeTab !== "history" || !address) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    getGameHistory(address).then((res) => {
+      if (cancelled) return;
+      if (res.success && res.games) setGameHistory(res.games);
+      setHistoryLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, address]);
+
+  // Chat socket listener
+  useEffect(() => {
+    if (!socket || !roomId) return;
+    const handleChatMessage = (msg: ChatMessage) => {
+      setChatMessages((prev) => [...prev, msg]);
+    };
+    socket.on("chatMessage", handleChatMessage);
+    return () => { socket.off("chatMessage", handleChatMessage); };
+  }, [socket, roomId]);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  // Send chat message
+  const sendChatMessage = useCallback(() => {
+    if (!socket || !roomId || !chatInput.trim() || !address) return;
+    const text = chatInput.trim();
+    // Optimistic local add so sender sees their message immediately
+    setChatMessages((prev) => [...prev, { sender: address, text, timestamp: Date.now() }]);
+    socket.emit("chatMessage", { roomId, message: text });
+    setChatInput("");
+  }, [socket, roomId, chatInput, address]);
+
+  // Clear chat when game changes
+  useEffect(() => {
+    setChatMessages([]);
+  }, [roomId]);
+
   // Auto-scroll to latest move within the container only
   useEffect(() => {
     const container = movesContainerRef.current;
@@ -63,210 +133,338 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   }, [moves]);
 
   // Group moves into pairs (white, black)
-  const movePairs: { moveNumber: number; white?: string; black?: string }[] = [];
+  const movePairs: { moveNumber: number; white?: (typeof moves)[0]; black?: (typeof moves)[0] }[] = [];
   for (let i = 0; i < moves.length; i += 2) {
     movePairs.push({
       moveNumber: Math.floor(i / 2) + 1,
-      white: moves[i]?.san,
-      black: moves[i + 1]?.san,
+      white: moves[i],
+      black: moves[i + 1],
     });
   }
 
   const isWaitingForOpponent = status === "matched" || (status === "in-progress" && !opponent);
   const isGameActive = status === "in-progress";
 
+  const opponentName = opponent
+    ? (gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`)
+    : "Opponent";
+  const playerName = player ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : "You";
+
+  const pieceIcons: Record<string, string> = {
+    p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+  };
+
   return (
-    <div className="flex flex-col gap-4 rounded-[32px] border border-white/10 bg-[#0A0A0A]/40 p-6 backdrop-blur-xl">
-      {/* Connection Status */}
-      <div className="flex items-center justify-between border-b border-white/10 pb-4">
-        <div className="flex items-center gap-2">
-          <div
+    <div className="flex flex-col rounded-[24px] border border-white/10 bg-[#1A1A1A]/90 backdrop-blur-xl overflow-hidden">
+      {/* Top Tabs */}
+      <div className="flex items-center border-b border-white/10 px-5 pt-3">
+        {([
+          { key: "play", label: "Play" },
+          { key: "history", label: "Game History" },
+        ] as const).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
             className={cn(
-              "h-2 w-2 rounded-full",
-              isSocketConnected ? "bg-green-500 animate-pulse" : "bg-red-500"
+              "px-3 py-2.5 text-sm font-medium transition-colors",
+              activeTab === key
+                ? "text-white border-b-2 border-white"
+                : "text-white/40 hover:text-white/60"
             )}
-          />
-          <span className="text-sm text-white/60">
-            {isSocketConnected ? "Connected" : "Disconnected"}
-          </span>
-        </div>
-        <span className="text-xs text-white/40 uppercase tracking-wider">
-          {gameMode === "computer" ? "vs Computer" : "Online Match"}
-        </span>
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* Waiting State */}
-      {isWaitingForOpponent && (
-        <div className="flex flex-col items-center justify-center py-8 gap-4">
-          <div className="relative">
-            <div className="h-16 w-16 rounded-full border-4 border-white/10 border-t-blue-500 animate-spin" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-8 w-8 rounded-full bg-blue-500/20" />
+      {/* ═══ GAME HISTORY TAB ═══ */}
+      {activeTab === "history" && (
+        <div className="flex flex-col gap-3 px-5 py-4">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Recent Games</h3>
+          {historyLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <div className="h-8 w-8 rounded-full border-2 border-white/10 border-t-blue-500 animate-spin" />
             </div>
-          </div>
-          <div className="text-center">
-            <p className="text-white font-medium">Waiting for opponent...</p>
-            <p className="text-sm text-white/40 mt-1">Game will start when both players are ready</p>
-          </div>
-        </div>
-      )}
-
-      {/* Players Info */}
-      {isGameActive && opponent && (
-        <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Players</h3>
-
-          {/* Opponent */}
-          <div className="flex items-center justify-between rounded-xl bg-white/5 p-3">
-            <div className="flex items-center gap-3">
-              <div className="relative h-10 w-10 rounded-full bg-gradient-to-br from-red-500/20 to-transparent border border-white/10 flex items-center justify-center">
-                <span className="text-xs font-bold text-white/60 uppercase">
-                  {gameMode === "computer" ? "AI" : opponent.address.slice(2, 4)}
-                </span>
+          ) : gameHistory.length === 0 ? (
+            <p className="text-center text-sm text-white/30 py-10">No completed games yet</p>
+          ) : (
+            <div className="flex flex-col gap-2 max-h-[450px] overflow-y-auto elegant-scrollbar">
+              {gameHistory.map((g) => (
                 <div
+                  key={g.id}
                   className={cn(
-                    "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0A0A0A]",
-                    gameMode === "computer" || isOpponentConnected ? "bg-green-500" : "bg-yellow-500"
+                    "flex items-center justify-between rounded-xl p-3 border",
+                    g.result === "win"
+                      ? "bg-green-500/5 border-green-500/15"
+                      : g.result === "loss"
+                        ? "bg-red-500/5 border-red-500/15"
+                        : "bg-yellow-500/5 border-yellow-500/15"
                   )}
-                />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-white">
-                  {gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`}
-                </p>
-                <p className="text-xs text-white/40">
-                  {playerColor === "white" ? "Black" : "White"} pieces
-                </p>
-              </div>
-            </div>
-            <span className="text-xs text-white/30">
-              {gameMode === "computer" || isOpponentConnected ? "Online" : "Connecting..."}
-            </span>
-          </div>
-
-          {/* You */}
-          <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/20 p-3">
-            <div className="flex items-center gap-3">
-              <div className="relative h-10 w-10 rounded-full bg-gradient-to-br from-blue-500/20 to-transparent border border-blue-500/30 flex items-center justify-center">
-                <span className="text-xs font-bold text-blue-400">YOU</span>
-                <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0A0A0A] bg-green-500 animate-pulse" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-white">
-                  {player ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : "You"}
-                </p>
-                <p className="text-xs text-blue-400">
-                  {playerColor === "white" ? "White" : "Black"} pieces
-                </p>
-              </div>
-            </div>
-            <span className="text-xs text-green-400">Online</span>
-          </div>
-        </div>
-      )}
-
-      {/* Move History */}
-      {isGameActive && (
-        <div className="flex flex-col gap-3">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Move History</h3>
-          <div ref={movesContainerRef} className="max-h-[200px] overflow-y-auto rounded-xl bg-white/5 p-3 scrollbar-thin scrollbar-thumb-white/10">
-            {movePairs.length === 0 ? (
-              <p className="text-center text-sm text-white/30 py-4">No moves yet</p>
-            ) : (
-              <div className="space-y-1">
-                {movePairs.map((pair) => (
-                  <div
-                    key={pair.moveNumber}
-                    className="grid grid-cols-[32px_1fr_1fr] gap-2 text-sm"
-                  >
-                    <span className="text-white/30 font-mono">{pair.moveNumber}.</span>
-                    <span className={cn(
-                      "font-medium font-mono px-2 py-0.5 rounded",
-                      pair.white ? "text-white bg-white/5" : ""
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={cn(
+                      "h-9 w-9 shrink-0 rounded-full flex items-center justify-center text-xs font-bold",
+                      g.result === "win" ? "bg-green-500/20 text-green-400" :
+                      g.result === "loss" ? "bg-red-500/20 text-red-400" :
+                      "bg-yellow-500/20 text-yellow-400"
                     )}>
-                      {pair.white || ""}
-                    </span>
-                    <span className={cn(
-                      "font-medium font-mono px-2 py-0.5 rounded",
-                      pair.black ? "text-white bg-white/5" : ""
-                    )}>
-                      {pair.black || ""}
-                    </span>
+                      {g.result === "win" ? "W" : g.result === "loss" ? "L" : "D"}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-white truncate">
+                        vs {g.opponentAddress.slice(0, 6)}...{g.opponentAddress.slice(-4)}
+                      </p>
+                      <p className="text-[11px] text-white/40">
+                        Played as {g.playedAs} &middot; {new Date(g.date).toLocaleDateString()}
+                      </p>
+                    </div>
                   </div>
-                ))}
-                <div ref={movesEndRef} />
-              </div>
-            )}
-          </div>
+                  <div className="text-right shrink-0 ml-2">
+                    <p className="text-xs text-white/50 font-mono">{g.opponentRating}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Game Controls */}
-      {isGameActive && gameMode !== "computer" && (
-        <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
-          <div className="grid grid-cols-2 gap-2">
-            {drawOfferSent ? (
-              <button
-                onClick={() => {
-                  if (!socket || !roomId) return;
-                  socket.emit("cancelDraw", { roomId });
-                  setDrawOfferSent(false);
-                  console.log("[INFO-PANEL] Draw offer cancelled");
-                }}
-                className="flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                Cancel Draw
-              </button>
-            ) : (
-              <button
-                onClick={() => {
-                  if (!socket || !roomId) return;
-                  socket.emit("offerDraw", { roomId });
-                  setDrawOfferSent(true);
-                  console.log("[INFO-PANEL] Draw offer sent");
-                }}
-                className="flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Offer Draw
-              </button>
-            )}
+      {/* ═══ PLAY TAB ═══ */}
+      {activeTab === "play" && (
+        <div className="flex flex-col gap-4 px-5 py-4">
+          {/* Sub-tabs: Game moves | Info */}
+          <div className="flex rounded-full bg-white/5 p-1">
             <button
-              onClick={() => {
-                console.log("[INFO-PANEL] Resign button clicked - opening modal");
-                setShowResignModal(true);
-              }}
-              className="flex items-center justify-center gap-2 rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 transition hover:bg-red-500/20"
+              onClick={() => setActiveSubTab("moves")}
+              className={cn(
+                "flex-1 rounded-full py-3.5 text-sm font-medium transition-colors",
+                activeSubTab === "moves"
+                  ? "bg-white text-black"
+                  : "text-white/80 hover:text-white/100"
+              )}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6h-8.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9" />
-              </svg>
-              Resign
+              Game moves
+            </button>
+            <button
+              onClick={() => setActiveSubTab("info")}
+              className={cn(
+                "flex-1 rounded-full py-3.5 text-sm font-medium transition-colors",
+                activeSubTab === "info"
+                  ? "bg-white text-black"
+                  : "text-white/80 hover:text-white/100"
+              )}
+            >
+              Info
             </button>
           </div>
+
+          {/* Opening Name */}
+          {isGameActive && activeSubTab === "moves" && (
+            <p className="text-xs font-medium text-white">{opponentName}&apos;s Opening</p>
+          )}
+
+          {/* Waiting State */}
+          {activeSubTab === "moves" && isWaitingForOpponent && (
+            <div className="flex flex-col items-center justify-center py-8 gap-4">
+              <div className="relative">
+                <div className="h-16 w-16 rounded-full border-4 border-white/10 border-t-blue-500 animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="h-8 w-8 rounded-full bg-blue-500/20" />
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="text-white font-medium">Waiting for opponent...</p>
+                <p className="text-sm text-white/40 mt-1">Game will start when both players are ready</p>
+              </div>
+            </div>
+          )}
+
+          {/* Players Info */}
+          {activeSubTab === "info" && isGameActive && opponent && (
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Players</h3>
+
+              {/* Opponent */}
+              <div className="flex items-center justify-between rounded-xl bg-white/5 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="relative h-10 w-10 rounded-full bg-gradient-to-br from-red-500/20 to-transparent border border-white/10 flex items-center justify-center">
+                    <span className="text-xs font-bold text-white/60 uppercase">
+                      {gameMode === "computer" ? "AI" : opponent.address.slice(2, 4)}
+                    </span>
+                    <div
+                      className={cn(
+                        "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0A0A0A]",
+                        gameMode === "computer" || isOpponentConnected ? "bg-green-500" : "bg-yellow-500"
+                      )}
+                    />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-white">
+                      {gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`}
+                    </p>
+                    <p className="text-xs text-white/40">
+                      {playerColor === "white" ? "Black" : "White"} pieces
+                    </p>
+                  </div>
+                </div>
+                <span className="text-xs text-white/30">
+                  {gameMode === "computer" || isOpponentConnected ? "Online" : "Connecting..."}
+                </span>
+              </div>
+
+              {/* You */}
+              <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/20 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="relative h-10 w-10 rounded-full bg-gradient-to-br from-blue-500/20 to-transparent border border-blue-500/30 flex items-center justify-center">
+                    <span className="text-xs font-bold text-blue-400">YOU</span>
+                    <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0A0A0A] bg-green-500 animate-pulse" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-white">
+                      {player ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : "You"}
+                    </p>
+                    <p className="text-xs text-blue-400">
+                      {playerColor === "white" ? "White" : "Black"} pieces
+                    </p>
+                  </div>
+                </div>
+                <span className="text-xs text-green-400">Online</span>
+              </div>
+            </div>
+          )}
+
+          {/* Move History */}
+          {activeSubTab === "moves" && isGameActive && (
+            <div className="flex flex-col gap-3">
+              <div ref={movesContainerRef} className="max-h-[260px] overflow-y-auto elegant-scrollbar">
+                {movePairs.length === 0 ? (
+                  <p className="text-center text-sm text-white/30 py-8">No moves yet</p>
+                ) : (
+                  <div className="flex flex-col">
+                    {movePairs.map((pair, idx) => (
+                      <div
+                        key={pair.moveNumber}
+                        className="flex items-center gap-2 py-2 border-b border-white/5 last:border-0"
+                      >
+                        <span className="w-6 text-sm text-white/30 font-mono shrink-0">{pair.moveNumber}.</span>
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          {pair.white && (
+                            <>
+                              <span className="text-white/50 text-lg leading-none">{pieceIcons[pair.white.piece]}</span>
+                              <span className="text-sm font-medium text-white">{pair.white.san}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          {pair.black && (
+                            <>
+                              <span className="text-white/50 text-lg leading-none">{pieceIcons[pair.black.piece]}</span>
+                              <span className="text-sm font-medium text-white">{pair.black.san}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1 items-end shrink-0 w-20">
+                          {pair.white && (
+                            <div className="flex items-center gap-1.5">
+                              <div className="h-1 w-10 rounded-full bg-white/10 overflow-hidden">
+                                <div className="h-full rounded-full bg-white/40" style={{ width: `${Math.max(20, 100 - idx * 10)}%` }} />
+                              </div>
+                              <span className="text-[10px] text-white/40 font-mono tabular-nums">
+                                {pair.black ? `${Math.round((pair.black.timestamp - pair.white.timestamp) / 1000)}s` : "..."}
+                              </span>
+                            </div>
+                          )}
+                          {pair.black && (
+                            <div className="flex items-center gap-1.5">
+                              <div className="h-1 w-10 rounded-full bg-white/10 overflow-hidden">
+                                <div className="h-full rounded-full bg-white/20" style={{ width: `${Math.max(15, 80 - idx * 8)}%` }} />
+                              </div>
+                              <span className="text-[10px] text-white/40 font-mono tabular-nums">
+                                {movePairs[idx + 1]?.white ? `${Math.round((movePairs[idx + 1].white!.timestamp - pair.black.timestamp) / 1000)}s` : "..."}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={movesEndRef} />
+                  </div>
+                )}
+              </div>
+              {/* Move Navigation Controls */}
+              {moves.length > 0 && (
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  {[
+                    { path: "M11 17L6 12L11 7M18 17L13 12L18 7", label: "First" },
+                    { path: "M15 18L9 12L15 6", label: "Prev" },
+                    { path: "M5 3L19 12L5 21Z", label: "Play", fill: true },
+                    { path: "M9 18L15 12L9 6", label: "Next" },
+                    { path: "M13 17L18 12L13 7M6 17L11 12L6 7", label: "Last" },
+                  ].map(({ path, label, fill }) => (
+                    <button
+                      key={label}
+                      className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white"
+                      title={label}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill={fill ? "currentColor" : "none"} stroke={fill ? "none" : "currentColor"} strokeWidth="2.5">
+                        <path d={path} />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Chat Section */}
+          {isGameActive && activeSubTab === "moves" && (
+            <div className="flex flex-col gap-2 border-t border-white/10 pt-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-white/60">New Game</p>
+                <p className="text-[11px] text-white/40 mt-0.5">
+                  {opponentName} VS {playerName} (You)
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 rounded-xl bg-white/5 p-3 max-h-[140px] min-h-[80px] overflow-y-auto elegant-scrollbar">
+                {chatMessages.length === 0 ? (
+                  <p className="text-center text-[11px] text-white/20 py-2">No messages yet</p>
+                ) : (
+                  chatMessages.map((msg, i) => {
+                    const isMe = msg.sender === address;
+                    const senderName = isMe ? playerName : opponentName;
+                    return (
+                      <div key={i} className={cn("flex flex-col gap-0.5", isMe ? "items-end" : "items-start")}>
+                        <span className="text-[10px] text-white/30">{senderName}</span>
+                        <div className={cn(
+                          "rounded-2xl px-3 py-1.5 text-sm max-w-[80%] break-words",
+                          isMe
+                            ? "bg-blue-600/80 text-white rounded-br-md"
+                            : "bg-white/10 text-white/90 rounded-bl-md"
+                        )}>
+                          {msg.text}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              <div className="flex items-center gap-2 rounded-full bg-white/5 border border-white/10 px-4 py-2.5">
+                <input
+                  type="text"
+                  placeholder="Send message..."
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
+                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/20"
+                  disabled={!isGameActive || gameMode === "computer"}
+                />
+
+              </div>
+            </div>
+          )}
         </div>
       )}
-
-      {/* Back to Menu Button */}
-      <button
-        onClick={() => {
-          if (isGameActive) {
-            if (!confirm("Leave current game?")) return;
-          }
-          reset();
-        }}
-        className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-white/60 transition hover:bg-white/10 hover:text-white"
-      >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-        </svg>
-        Back to Menu
-      </button>
 
       {/* Resign Confirmation Modal */}
       <ResignConfirmModal

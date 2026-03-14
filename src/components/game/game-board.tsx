@@ -46,14 +46,24 @@ export function GameBoard() {
     // Timer state
     whiteTime,
     blackTime,
+    setWhiteTime,
+    setBlackTime,
     decrementWhiteTime,
     decrementBlackTime,
     resetTimers,
     gameOver,
     setGameOver,
     drawOfferReceived,
+    drawOfferSent,
     setDrawOfferReceived,
     setDrawOfferSent,
+    // Rejoin state
+    rejoinFen,
+    rejoinMoves,
+    clearRejoinData,
+    // Opponent disconnect
+    opponentDisconnectDeadline,
+    setOpponentDisconnectDeadline,
     reset: resetStore
   } = useGameStore();
 
@@ -62,6 +72,7 @@ export function GameBoard() {
   const [showResignModal, setShowResignModal] = useState(false);
   const [ratingChange, setRatingChange] = useState<number | null>(null);
   const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
+  const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
@@ -157,6 +168,39 @@ export function GameBoard() {
     }
   }, [status, game, syncState, clearMoves, resetTimers]);
 
+  // Load rejoined game state (after browser refresh reconnection)
+  useEffect(() => {
+    if (status === "in-progress" && rejoinFen) {
+      try {
+        game.load(rejoinFen);
+        syncState();
+        clearMoves();
+        rejoinMoves.forEach(m => addMove(m));
+        clearRejoinData();
+        console.log("[CLIENT] Rejoined game state loaded, FEN:", rejoinFen);
+      } catch (e) {
+        console.error("[CLIENT] Failed to load rejoin FEN:", e);
+        clearRejoinData();
+      }
+    }
+  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData]);
+
+  // Opponent disconnect countdown ticker
+  useEffect(() => {
+    if (!opponentDisconnectDeadline) {
+      setDisconnectCountdown(null);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((opponentDisconnectDeadline - Date.now()) / 1000));
+      setDisconnectCountdown(remaining);
+      if (remaining <= 0) setOpponentDisconnectDeadline(null);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [opponentDisconnectDeadline, setOpponentDisconnectDeadline]);
+
   // Timer countdown logic
   useEffect(() => {
     if (status !== "in-progress") return;
@@ -175,10 +219,14 @@ export function GameBoard() {
     return () => clearInterval(interval);
   }, [status, gameOver, game, fen, decrementWhiteTime, decrementBlackTime]);
 
-  // Handle timeout (time runs out)
+  // Handle timeout (time runs out) - only for local/computer games
+  // For multiplayer, the server handles timeouts authoritatively
   useEffect(() => {
     if (status !== "in-progress") return;
     if (gameOver) return;
+
+    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+    if (isMultiplayer) return; // Server handles timeout for multiplayer
 
     const currentTurnForTimer = game.turn();
     const timeoutPlayer = currentTurnForTimer === 'w' ? whiteTime : blackTime;
@@ -186,18 +234,10 @@ export function GameBoard() {
     if (timeoutPlayer <= 0) {
       const winner = currentTurnForTimer === 'w' ? 'black' : 'white';
       console.log(`[CLIENT] Timeout! ${winner} wins`);
-
-      // For multiplayer games, notify the server
-      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-      if (isMultiplayer && socket && roomId) {
-        console.log("[CLIENT] Emitting timeout event:", { roomId, winner });
-        socket.emit("gameTimeout", { roomId, loser: currentTurnForTimer === 'w' ? 'white' : 'black' });
-      }
-
       setGameOver(winner, "timeout");
       setStatus("finished");
     }
-  }, [whiteTime, blackTime, status, gameOver, game, gameMode, socket, roomId, setGameOver, setStatus]);
+  }, [whiteTime, blackTime, status, gameOver, game, gameMode, setGameOver, setStatus]);
 
   // Bot Logic
   useEffect(() => {
@@ -350,6 +390,23 @@ export function GameBoard() {
       setOpponentPing(data.ping);
     };
 
+    const handleTimeSync = (data: { whiteTime: number; blackTime: number }) => {
+      setWhiteTime(data.whiteTime);
+      setBlackTime(data.blackTime);
+    };
+
+    const handleOpponentDisconnecting = (data: { deadline: number }) => {
+      console.log("[CLIENT] Opponent disconnecting, deadline:", data.deadline);
+      setOpponentConnected(false);
+      setOpponentDisconnectDeadline(data.deadline);
+    };
+
+    const handleOpponentReconnected = () => {
+      console.log("[CLIENT] Opponent reconnected");
+      setOpponentConnected(true);
+      setOpponentDisconnectDeadline(null);
+    };
+
     // Ping interval
     const pingInterval = setInterval(() => {
       socket.emit("ping", { timestamp: Date.now() });
@@ -370,6 +427,9 @@ export function GameBoard() {
     socket.on('drawOffered', handleDrawOffered);
     socket.on('drawDeclined', handleDrawDeclined);
     socket.on('drawCancelled', handleDrawCancelled);
+    socket.on('timeSync', handleTimeSync);
+    socket.on('opponentDisconnecting', handleOpponentDisconnecting);
+    socket.on('opponentReconnected', handleOpponentReconnected);
 
     return () => {
       clearInterval(pingInterval);
@@ -382,8 +442,11 @@ export function GameBoard() {
       socket.off('drawOffered', handleDrawOffered);
       socket.off('drawDeclined', handleDrawDeclined);
       socket.off('drawCancelled', handleDrawCancelled);
+      socket.off('timeSync', handleTimeSync);
+      socket.off('opponentDisconnecting', handleOpponentDisconnecting);
+      socket.off('opponentReconnected', handleOpponentReconnected);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline]);
 
   // Flash the king square red when in check and player tries an invalid action
   const flashKingCheck = useCallback(() => {
@@ -499,7 +562,12 @@ export function GameBoard() {
           const result = safeMove(moveData); // Use our wrapper
 
           if (result && (gameMode === 'online' || gameMode === 'friend') && roomId) {
-            socket?.emit("movePiece", { roomId, move: moveData });
+            socket?.emit("movePiece", {
+              roomId,
+              move: moveData,
+              fen: game.fen(),
+              moveRecord: { san: result.san, from: result.from, to: result.to, color: result.color, piece: result.piece, timestamp: Date.now() },
+            });
           }
           return;
         }
@@ -562,7 +630,12 @@ export function GameBoard() {
 
     if (result) {
       if (isMultiplayer && roomId) {
-        socket?.emit("movePiece", { roomId, move: moveData });
+        socket?.emit("movePiece", {
+          roomId,
+          move: moveData,
+          fen: game.fen(),
+          moveRecord: { san: result.san, from: result.from, to: result.to, color: result.color, piece: result.piece, timestamp: Date.now() },
+        });
       }
       return true;
     }
@@ -631,57 +704,53 @@ export function GameBoard() {
   return (
     <div className="flex flex-col gap-2 sm:gap-4 w-full">
       {/* Top Info (Opponent) */}
-      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-2 sm:p-4 backdrop-blur-xl border border-white/5 shadow-2xl">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 overflow-hidden rounded-full bg-linear-to-br from-red-500/20 to-transparent border border-white/10 ring-2 ring-red-500/20">
-            <div className="h-full w-full flex items-center justify-center text-[10px] sm:text-xs font-bold text-white/40 uppercase">
+      <div className="flex items-center justify-between rounded-2xl bg-[#1A1A1A]/80 px-4 py-3 border border-white/5">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-amber-700/50 to-amber-900/30 border border-white/10 flex items-center justify-center">
+            <span className="text-xs font-bold text-white/70 uppercase">
               {gameMode === 'computer' ? 'AI' : opponent?.address.slice(2, 4) || '??'}
-            </div>
+            </span>
           </div>
           <div className="min-w-0">
-            <div className="text-xs sm:text-sm font-bold text-white tracking-tight flex items-center gap-1 sm:gap-2">
-              <span className="truncate">{gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}</span>
-              {opponent && <span className="text-[8px] sm:text-[10px] font-mono text-white/40 bg-white/5 px-1 sm:px-1.5 py-0.5 rounded shrink-0">{opponent.rating}</span>}
-            </div>
-            <div className="text-[8px] sm:text-[10px] uppercase font-bold tracking-widest text-white/30">
-              {status === 'in-progress' && !isMyTurn ? 'Thinking...' :
-                lastMove && lastMove.color !== playerTurnCode
-                  ? <span className="normal-case tracking-normal text-white/50">
-                    played <span className="text-sm sm:text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
-                  </span>
-                  : 'Waiting'}
-            </div>
+            <p className="text-sm font-semibold text-white truncate">
+              {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
+            </p>
+            <p className="text-xs text-white/30 truncate">
+              {opponent ? opponent.address.slice(0, 4) + '...' + opponent.address.slice(-4) : ''}
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-          {['online', 'friend'].includes(gameMode || '') && (
-            <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Opponent Latency: ${opponentPing}ms`}>
-              <div className="flex items-end gap-0.5 h-3.5">
-                {[1, 2, 3, 4].map((bar) => {
-                  const strength = opponentPing < 80 ? 4 : opponentPing < 150 ? 3 : opponentPing < 300 ? 2 : 1;
-                  const color = strength >= 3 ? 'bg-green-500' : strength === 2 ? 'bg-yellow-500' : 'bg-red-500';
-                  const isActive = bar <= strength;
-                  return (
-                    <div
-                      key={bar}
-                      className={`w-0.75 rounded-sm ${isActive ? color : 'bg-white/15'}`}
-                      style={{ height: `${bar * 25}%` }}
-                    />
-                  );
-                })}
-              </div>
-              <span className="text-[10px] font-mono text-white/60">{opponentPing}ms</span>
-            </div>
-          )}
-          {/* Opponent's timer */}
-          <div className={`text-base sm:text-xl font-mono tabular-nums px-2 sm:px-3 py-1 rounded-lg border ${!isMyTurn && status === 'in-progress'
-            ? 'bg-red-500/20 border-red-500/30 text-red-400'
-            : 'bg-black/40 border-white/10 text-white/90'
-            } ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
-            {formatTime(playerColor === 'white' ? blackTime : whiteTime)}
+        <div className="flex items-center gap-3 shrink-0">
+          <button className="text-white/30 hover:text-white/50 transition-colors p-1" type="button">
+            <svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor">
+              <circle cx="2" cy="2" r="1.5" />
+              <circle cx="2" cy="8" r="1.5" />
+              <circle cx="2" cy="14" r="1.5" />
+            </svg>
+          </button>
+          <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 bg-white ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-black/60">
+              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span className="text-sm font-mono tabular-nums font-semibold text-black">
+              {formatTime(playerColor === 'white' ? blackTime : whiteTime)}
+            </span>
           </div>
         </div>
       </div>
+
+      {/* Opponent Disconnect Countdown Banner */}
+      {disconnectCountdown !== null && disconnectCountdown > 0 && (
+        <div className="flex items-center gap-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20 px-4 py-2.5 animate-pulse">
+          <div className="h-8 w-8 shrink-0 rounded-full bg-yellow-500/20 flex items-center justify-center">
+            <span className="text-xs font-bold text-yellow-400">{disconnectCountdown}</span>
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-yellow-300">Opponent disconnected</p>
+            <p className="text-xs text-yellow-400/60">They have {disconnectCountdown}s to reconnect or they forfeit</p>
+          </div>
+        </div>
+      )}
 
       {/* Main Board Container */}
       <div className="relative group mx-auto w-full max-w-[min(720px,calc(100vw-24px))] sm:max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
@@ -766,42 +835,67 @@ export function GameBoard() {
       </div>
 
       {/* Bottom Info (Player) */}
-      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-2 sm:p-4 backdrop-blur-xl border border-white/5 shadow-2xl transition-all">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <div className="relative h-8 w-8 sm:h-10 sm:w-10 shrink-0 overflow-hidden rounded-full bg-linear-to-br from-blue-500/20 to-transparent border border-white/10 ring-2 ring-blue-500/20">
-            <div className="h-full w-full flex items-center justify-center text-[10px] sm:text-xs font-bold text-white/40">YOU</div>
-            <div className="absolute bottom-0.5 right-0.5 sm:bottom-1 sm:right-1 h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-green-500 animate-pulse" />
+      <div className="flex items-center justify-between rounded-2xl bg-[#1A1A1A]/80 px-4 py-3 border border-white/5">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="h-10 w-10 shrink-0 rounded-full bg-white/10 border border-white/10 flex items-center justify-center">
+            <span className="text-xs font-bold text-white/50">YOU</span>
           </div>
           <div className="min-w-0">
-            <div className="text-xs sm:text-sm font-bold text-white flex items-center gap-1 sm:gap-2">
-              <span className="truncate">You ({playerColor || 'White'})</span>
-              {player && <span className="text-[8px] sm:text-[10px] font-mono text-white/40 bg-white/5 px-1 sm:px-1.5 py-0.5 rounded shrink-0">{player.rating}</span>}
-              {isMyTurn && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,1)] shrink-0" />}
-            </div>
-            <div className="text-[8px] sm:text-[10px] uppercase font-bold tracking-widest text-blue-400">
-              {status === 'in-progress' ? (isMyTurn ? 'Your Turn' :
-                lastMove && lastMove.color === playerTurnCode
-                  ? <span className="normal-case tracking-normal text-white/50">
-                    played <span className="text-sm sm:text-base leading-none align-middle">{pieceSymbols[lastMove.piece]?.[lastMove.color] || ''}</span> {lastMove.san}
-                  </span>
-                  : 'Waiting for opponent') : 'Online'}
-            </div>
+            <p className="text-sm font-semibold text-white">You(Player)</p>
+            <p className="text-xs text-white/30">
+              {status === 'in-progress' && isMyTurn ? 'Your move' : status === 'in-progress' ? 'Waiting for opponent' : 'Online'}
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-          {status === 'in-progress' && ['online', 'friend'].includes(gameMode || '') && (
+        <div className="flex items-center gap-3 shrink-0">
+          <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 bg-white ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-black/60">
+              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span className="text-sm font-mono tabular-nums font-semibold text-black">
+              {formatTime(playerColor === 'white' ? whiteTime : blackTime)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Draw / End Game Controls */}
+      {status === 'in-progress' && (
+        <div className="flex items-center gap-6 px-1 pt-1">
+          {['online', 'friend'].includes(gameMode || '') && (
             <button
               onClick={() => {
-                console.log("[CLIENT] Resign button clicked - opening modal");
-                setShowResignModal(true);
+                if (!socket || !roomId) return;
+                if (drawOfferSent) {
+                  socket.emit("cancelDraw", { roomId });
+                  setDrawOfferSent(false);
+                } else {
+                  socket.emit("offerDraw", { roomId });
+                  setDrawOfferSent(true);
+                }
               }}
-              className="flex items-center gap-1 text-[8px] sm:text-[10px] font-bold text-red-500/80 hover:text-red-400 uppercase tracking-widest px-1.5 sm:px-2 py-1 hover:bg-red-500/10 rounded transition-all"
+              className="flex items-center gap-1.5 text-sm font-medium text-green-400 hover:text-cyan-300 transition-colors"
+              type="button"
             >
-              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>
-              <span className="hidden sm:inline">Resign</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 12h8" /><circle cx="12" cy="12" r="10" />
+              </svg>
+              {drawOfferSent ? "Cancel Draw" : "Draw"}
             </button>
           )}
-          {status === 'in-progress' && gameMode === 'computer' && (
+          {['online', 'friend'].includes(gameMode || '') && (
+            <button
+              onClick={() => setShowResignModal(true)}
+              className="flex items-center gap-1.5 text-sm font-medium text-red-400 hover:text-red-300 transition-colors"
+              type="button"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" />
+              </svg>
+              End game
+            </button>
+          )}
+          {gameMode === 'computer' && (
             <button
               onClick={() => {
                 if (confirm("Reset current board? (Local only)")) {
@@ -809,39 +903,18 @@ export function GameBoard() {
                   syncState();
                 }
               }}
-              className="text-[8px] sm:text-[10px] uppercase font-black text-white/20 hover:text-white/60 transition-colors"
+              className="flex items-center gap-1.5 text-sm font-medium text-white/40 hover:text-white/60 transition-colors"
+              type="button"
             >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
               Reset
             </button>
           )}
-          {['online', 'friend'].includes(gameMode || '') && (
-            <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-black/40 rounded-lg border border-white/10" title={`Network Latency: ${ping}ms`}>
-              <div className="flex items-end gap-0.5 h-3.5">
-                {[1, 2, 3, 4].map((bar) => {
-                  const strength = ping < 80 ? 4 : ping < 150 ? 3 : ping < 300 ? 2 : 1;
-                  const color = strength >= 3 ? 'bg-green-500' : strength === 2 ? 'bg-yellow-500' : 'bg-red-500';
-                  const isActive = bar <= strength;
-                  return (
-                    <div
-                      key={bar}
-                      className={`w-0.75 rounded-sm ${isActive ? color : 'bg-white/15'}`}
-                      style={{ height: `${bar * 25}%` }}
-                    />
-                  );
-                })}
-              </div>
-              <span className="text-[10px] font-mono text-white/60">{ping}ms</span>
-            </div>
-          )}
-          {/* Player's timer */}
-          <div className={`text-base sm:text-xl font-mono tabular-nums px-2 sm:px-3 py-1 rounded-lg border ${isMyTurn && status === 'in-progress'
-            ? 'bg-blue-500/20 border-blue-500/30 text-blue-400'
-            : 'bg-black/40 border-white/10 text-white/90'
-            } ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
-            {formatTime(playerColor === 'white' ? whiteTime : blackTime)}
-          </div>
         </div>
-      </div>
+      )}
+
 
       {/* Resign Confirmation Modal */}
       <ResignConfirmModal
