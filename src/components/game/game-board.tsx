@@ -11,6 +11,7 @@ import { ResignConfirmModal } from "./resign-confirm-modal";
 import { DrawOfferModal } from "./draw-offer-modal";
 import { GlassBg } from "../glass-bg";
 import { useChessSounds } from "@/hooks/useChessSounds";
+import { SignalStrength } from "./signal-strength";
 
 
 // Helper to format time as MM:SS
@@ -721,13 +722,9 @@ export function GameBoard() {
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <button className="text-white/30 hover:text-white/50 transition-colors p-1" type="button">
-            <svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor">
-              <circle cx="2" cy="2" r="1.5" />
-              <circle cx="2" cy="8" r="1.5" />
-              <circle cx="2" cy="14" r="1.5" />
-            </svg>
-          </button>
+          {gameMode !== 'computer' && (
+            <SignalStrength ping={opponentPing} isConnected={!!socket?.connected} variant="opponent" />
+          )}
           <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 bg-white ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-black/60">
               <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
@@ -848,6 +845,9 @@ export function GameBoard() {
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          {gameMode !== 'computer' && (
+            <SignalStrength ping={ping} isConnected={!!socket?.connected} />
+          )}
           <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 bg-white ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-black/60">
               <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />

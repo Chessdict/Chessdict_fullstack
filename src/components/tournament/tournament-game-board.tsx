@@ -5,6 +5,7 @@ import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useTournamentStore } from "@/stores/tournament-store";
 import { type Socket } from "socket.io-client";
+import { SignalStrength } from "@/components/game/signal-strength";
 
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -430,6 +431,8 @@ export function TournamentGameBoard({
             </div>
           </div>
         </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <SignalStrength socket={socket} isConnected={!!socket?.connected} />
         <div
           className={`text-xl font-mono tabular-nums px-3 py-1 rounded-lg border ${
             isMyTurn && !gameResult
@@ -438,6 +441,7 @@ export function TournamentGameBoard({
           } ${(playerColor === "white" ? whiteTime : blackTime) <= 30 ? "animate-pulse" : ""}`}
         >
           {formatTime(playerColor === "white" ? whiteTime : blackTime)}
+        </div>
         </div>
       </div>
 
