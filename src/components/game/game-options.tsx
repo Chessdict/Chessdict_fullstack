@@ -22,8 +22,15 @@ import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
 
 type Tab = "new-game" | "games" | "players";
 
+export interface StakeInfo {
+  staked: true;
+  onChainGameId: string;
+  token: string;
+  stakeAmount: string;
+}
+
 interface GameOptionsProps {
-  onStartGame: () => void;
+  onStartGame: (stakeInfo?: StakeInfo) => void;
   socket: any;
   userId?: string;
   isSocketConnected?: boolean;
@@ -396,7 +403,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             </div>
 
             <button
-              onClick={onStartGame}
+              onClick={() => onStartGame()}
               className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95"
             >
               <div className="absolute inset-0 border border-white/20 rounded-full" />
@@ -425,9 +432,16 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
               onClick={async () => {
                 if (stakeEnabled && selectedToken && stakeAmount) {
                   const decimals = (tokenDecimalsData as number) ?? 18;
-                  const ok = await createGameSingle(selectedToken, stakeAmount, decimals);
-                  if (!ok) return; // tx rejected or failed — don't start matchmaking
+                  const result = await createGameSingle(selectedToken, stakeAmount, decimals);
+                  if (!result.success || !result.onChainGameId) return;
                   setStakeToken(selectedToken);
+                  onStartGame({
+                    staked: true,
+                    onChainGameId: result.onChainGameId,
+                    token: selectedToken,
+                    stakeAmount,
+                  });
+                  return;
                 }
                 onStartGame();
               }}

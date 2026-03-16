@@ -14,7 +14,7 @@ import {
   CHESSDICT_CHAIN_ID,
 } from "@/lib/contract";
 import { erc20Abi } from "@/lib/erc20-abi";
-import { parseUnits } from "viem";
+import { parseUnits, decodeEventLog } from "viem";
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
 
@@ -203,23 +203,56 @@ export function useChessdict() {
       tokenAddress: `0x${string}`,
       stakeAmount: string,
       decimals = 18,
-    ): Promise<boolean> => {
-      const stakeWei = parseUnits(stakeAmount, decimals);
-      return executeStakedWrite(
-        tokenAddress,
-        stakeWei,
-        () =>
-          writeContractAsync({
-            address: CHESSDICT_ADDRESS,
-            abi: chessdictAbi,
-            functionName: "createGameSingle",
-            args: [tokenAddress, stakeWei],
-            chainId: CHESSDICT_CHAIN_ID,
-          }),
-        "Step 2/2: Creating game on-chain…",
-      );
+    ): Promise<{ success: boolean; onChainGameId?: string }> => {
+      if (!address) {
+        toast.error("Please connect your wallet first");
+        return { success: false };
+      }
+      try {
+        setIsLoading(true);
+        await ensureNetwork();
+        const stakeWei = parseUnits(stakeAmount, decimals);
+        await approveToken(tokenAddress, stakeWei);
+        toast.info("Step 2/2: Creating game on-chain…");
+        const hash = await writeContractAsync({
+          address: CHESSDICT_ADDRESS,
+          abi: chessdictAbi,
+          functionName: "createGameSingle",
+          args: [tokenAddress, stakeWei],
+          chainId: CHESSDICT_CHAIN_ID,
+        });
+        const receipt = await publicClient?.waitForTransactionReceipt({ hash });
+        toast.success("Transaction confirmed!");
+
+        // Parse GameSingleCreated event from receipt to get onChainGameId
+        let onChainGameId: string | undefined;
+        if (receipt?.logs) {
+          for (const log of receipt.logs) {
+            try {
+              const decoded = decodeEventLog({
+                abi: chessdictAbi,
+                data: log.data,
+                topics: log.topics,
+              });
+              if (decoded.eventName === "GameSingleCreated") {
+                onChainGameId = String((decoded.args as any).gameId);
+                break;
+              }
+            } catch {
+              // not our event, skip
+            }
+          }
+        }
+
+        return { success: true, onChainGameId };
+      } catch (err: any) {
+        toast.error(err?.shortMessage ?? err?.message ?? "Transaction failed");
+        return { success: false };
+      } finally {
+        setIsLoading(false);
+      }
     },
-    [executeStakedWrite, writeContractAsync],
+    [address, ensureNetwork, approveToken, publicClient, writeContractAsync],
   );
 
   const joinGameSingle = useCallback(
@@ -228,9 +261,9 @@ export function useChessdict() {
       tokenAddress: `0x${string}`,
       stakeAmount: string,
       decimals = 18,
-    ) => {
+    ): Promise<boolean> => {
       const stakeWei = parseUnits(stakeAmount, decimals);
-      await executeStakedWrite(
+      return executeStakedWrite(
         tokenAddress,
         stakeWei,
         () =>

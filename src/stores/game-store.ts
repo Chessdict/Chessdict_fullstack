@@ -24,6 +24,7 @@ type GameState = {
   // On-chain state
   onChainGameId: bigint | null;
   stakeToken: string | null;
+  stakeAmountRaw: string | null;
   player?: Player;
   opponent?: Player;
   setGameMode: (
@@ -34,6 +35,7 @@ type GameState = {
   setStakeAmount: (amount: number) => void;
   setOnChainGameId: (id: bigint | null) => void;
   setStakeToken: (token: string | null) => void;
+  setStakeAmountRaw: (amount: string | null) => void;
   setPlayer: (player: Player) => void;
   setOpponent: (opponent: Player) => void;
   roomId?: string;
@@ -104,6 +106,7 @@ const initialState = {
   stakeAmount: 0,
   onChainGameId: null as bigint | null,
   stakeToken: null as string | null,
+  stakeAmountRaw: null as string | null,
   player: undefined,
   opponent: undefined,
   moves: [] as MoveRecord[],
@@ -128,6 +131,7 @@ export const useGameStore = create<GameState>((set) => ({
   setStakeAmount: (amount) => set({ stakeAmount: amount }),
   setOnChainGameId: (id) => set({ onChainGameId: id }),
   setStakeToken: (token) => set({ stakeToken: token }),
+  setStakeAmountRaw: (amount) => set({ stakeAmountRaw: amount }),
   setPlayer: (player) => set({ player }),
   setOpponent: (opponent) => set({ opponent }),
   setRoomId: (roomId) => set({ roomId }),
@@ -169,6 +173,7 @@ export const useGameStore = create<GameState>((set) => ({
       gameOver: null,
       onChainGameId: null,
       stakeToken: null,
+      stakeAmountRaw: null,
       rejoinFen: null,
       rejoinMoves: [],
       opponentDisconnectDeadline: null,

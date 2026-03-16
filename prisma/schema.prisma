@@ -81,7 +81,9 @@ model Game {
   pgn           String?
   
   wagerAmount   Float?
-  
+  onChainGameId String?   // contract gameId (string for bigint compat)
+  stakeToken    String?   // ERC20 token address
+
   tournamentMatch TournamentMatch?
 
   createdAt     DateTime   @default(now())

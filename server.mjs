@@ -76,7 +76,9 @@ app.prepare().then(() => {
 
   const userSocketMap = new Map(); // userId -> socketId
   const activeGames = new Map(); // socketId -> roomId
-  const matchmakingQueue = [];
+  const freeQueue = []; // non-staked players: { socketId, userId }
+  const stakedQueue = new Map(); // "token:amount" -> [{ socketId, userId, onChainGameId, token, stakeAmount }]
+  const stakeTimeouts = new Map(); // roomId -> timeout handle (120s auto-abort for staked WAITING games)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
 
   // ─── Server-Authoritative Game Timers ───
@@ -1040,67 +1042,141 @@ app.prepare().then(() => {
     activeTournaments.delete(tournamentId);
   }
 
-  const checkForMatch = async () => {
-    if (matchmakingQueue.length >= 2) {
-      const p1 = matchmakingQueue.shift();
-      const p2 = matchmakingQueue.shift();
+  // ─── Helpers: is player already in any queue? ───
+  function isInAnyQueue(socketId) {
+    if (freeQueue.some(p => p.socketId === socketId)) return true;
+    for (const [, arr] of stakedQueue) {
+      if (arr.some(p => p.socketId === socketId)) return true;
+    }
+    return false;
+  }
 
-      try {
-        const whiteUser = await prisma.user.findUnique({ where: { walletAddress: p1.userId } });
-        const blackUser = await prisma.user.findUnique({ where: { walletAddress: p2.userId } });
-
-        if (whiteUser && blackUser) {
-          const game = await prisma.game.create({
-            data: {
-              whitePlayerId: whiteUser.id,
-              blackPlayerId: blackUser.id,
-              fen: "start",
-              status: "IN_PROGRESS",
-            },
-          });
-
-          const roomId = game.id;
-
-          // Emit match found to both players (include ratings)
-          io.to(p1.socketId).emit("matchFound", {
-            roomId,
-            color: "white",
-            opponent: p2.userId,
-            playerRating: whiteUser.rating,
-            opponentRating: blackUser.rating,
-          });
-          io.to(p2.socketId).emit("matchFound", {
-            roomId,
-            color: "black",
-            opponent: p1.userId,
-            playerRating: blackUser.rating,
-            opponentRating: whiteUser.rating,
-          });
-
-          // Join rooms
-          const s1 = io.sockets.sockets.get(p1.socketId);
-          const s2 = io.sockets.sockets.get(p2.socketId);
-          if (s1) {
-            s1.join(roomId);
-            activeGames.set(s1.id, roomId);
-          }
-          if (s2) {
-            s2.join(roomId);
-            activeGames.set(s2.id, roomId);
-          }
-
-          initGameTimer(roomId, DEFAULT_GAME_TIME);
-
-          // Track active game for reconnection
-          userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
-          userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-          gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [] });
-
-          console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId}`);
-        }
-      } catch (error) {
-        console.error("Error creating match in DB:", error);
+  function removeFromAllQueues(socketId) {
+    // Remove from free queue
+    const freeIdx = freeQueue.findIndex(p => p.socketId === socketId);
+    if (freeIdx !== -1) freeQueue.splice(freeIdx, 1);
+    // Remove from staked queues
+    for (const [key, arr] of stakedQueue) {
+      const idx = arr.findIndex(p => p.socketId === socketId);
+      if (idx !== -1) {
+        arr.splice(idx, 1);
+        if (arr.length === 0) stakedQueue.delete(key);
       }
+    }
+  }
+
+  // ─── Create matched game (shared by free + staked paths) ───
+  async function createMatchedGame(p1, p2, stakeInfo) {
+    const whiteUser = await prisma.user.findUnique({ where: { walletAddress: p1.userId } });
+    const blackUser = await prisma.user.findUnique({ where: { walletAddress: p2.userId } });
+    if (!whiteUser || !blackUser) return;
+
+    const isStaked = !!stakeInfo;
+    const gameData = {
+      whitePlayerId: whiteUser.id,
+      blackPlayerId: blackUser.id,
+      fen: "start",
+      status: isStaked ? "WAITING" : "IN_PROGRESS",
+    };
+    if (isStaked) {
+      gameData.onChainGameId = stakeInfo.onChainGameId;
+      gameData.stakeToken = stakeInfo.token;
+      gameData.wagerAmount = parseFloat(stakeInfo.stakeAmount) || 0;
+    }
+
+    const game = await prisma.game.create({ data: gameData });
+    const roomId = game.id;
+
+    const matchPayload = {
+      roomId,
+      staked: isStaked,
+      onChainGameId: stakeInfo?.onChainGameId ?? null,
+      stakeToken: stakeInfo?.token ?? null,
+      stakeAmount: stakeInfo?.stakeAmount ?? null,
+    };
+
+    // Emit match found to both players (include ratings + staking info)
+    io.to(p1.socketId).emit("matchFound", {
+      ...matchPayload,
+      color: "white",
+      opponent: p2.userId,
+      playerRating: whiteUser.rating,
+      opponentRating: blackUser.rating,
+    });
+    io.to(p2.socketId).emit("matchFound", {
+      ...matchPayload,
+      color: "black",
+      opponent: p1.userId,
+      playerRating: blackUser.rating,
+      opponentRating: whiteUser.rating,
+    });
+
+    // Join rooms
+    const s1 = io.sockets.sockets.get(p1.socketId);
+    const s2 = io.sockets.sockets.get(p2.socketId);
+    if (s1) { s1.join(roomId); activeGames.set(s1.id, roomId); }
+    if (s2) { s2.join(roomId); activeGames.set(s2.id, roomId); }
+
+    // Track active game for reconnection
+    userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
+    userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
+    gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [] });
+
+    if (!isStaked) {
+      // Non-staked: start timer immediately
+      initGameTimer(roomId, DEFAULT_GAME_TIME);
+    } else {
+      // Staked: wait up to 120s for Player2 to confirm stake on-chain
+      const timeout = setTimeout(async () => {
+        stakeTimeouts.delete(roomId);
+        try {
+          const g = await prisma.game.findUnique({ where: { id: roomId } });
+          if (g && g.status === "WAITING") {
+            await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+            io.to(roomId).emit("stakeTimeout", { roomId });
+            console.log(`[STAKE] 120s timeout — game ${roomId} aborted`);
+            cleanupRegularGame(roomId);
+          }
+        } catch (e) {
+          console.error("[STAKE] Timeout cleanup error:", e);
+        }
+      }, 120000);
+      stakeTimeouts.set(roomId, timeout);
+    }
+
+    console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId} (staked=${isStaked})`);
+  }
+
+  const checkForMatch = async () => {
+    // 1. Free queue (FIFO)
+    if (freeQueue.length >= 2) {
+      const p1 = freeQueue.shift();
+      const p2 = freeQueue.shift();
+      try {
+        await createMatchedGame(p1, p2, null);
+      } catch (error) {
+        console.error("Error creating free match in DB:", error);
+      }
+    }
+
+    // 2. Staked queues — match players with same token+amount
+    for (const [key, arr] of stakedQueue) {
+      while (arr.length >= 2) {
+        const p1 = arr.shift();
+        const p2 = arr.shift();
+        try {
+          // p1 is the creator (has onChainGameId), p2 is the joiner
+          const stakeInfo = {
+            onChainGameId: p1.onChainGameId,
+            token: p1.token,
+            stakeAmount: p1.stakeAmount,
+          };
+          await createMatchedGame(p1, p2, stakeInfo);
+        } catch (error) {
+          console.error(`Error creating staked match (${key}) in DB:`, error);
+        }
+      }
+      if (arr.length === 0) stakedQueue.delete(key);
     }
   };
 
@@ -1155,11 +1231,71 @@ app.prepare().then(() => {
       const uid = data?.userId || userId;
       if (!uid) return;
 
-      const isAlreadyInQueue = matchmakingQueue.some(p => p.socketId === socket.id);
-      if (!isAlreadyInQueue) {
-        matchmakingQueue.push({ socketId: socket.id, userId: uid });
-        console.log(`Player ${uid} joined queue`);
-        checkForMatch();
+      // Prevent duplicate entries across both queues
+      if (isInAnyQueue(socket.id)) return;
+
+      const isStaked = !!data?.staked;
+      if (isStaked) {
+        const { onChainGameId, token, stakeAmount } = data;
+        const key = `${(token || '').toLowerCase()}:${stakeAmount}`;
+        if (!stakedQueue.has(key)) stakedQueue.set(key, []);
+        stakedQueue.get(key).push({ socketId: socket.id, userId: uid, onChainGameId, token, stakeAmount });
+        console.log(`Player ${uid} joined staked queue (${key})`);
+      } else {
+        freeQueue.push({ socketId: socket.id, userId: uid });
+        console.log(`Player ${uid} joined free queue`);
+      }
+      checkForMatch();
+    });
+
+    // ─── Staked game: Player2 confirmed stake on-chain ───
+    socket.on("stakeConfirmed", async ({ roomId }) => {
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game || game.status !== "WAITING") return;
+
+        // Clear the 120s timeout
+        const timeout = stakeTimeouts.get(roomId);
+        if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(roomId); }
+
+        // Transition WAITING → IN_PROGRESS
+        await prisma.game.update({ where: { id: roomId }, data: { status: "IN_PROGRESS" } });
+        initGameTimer(roomId, DEFAULT_GAME_TIME);
+
+        // Notify both players the game is ready
+        io.to(roomId).emit("gameReady", { roomId });
+        console.log(`[STAKE] Player2 confirmed stake — game ${roomId} is now IN_PROGRESS`);
+      } catch (e) {
+        console.error("[STAKE] stakeConfirmed error:", e);
+      }
+    });
+
+    // ─── Staked game: Player2 declined stake ───
+    socket.on("stakeDeclined", async ({ roomId }) => {
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game || game.status !== "WAITING") return;
+
+        // Clear the 120s timeout
+        const timeout = stakeTimeouts.get(roomId);
+        if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(roomId); }
+
+        // Abort the game
+        await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+
+        // Notify Player1 (white) so they can re-queue
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        if (whitePlayer) {
+          const whiteSid = userSocketMap.get(whitePlayer.walletAddress);
+          if (whiteSid) {
+            io.to(whiteSid).emit("opponentDeclinedStake", { roomId });
+          }
+        }
+
+        console.log(`[STAKE] Player2 declined stake — game ${roomId} aborted`);
+        cleanupRegularGame(roomId);
+      } catch (e) {
+        console.error("[STAKE] stakeDeclined error:", e);
       }
     });
 
@@ -1824,11 +1960,8 @@ app.prepare().then(() => {
 
       // (Moved userSocketMap cleanup to end to allow forfeit processing)
 
-      // Remove from queue if present
-      const index = matchmakingQueue.findIndex(p => p.socketId === socket.id);
-      if (index !== -1) {
-        matchmakingQueue.splice(index, 1);
-      }
+      // Remove from all matchmaking queues
+      removeFromAllQueues(socket.id);
 
       // ─── Regular game disconnect: 30s grace period ───
       const activeRoomId = activeGames.get(socket.id);

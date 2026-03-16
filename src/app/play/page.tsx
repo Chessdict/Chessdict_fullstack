@@ -13,6 +13,7 @@ import { searchUsers } from "@/app/actions";
 import { ChallengeModal } from "@/components/game/challenge-modal";
 import { MatchFoundModal } from "@/components/game/match-found-modal";
 import { toast } from "sonner";
+import type { StakeInfo } from "@/components/game/game-options";
 
 export default function PlayPage() {
   const router = useRouter();
@@ -22,7 +23,19 @@ export default function PlayPage() {
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
-  const [pendingMatch, setPendingMatch] = useState<{ roomId: string, color: "white" | "black", opponent: string, playerRating: number, opponentRating: number } | null>(null);
+  const [pendingMatch, setPendingMatch] = useState<{
+    roomId: string;
+    color: "white" | "black";
+    opponent: string;
+    playerRating: number;
+    opponentRating: number;
+    staked?: boolean;
+    onChainGameId?: string | null;
+    stakeToken?: string | null;
+    stakeAmount?: string | null;
+  } | null>(null);
+  // Track stake info for the current search (used for cancellation)
+  const [currentStakeInfo, setCurrentStakeInfo] = useState<StakeInfo | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
@@ -45,11 +58,47 @@ export default function PlayPage() {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('matchFound', (data: { roomId: string, color: "white" | "black", opponent: string, playerRating: number, opponentRating: number }) => {
+    socket.on('matchFound', (data: {
+      roomId: string; color: "white" | "black"; opponent: string;
+      playerRating: number; opponentRating: number;
+      staked?: boolean; onChainGameId?: string | null;
+      stakeToken?: string | null; stakeAmount?: string | null;
+    }) => {
       console.log("MATCH FOUND EVENT:", data);
       setPendingMatch(data);
       setIsSearchOpen(false);
       toast.success(`Match found! You are ${data.color}`);
+    });
+
+    // Staked game: both players confirmed — game is ready
+    socket.on('gameReady', (data: { roomId: string }) => {
+      console.log("GAME READY EVENT:", data);
+      setPendingMatch(prev => {
+        if (!prev || prev.roomId !== data.roomId) return prev;
+        // Auto-enter match for the creator (white) who was waiting
+        setRoomId(prev.roomId);
+        setPlayerColor(prev.color);
+        setOpponent({ address: prev.opponent, rating: prev.opponentRating });
+        setPlayer({ address: address!, rating: prev.playerRating });
+        if (!gameMode) setGameMode("online");
+        setStatus("in-progress");
+        router.push(`/play/game/${prev.roomId}`);
+        return null;
+      });
+    });
+
+    // Staked game: Player2 declined — Player1 gets notified
+    socket.on('opponentDeclinedStake', (data: { roomId: string }) => {
+      console.log("OPPONENT DECLINED STAKE:", data);
+      setPendingMatch(null);
+      toast.error("Opponent declined the stake. You can search again.");
+    });
+
+    // Staked game: 120s timeout
+    socket.on('stakeTimeout', (data: { roomId: string }) => {
+      console.log("STAKE TIMEOUT:", data);
+      setPendingMatch(null);
+      toast.error("Stake confirmation timed out. Game cancelled.");
     });
 
     socket.on('challengeReceived', (data: { from: string }) => {
@@ -81,6 +130,9 @@ export default function PlayPage() {
 
     return () => {
       socket.off('matchFound');
+      socket.off('gameReady');
+      socket.off('opponentDeclinedStake');
+      socket.off('stakeTimeout');
       socket.off('challengeReceived');
       socket.off('challengeDeclined');
       socket.off('challengeError');
@@ -88,7 +140,7 @@ export default function PlayPage() {
     };
   }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, gameMode, setGameMode]);
 
-  const handleStartGame = () => {
+  const handleStartGame = (stakeInfo?: StakeInfo) => {
     if (!isConnected) {
       toast.error("Please connect your wallet to play!");
       return;
@@ -100,7 +152,19 @@ export default function PlayPage() {
         return;
       }
       setIsSearchOpen(true);
-      socket?.emit("joinQueue", { userId: address });
+      if (stakeInfo) {
+        setCurrentStakeInfo(stakeInfo);
+        socket?.emit("joinQueue", {
+          userId: address,
+          staked: true,
+          onChainGameId: stakeInfo.onChainGameId,
+          token: stakeInfo.token,
+          stakeAmount: stakeInfo.stakeAmount,
+        });
+      } else {
+        setCurrentStakeInfo(null);
+        socket?.emit("joinQueue", { userId: address });
+      }
     } else if (gameMode === 'computer') {
       setPlayerColor("white");
       setOpponent({ address: 'stockfish', rating: 1500 });
@@ -133,6 +197,12 @@ export default function PlayPage() {
           <MatchFoundModal
             opponent={pendingMatch.opponent}
             color={pendingMatch.color}
+            staked={pendingMatch.staked}
+            onChainGameId={pendingMatch.onChainGameId}
+            stakeToken={pendingMatch.stakeToken}
+            stakeAmount={pendingMatch.stakeAmount}
+            roomId={pendingMatch.roomId}
+            socket={socket}
             onAccept={() => {
               console.log("ACCEPTING MATCH:", {
                 roomId: pendingMatch.roomId,
@@ -143,11 +213,13 @@ export default function PlayPage() {
               setPlayerColor(pendingMatch.color);
               setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating });
               setPlayer({ address: address!, rating: pendingMatch.playerRating });
-              // Ensure gameMode is set to online if it was null (e.g. from a challenge)
               if (!gameMode) setGameMode("online");
               setStatus("in-progress");
               setPendingMatch(null);
               router.push(`/play/game/${pendingMatch.roomId}`);
+            }}
+            onDecline={() => {
+              setPendingMatch(null);
             }}
           />
         )}
@@ -164,7 +236,12 @@ export default function PlayPage() {
 
       <OpponentSearchModal
         isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
+        onClose={() => {
+          setIsSearchOpen(false);
+          setCurrentStakeInfo(null);
+        }}
+        staked={!!currentStakeInfo}
+        onChainGameId={currentStakeInfo?.onChainGameId}
       />
     </main>
   );
