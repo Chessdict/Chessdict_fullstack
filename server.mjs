@@ -3,6 +3,7 @@ import { parse } from "url";
 import next from "next";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
+import { createMatchmaking } from "./lib/matchmaking.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -76,8 +77,6 @@ app.prepare().then(() => {
 
   const userSocketMap = new Map(); // userId -> socketId
   const activeGames = new Map(); // socketId -> roomId
-  const freeQueue = []; // non-staked players: { socketId, userId }
-  const stakedQueue = new Map(); // "token:amount" -> [{ socketId, userId, onChainGameId, token, stakeAmount }]
   const stakeTimeouts = new Map(); // roomId -> timeout handle (120s auto-abort for staked WAITING games)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
 
@@ -1042,30 +1041,7 @@ app.prepare().then(() => {
     activeTournaments.delete(tournamentId);
   }
 
-  // ─── Helpers: is player already in any queue? ───
-  function isInAnyQueue(socketId) {
-    if (freeQueue.some(p => p.socketId === socketId)) return true;
-    for (const [, arr] of stakedQueue) {
-      if (arr.some(p => p.socketId === socketId)) return true;
-    }
-    return false;
-  }
-
-  function removeFromAllQueues(socketId) {
-    // Remove from free queue
-    const freeIdx = freeQueue.findIndex(p => p.socketId === socketId);
-    if (freeIdx !== -1) freeQueue.splice(freeIdx, 1);
-    // Remove from staked queues
-    for (const [key, arr] of stakedQueue) {
-      const idx = arr.findIndex(p => p.socketId === socketId);
-      if (idx !== -1) {
-        arr.splice(idx, 1);
-        if (arr.length === 0) stakedQueue.delete(key);
-      }
-    }
-  }
-
-  // ─── Create matched game (shared by free + staked paths) ───
+  // ─── Matchmaking (extracted module) ───
   async function createMatchedGame(p1, p2, stakeInfo) {
     const whiteUser = await prisma.user.findUnique({ where: { walletAddress: p1.userId } });
     const blackUser = await prisma.user.findUnique({ where: { walletAddress: p2.userId } });
@@ -1081,7 +1057,7 @@ app.prepare().then(() => {
     if (isStaked) {
       gameData.onChainGameId = stakeInfo.onChainGameId;
       gameData.stakeToken = stakeInfo.token;
-      gameData.wagerAmount = parseFloat(stakeInfo.stakeAmount) || 0;
+      gameData.wagerAmount = stakeInfo.effectiveAmount ?? (parseFloat(stakeInfo.stakeAmount) || 0);
     }
 
     const game = await prisma.game.create({ data: gameData });
@@ -1093,6 +1069,7 @@ app.prepare().then(() => {
       onChainGameId: stakeInfo?.onChainGameId ?? null,
       stakeToken: stakeInfo?.token ?? null,
       stakeAmount: stakeInfo?.stakeAmount ?? null,
+      effectiveAmount: stakeInfo?.effectiveAmount ?? null,
     };
 
     // Emit match found to both players (include ratings + staking info)
@@ -1147,38 +1124,8 @@ app.prepare().then(() => {
     console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId} (staked=${isStaked})`);
   }
 
-  const checkForMatch = async () => {
-    // 1. Free queue (FIFO)
-    if (freeQueue.length >= 2) {
-      const p1 = freeQueue.shift();
-      const p2 = freeQueue.shift();
-      try {
-        await createMatchedGame(p1, p2, null);
-      } catch (error) {
-        console.error("Error creating free match in DB:", error);
-      }
-    }
-
-    // 2. Staked queues — match players with same token+amount
-    for (const [key, arr] of stakedQueue) {
-      while (arr.length >= 2) {
-        const p1 = arr.shift();
-        const p2 = arr.shift();
-        try {
-          // p1 is the creator (has onChainGameId), p2 is the joiner
-          const stakeInfo = {
-            onChainGameId: p1.onChainGameId,
-            token: p1.token,
-            stakeAmount: p1.stakeAmount,
-          };
-          await createMatchedGame(p1, p2, stakeInfo);
-        } catch (error) {
-          console.error(`Error creating staked match (${key}) in DB:`, error);
-        }
-      }
-      if (arr.length === 0) stakedQueue.delete(key);
-    }
-  };
+  const matchmaking = createMatchmaking({ onMatch: createMatchedGame });
+  const { isInAnyQueue, removeFromAllQueues } = matchmaking;
 
   io.on("connection", (socket) => {
     const userId = socket.handshake.query?.userId;
@@ -1231,21 +1178,10 @@ app.prepare().then(() => {
       const uid = data?.userId || userId;
       if (!uid) return;
 
-      // Prevent duplicate entries across both queues
-      if (isInAnyQueue(socket.id)) return;
-
-      const isStaked = !!data?.staked;
-      if (isStaked) {
-        const { onChainGameId, token, stakeAmount } = data;
-        const key = `${(token || '').toLowerCase()}:${stakeAmount}`;
-        if (!stakedQueue.has(key)) stakedQueue.set(key, []);
-        stakedQueue.get(key).push({ socketId: socket.id, userId: uid, onChainGameId, token, stakeAmount });
-        console.log(`Player ${uid} joined staked queue (${key})`);
-      } else {
-        freeQueue.push({ socketId: socket.id, userId: uid });
-        console.log(`Player ${uid} joined free queue`);
+      const joined = matchmaking.joinQueue(socket.id, { ...data, userId: uid });
+      if (joined) {
+        console.log(`Player ${uid} joined ${data?.staked ? 'staked' : 'free'} queue`);
       }
-      checkForMatch();
     });
 
     // ─── Staked game: Player2 confirmed stake on-chain ───
