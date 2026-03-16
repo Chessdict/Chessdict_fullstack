@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { GlassBg } from "../glass-bg";
 import { formatName } from "@/lib/utils";
-import { useChessdict, useTokenSymbol } from "@/hooks/useChessdict";
+import { useChessdict, useTokenSymbol, useTokenDecimals } from "@/hooks/useChessdict";
 
 interface MatchFoundModalProps {
     opponent: string;
@@ -12,14 +12,14 @@ interface MatchFoundModalProps {
     onDecline?: () => void;
     // Staking info
     staked?: boolean;
-    onChainGameId?: string | null;
     stakeToken?: string | null;
     stakeAmount?: string | null;
     roomId?: string;
     socket?: any;
 }
 
-type JoinState = "idle" | "joining" | "confirmed" | "failed";
+type CreatorState = "creating" | "waiting" | "failed";
+type JoinerState = "waiting-for-creator" | "idle" | "joining" | "confirmed" | "failed";
 
 export function MatchFoundModal({
     opponent,
@@ -27,24 +27,95 @@ export function MatchFoundModal({
     onAccept,
     onDecline,
     staked,
-    onChainGameId,
     stakeToken,
     stakeAmount,
     roomId,
     socket,
 }: MatchFoundModalProps) {
-    const [joinState, setJoinState] = useState<JoinState>("idle");
-    const { joinGameSingle, isLoading } = useChessdict();
+    const [creatorState, setCreatorState] = useState<CreatorState>("creating");
+    const [joinerState, setJoinerState] = useState<JoinerState>("waiting-for-creator");
+    const [onChainGameId, setOnChainGameId] = useState<string | null>(null);
+    const hasStartedCreation = useRef(false);
+
+    const { createGameSingle, joinGameSingle, isLoading } = useChessdict();
     const { data: tokenSymbol } = useTokenSymbol(
+        stakeToken ? (stakeToken as `0x${string}`) : null
+    );
+    const { data: tokenDecimalsData } = useTokenDecimals(
         stakeToken ? (stakeToken as `0x${string}`) : null
     );
 
     const isCreator = staked && color === "white";
     const isJoiner = staked && color === "black";
 
+    // ─── Player 1 (white/creator): auto-create on-chain game on mount ───
+    useEffect(() => {
+        if (!isCreator || !stakeToken || !stakeAmount || !roomId || hasStartedCreation.current) return;
+        hasStartedCreation.current = true;
+
+        const decimals = (tokenDecimalsData as number) ?? 18;
+
+        (async () => {
+            try {
+                const result = await createGameSingle(
+                    stakeToken as `0x${string}`,
+                    stakeAmount,
+                    decimals,
+                );
+                if (result.success && result.onChainGameId) {
+                    setOnChainGameId(result.onChainGameId);
+                    socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
+                    setCreatorState("waiting");
+                } else {
+                    setCreatorState("failed");
+                }
+            } catch {
+                setCreatorState("failed");
+            }
+        })();
+    }, [isCreator, stakeToken, stakeAmount, roomId, tokenDecimalsData, createGameSingle, socket]);
+
+    // ─── Player 2 (black/joiner): listen for stakeReady from server ───
+    useEffect(() => {
+        if (!isJoiner || !socket) return;
+
+        const handleStakeReady = (data: { roomId: string; onChainGameId: string; stakeToken: string; stakeAmount: string }) => {
+            if (data.roomId === roomId) {
+                setOnChainGameId(data.onChainGameId);
+                setJoinerState("idle");
+            }
+        };
+
+        socket.on("stakeReady", handleStakeReady);
+        return () => { socket.off("stakeReady", handleStakeReady); };
+    }, [isJoiner, socket, roomId]);
+
+    const handleRetryCreate = async () => {
+        if (!stakeToken || !stakeAmount || !roomId) return;
+        setCreatorState("creating");
+        const decimals = (tokenDecimalsData as number) ?? 18;
+
+        try {
+            const result = await createGameSingle(
+                stakeToken as `0x${string}`,
+                stakeAmount,
+                decimals,
+            );
+            if (result.success && result.onChainGameId) {
+                setOnChainGameId(result.onChainGameId);
+                socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
+                setCreatorState("waiting");
+            } else {
+                setCreatorState("failed");
+            }
+        } catch {
+            setCreatorState("failed");
+        }
+    };
+
     const handleJoinStake = async () => {
         if (!onChainGameId || !stakeToken || !stakeAmount || !roomId) return;
-        setJoinState("joining");
+        setJoinerState("joining");
         try {
             const ok = await joinGameSingle(
                 BigInt(onChainGameId),
@@ -52,13 +123,13 @@ export function MatchFoundModal({
                 stakeAmount,
             );
             if (ok) {
-                setJoinState("confirmed");
+                setJoinerState("confirmed");
                 socket?.emit("stakeConfirmed", { roomId });
             } else {
-                setJoinState("failed");
+                setJoinerState("failed");
             }
         } catch {
-            setJoinState("failed");
+            setJoinerState("failed");
         }
     };
 
@@ -69,7 +140,7 @@ export function MatchFoundModal({
         onDecline?.();
     };
 
-    // ─── Staked + Creator (white): waiting for opponent ───
+    // ─── Staked + Creator (white): create on-chain then wait ───
     if (isCreator) {
         return (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
@@ -95,14 +166,45 @@ export function MatchFoundModal({
                                         Stake: {stakeAmount} {(tokenSymbol as string) ?? "tokens"}
                                     </p>
                                 )}
-                                <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest mt-2">
-                                    Waiting for opponent to confirm stake...
-                                </p>
                             </div>
 
-                            <div className="w-full flex items-center justify-center py-3">
-                                <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-yellow-400 animate-spin" />
-                            </div>
+                            {creatorState === "creating" && (
+                                <div className="w-full flex flex-col items-center gap-2 py-3">
+                                    <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-yellow-400 animate-spin" />
+                                    <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest">
+                                        Creating game on-chain...
+                                    </p>
+                                </div>
+                            )}
+
+                            {creatorState === "waiting" && (
+                                <div className="w-full flex flex-col items-center gap-2 py-3">
+                                    <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-yellow-400 animate-spin" />
+                                    <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest">
+                                        Waiting for opponent to confirm stake...
+                                    </p>
+                                </div>
+                            )}
+
+                            {creatorState === "failed" && (
+                                <div className="w-full flex flex-col gap-2">
+                                    <p className="text-xs text-red-400">On-chain game creation failed</p>
+                                    <button
+                                        onClick={handleRetryCreate}
+                                        disabled={isLoading}
+                                        className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95 disabled:opacity-50"
+                                    >
+                                        <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                        <span className="relative text-sm font-bold text-white">Retry</span>
+                                    </button>
+                                    <button
+                                        onClick={handleDeclineStake}
+                                        className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </GlassBg>
                 </div>
@@ -110,7 +212,7 @@ export function MatchFoundModal({
         );
     }
 
-    // ─── Staked + Joiner (black): confirm stake ───
+    // ─── Staked + Joiner (black): wait for creator, then confirm stake ───
     if (isJoiner) {
         return (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
@@ -142,7 +244,16 @@ export function MatchFoundModal({
                                 )}
                             </div>
 
-                            {joinState === "idle" && (
+                            {joinerState === "waiting-for-creator" && (
+                                <div className="w-full flex flex-col items-center gap-2 py-3">
+                                    <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-blue-400 animate-spin" />
+                                    <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest">
+                                        Waiting for opponent to create game...
+                                    </p>
+                                </div>
+                            )}
+
+                            {joinerState === "idle" && (
                                 <div className="w-full flex flex-col gap-2">
                                     <button
                                         onClick={handleJoinStake}
@@ -163,14 +274,14 @@ export function MatchFoundModal({
                                 </div>
                             )}
 
-                            {joinState === "joining" && (
+                            {joinerState === "joining" && (
                                 <div className="w-full flex flex-col items-center gap-2 py-2">
                                     <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-green-400 animate-spin" />
                                     <p className="text-xs text-white/60">Confirming stake on-chain...</p>
                                 </div>
                             )}
 
-                            {joinState === "confirmed" && (
+                            {joinerState === "confirmed" && (
                                 <button
                                     onClick={onAccept}
                                     className="w-full relative group overflow-hidden rounded-full py-3 sm:py-4 transition-transform active:scale-95 mt-1 sm:mt-2"
@@ -180,11 +291,11 @@ export function MatchFoundModal({
                                 </button>
                             )}
 
-                            {joinState === "failed" && (
+                            {joinerState === "failed" && (
                                 <div className="w-full flex flex-col gap-2">
                                     <p className="text-xs text-red-400">Stake transaction failed</p>
                                     <button
-                                        onClick={() => setJoinState("idle")}
+                                        onClick={() => setJoinerState("idle")}
                                         className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95"
                                     >
                                         <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />

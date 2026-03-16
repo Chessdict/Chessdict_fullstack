@@ -24,7 +24,6 @@ type Tab = "new-game" | "games" | "players";
 
 export interface StakeInfo {
   staked: true;
-  onChainGameId: string;
   token: string;
   stakeAmount: string;
 }
@@ -209,7 +208,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   const [selectedToken, setSelectedToken] = useState<`0x${string}` | null>(DEFAULT_STAKE_TOKEN);
   const [stakeAmount, setStakeAmount] = useState("");
 
-  const { createGameSingle, isLoading: isStaking } = useChessdict();
+  const { createGameSingle, isLoading: isStaking } = useChessdict(); // used by friend challenge
   const { data: tokenDecimalsData } = useTokenDecimals(selectedToken);
 
   useEffect(() => {
@@ -428,16 +427,12 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             />
 
             <button
-              disabled={isStaking || (stakeEnabled && (!selectedToken || !stakeAmount))}
-              onClick={async () => {
+              disabled={stakeEnabled && (!selectedToken || !stakeAmount)}
+              onClick={() => {
                 if (stakeEnabled && selectedToken && stakeAmount) {
-                  const decimals = (tokenDecimalsData as number) ?? 18;
-                  const result = await createGameSingle(selectedToken, stakeAmount, decimals);
-                  if (!result.success || !result.onChainGameId) return;
                   setStakeToken(selectedToken);
                   onStartGame({
                     staked: true,
-                    onChainGameId: result.onChainGameId,
                     token: selectedToken,
                     stakeAmount,
                   });
@@ -449,9 +444,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             >
               <div className="absolute inset-0 border border-white/20 rounded-full" />
               <div className="absolute inset-px rounded-full bg-linear-to-b from-white/10 to-transparent" />
-              <span className="relative font-medium text-white">
-                {isStaking ? "Staking…" : "Start game"}
-              </span>
+              <span className="relative font-medium text-white">Start game</span>
               <div className="absolute bottom-0 h-px w-1/2 bg-white/50 blur-[2px]" />
             </button>
           </div>

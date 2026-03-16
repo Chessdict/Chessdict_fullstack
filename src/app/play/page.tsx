@@ -18,7 +18,7 @@ import type { StakeInfo } from "@/components/game/game-options";
 export default function PlayPage() {
   const router = useRouter();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer } = useGameStore();
+  const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer, setOnChainGameId } = useGameStore();
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
@@ -30,12 +30,9 @@ export default function PlayPage() {
     playerRating: number;
     opponentRating: number;
     staked?: boolean;
-    onChainGameId?: string | null;
     stakeToken?: string | null;
     stakeAmount?: string | null;
   } | null>(null);
-  // Track stake info for the current search (used for cancellation)
-  const [currentStakeInfo, setCurrentStakeInfo] = useState<StakeInfo | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
@@ -61,7 +58,7 @@ export default function PlayPage() {
     socket.on('matchFound', (data: {
       roomId: string; color: "white" | "black"; opponent: string;
       playerRating: number; opponentRating: number;
-      staked?: boolean; onChainGameId?: string | null;
+      staked?: boolean;
       stakeToken?: string | null; stakeAmount?: string | null;
     }) => {
       console.log("MATCH FOUND EVENT:", data);
@@ -71,10 +68,14 @@ export default function PlayPage() {
     });
 
     // Staked game: both players confirmed — game is ready
-    socket.on('gameReady', (data: { roomId: string }) => {
+    socket.on('gameReady', (data: { roomId: string; onChainGameId?: string | null }) => {
       console.log("GAME READY EVENT:", data);
       setPendingMatch(prev => {
         if (!prev || prev.roomId !== data.roomId) return prev;
+        // Store on-chain game ID for prize claiming
+        if (data.onChainGameId) {
+          setOnChainGameId(BigInt(data.onChainGameId));
+        }
         // Auto-enter match for the creator (white) who was waiting
         setRoomId(prev.roomId);
         setPlayerColor(prev.color);
@@ -138,7 +139,7 @@ export default function PlayPage() {
       socket.off('challengeError');
       socket.off('gameRejoined');
     };
-  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, gameMode, setGameMode]);
+  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, gameMode, setGameMode, setOnChainGameId]);
 
   const handleStartGame = (stakeInfo?: StakeInfo) => {
     if (!isConnected) {
@@ -153,16 +154,13 @@ export default function PlayPage() {
       }
       setIsSearchOpen(true);
       if (stakeInfo) {
-        setCurrentStakeInfo(stakeInfo);
         socket?.emit("joinQueue", {
           userId: address,
           staked: true,
-          onChainGameId: stakeInfo.onChainGameId,
           token: stakeInfo.token,
           stakeAmount: stakeInfo.stakeAmount,
         });
       } else {
-        setCurrentStakeInfo(null);
         socket?.emit("joinQueue", { userId: address });
       }
     } else if (gameMode === 'computer') {
@@ -198,7 +196,6 @@ export default function PlayPage() {
             opponent={pendingMatch.opponent}
             color={pendingMatch.color}
             staked={pendingMatch.staked}
-            onChainGameId={pendingMatch.onChainGameId}
             stakeToken={pendingMatch.stakeToken}
             stakeAmount={pendingMatch.stakeAmount}
             roomId={pendingMatch.roomId}
@@ -237,11 +234,9 @@ export default function PlayPage() {
       <OpponentSearchModal
         isOpen={isSearchOpen}
         onClose={() => {
+          socket?.emit("leaveQueue");
           setIsSearchOpen(false);
-          setCurrentStakeInfo(null);
         }}
-        staked={!!currentStakeInfo}
-        onChainGameId={currentStakeInfo?.onChainGameId}
       />
     </main>
   );

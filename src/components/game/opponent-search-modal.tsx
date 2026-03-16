@@ -1,21 +1,15 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { GlassBg } from "../glass-bg";
-import { useChessdict } from "@/hooks/useChessdict";
 
 interface OpponentSearchModalProps {
     isOpen: boolean;
     onClose: () => void;
-    staked?: boolean;
-    onChainGameId?: string;
 }
 
-export function OpponentSearchModal({ isOpen, onClose, staked, onChainGameId }: OpponentSearchModalProps) {
-    const [isCancelling, setIsCancelling] = useState(false);
-    const { cancelGameSingle } = useChessdict();
-
+export function OpponentSearchModal({ isOpen, onClose }: OpponentSearchModalProps) {
     // Prevent scrolling when modal is open
     useEffect(() => {
         if (isOpen) {
@@ -28,20 +22,6 @@ export function OpponentSearchModal({ isOpen, onClose, staked, onChainGameId }: 
         };
     }, [isOpen]);
 
-    const handleCancel = async () => {
-        if (staked && onChainGameId) {
-            setIsCancelling(true);
-            try {
-                await cancelGameSingle(BigInt(onChainGameId));
-            } catch {
-                // Even if cancel fails on-chain, close the search modal
-            } finally {
-                setIsCancelling(false);
-            }
-        }
-        onClose();
-    };
-
     return (
         <AnimatePresence>
             {isOpen && (
@@ -51,7 +31,7 @@ export function OpponentSearchModal({ isOpen, onClose, staked, onChainGameId }: 
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        onClick={handleCancel}
+                        onClick={onClose}
                         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
                     />
 
@@ -66,9 +46,8 @@ export function OpponentSearchModal({ isOpen, onClose, staked, onChainGameId }: 
                             <div className="flex flex-col items-center gap-4 sm:gap-6">
                                 {/* Close button */}
                                 <button
-                                    onClick={handleCancel}
-                                    disabled={isCancelling}
-                                    className="absolute right-6 top-6 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white transition-colors z-20 disabled:opacity-50"
+                                    onClick={onClose}
+                                    className="absolute right-6 top-6 rounded-full p-1 text-white/40 hover:bg-white/10 hover:text-white transition-colors z-20"
                                 >
                                     <svg
                                         xmlns="http://www.w3.org/2000/svg"
@@ -96,9 +75,7 @@ export function OpponentSearchModal({ isOpen, onClose, staked, onChainGameId }: 
                                 <div className="space-y-1 sm:space-y-2">
                                     <h2 className="text-lg sm:text-xl font-bold text-white">Searching for Opponent</h2>
                                     <p className="text-xs sm:text-sm text-white/60">
-                                        {staked
-                                            ? "Matching you with a player with the same stake..."
-                                            : "Matching you with an opponent..."}
+                                        Matching you with an opponent...
                                     </p>
                                     <p className="text-[10px] sm:text-xs text-white/30 mt-1">
                                         This usually takes a few seconds
@@ -106,11 +83,10 @@ export function OpponentSearchModal({ isOpen, onClose, staked, onChainGameId }: 
                                 </div>
 
                                 <button
-                                    onClick={handleCancel}
-                                    disabled={isCancelling}
-                                    className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10 mt-4 disabled:opacity-50"
+                                    onClick={onClose}
+                                    className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10 mt-4"
                                 >
-                                    {isCancelling ? "Cancelling & refunding..." : "Cancel"}
+                                    Cancel
                                 </button>
                             </div>
                         </GlassBg>

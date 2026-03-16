@@ -7,6 +7,7 @@ import { useGameStore } from "@/stores/game-store";
 import { getBestMove } from "@/lib/chess-ai";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
+import { useChessdict } from "@/hooks/useChessdict";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { DrawOfferModal } from "./draw-offer-modal";
 import { GlassBg } from "../glass-bg";
@@ -65,6 +66,8 @@ export function GameBoard() {
     // Opponent disconnect
     opponentDisconnectDeadline,
     setOpponentDisconnectDeadline,
+    // On-chain state
+    onChainGameId,
     reset: resetStore
   } = useGameStore();
 
@@ -74,10 +77,12 @@ export function GameBoard() {
   const [ratingChange, setRatingChange] = useState<number | null>(null);
   const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
+  const [prizeClaimed, setPrizeClaimed] = useState(false);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
   const { playMoveSound, playGameOver } = useChessSounds();
+  const { claimPrizeSingle, isLoading: isClaimLoading } = useChessdict();
 
 
   // Initialize the chess instance once and keep it stable.
@@ -814,6 +819,27 @@ export function GameBoard() {
                       <div className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-bold border ${ratingChange > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : ratingChange < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}`}>
                         Rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
                       </div>
+                    )}
+
+                    {/* Claim Prize button for staked games */}
+                    {onChainGameId !== null && (gameOver.winner === playerColor || gameOver.winner === 'opponent' || gameOver.winner === 'draw') && (
+                      <button
+                        onClick={async () => {
+                          if (prizeClaimed || isClaimLoading) return;
+                          await claimPrizeSingle(BigInt(onChainGameId.toString()));
+                          setPrizeClaimed(true);
+                        }}
+                        disabled={prizeClaimed || isClaimLoading}
+                        className={`w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 ${prizeClaimed ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      >
+                        <div className={`absolute inset-0 ${prizeClaimed ? 'bg-gray-600' : 'bg-linear-to-r from-amber-500 to-yellow-500 opacity-90 group-hover:opacity-100'} transition-opacity`} />
+                        <span className="relative text-sm font-bold text-white flex items-center justify-center gap-2">
+                          {isClaimLoading && (
+                            <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          )}
+                          {prizeClaimed ? 'Prize Claimed' : isClaimLoading ? 'Claiming...' : 'Claim Prize'}
+                        </span>
+                      </button>
                     )}
 
                     <button

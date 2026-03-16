@@ -4,6 +4,8 @@ import next from "next";
 import { Server } from "socket.io";
 import { PrismaClient } from "@prisma/client";
 import { createMatchmaking } from "./lib/matchmaking.mjs";
+import { ethers } from "ethers";
+import { setWinnerSingleAbi } from "./lib/chessdict-abi-server.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -13,6 +15,49 @@ const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
 const prisma = new PrismaClient();
+
+// ─── On-chain settlement (staked games) ───
+const CHESSDICT_ADDRESS = "0xaBb21D8466df3753764CA84d51db0ed65e155Da9";
+const REDEEMER_PRIVATE_KEY = process.env.REDEEMER_PRIVATE_KEY;
+const RPC_URL = process.env.RPC_URL || "https://sepolia.base.org";
+
+let chessdictContract = null;
+if (REDEEMER_PRIVATE_KEY) {
+  try {
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    const redeemerWallet = new ethers.Wallet(REDEEMER_PRIVATE_KEY, provider);
+    chessdictContract = new ethers.Contract(CHESSDICT_ADDRESS, setWinnerSingleAbi, redeemerWallet);
+    console.log(`[SETTLE] Redeemer wallet initialized: ${redeemerWallet.address}`);
+  } catch (e) {
+    console.error("[SETTLE] Failed to initialize redeemer wallet:", e.message);
+  }
+} else {
+  console.warn("[SETTLE] REDEEMER_PRIVATE_KEY not set — staked game settlement disabled");
+}
+
+/**
+ * Fire-and-forget: calls setWinnerSingle on the Chessdict contract.
+ * @param {string|number} onChainGameId - The on-chain game ID
+ * @param {string} winnerAddress - Winner's wallet address (ignored for draws)
+ * @param {boolean} isDraw - Whether the game ended in a draw
+ */
+async function settleStakedGame(onChainGameId, winnerAddress, isDraw) {
+  if (!chessdictContract) {
+    console.warn("[SETTLE] No contract instance — skipping settlement");
+    return;
+  }
+  try {
+    const gameIdBn = BigInt(onChainGameId);
+    // For draws, the winner address doesn't matter on-chain but we still need a valid address
+    const winner = isDraw ? ethers.ZeroAddress : winnerAddress;
+    console.log(`[SETTLE] Calling setWinnerSingle(${gameIdBn}, ${winner}, ${isDraw})`);
+    const tx = await chessdictContract.setWinnerSingle(gameIdBn, winner, isDraw);
+    const receipt = await tx.wait();
+    console.log(`[SETTLE] setWinnerSingle confirmed in tx ${receipt.hash}`);
+  } catch (e) {
+    console.error(`[SETTLE] setWinnerSingle failed for game ${onChainGameId}:`, e.message);
+  }
+}
 
 // ELO rating calculation
 const K_FACTOR = 32; // Standard K-factor for chess ratings
@@ -164,6 +209,12 @@ app.prepare().then(() => {
         if (bSid) io.to(bSid).emit('gameOver', payload);
 
         console.log(`[TIMER] gameOver emitted for timeout in room ${roomId}`);
+
+        // Settle staked game on-chain (fire-and-forget)
+        if (game.onChainGameId) {
+          const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
+          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => {});
+        }
       } catch (error) {
         console.error('[TIMER] Error processing server timeout:', error);
       } finally {
@@ -1055,7 +1106,6 @@ app.prepare().then(() => {
       status: isStaked ? "WAITING" : "IN_PROGRESS",
     };
     if (isStaked) {
-      gameData.onChainGameId = stakeInfo.onChainGameId;
       gameData.stakeToken = stakeInfo.token;
       gameData.wagerAmount = stakeInfo.effectiveAmount ?? (parseFloat(stakeInfo.stakeAmount) || 0);
     }
@@ -1066,7 +1116,6 @@ app.prepare().then(() => {
     const matchPayload = {
       roomId,
       staked: isStaked,
-      onChainGameId: stakeInfo?.onChainGameId ?? null,
       stakeToken: stakeInfo?.token ?? null,
       stakeAmount: stakeInfo?.stakeAmount ?? null,
       effectiveAmount: stakeInfo?.effectiveAmount ?? null,
@@ -1102,24 +1151,8 @@ app.prepare().then(() => {
     if (!isStaked) {
       // Non-staked: start timer immediately
       initGameTimer(roomId, DEFAULT_GAME_TIME);
-    } else {
-      // Staked: wait up to 120s for Player2 to confirm stake on-chain
-      const timeout = setTimeout(async () => {
-        stakeTimeouts.delete(roomId);
-        try {
-          const g = await prisma.game.findUnique({ where: { id: roomId } });
-          if (g && g.status === "WAITING") {
-            await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
-            io.to(roomId).emit("stakeTimeout", { roomId });
-            console.log(`[STAKE] 120s timeout — game ${roomId} aborted`);
-            cleanupRegularGame(roomId);
-          }
-        } catch (e) {
-          console.error("[STAKE] Timeout cleanup error:", e);
-        }
-      }, 120000);
-      stakeTimeouts.set(roomId, timeout);
     }
+    // Staked: no timeout yet — 120s countdown starts when Player 1 emits stakeCreated
 
     console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId} (staked=${isStaked})`);
   }
@@ -1184,6 +1217,57 @@ app.prepare().then(() => {
       }
     });
 
+    socket.on("leaveQueue", () => {
+      removeFromAllQueues(socket.id);
+      console.log(`Player ${userId} left queue`);
+    });
+
+    // ─── Staked game: Player1 (white) created game on-chain ───
+    socket.on("stakeCreated", async ({ roomId, onChainGameId }) => {
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game || game.status !== "WAITING") return;
+
+        // Store the on-chain game ID
+        await prisma.game.update({ where: { id: roomId }, data: { onChainGameId: String(onChainGameId) } });
+
+        // Start 120s timeout for Player 2 to confirm
+        const timeout = setTimeout(async () => {
+          stakeTimeouts.delete(roomId);
+          try {
+            const g = await prisma.game.findUnique({ where: { id: roomId } });
+            if (g && g.status === "WAITING") {
+              await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+              io.to(roomId).emit("stakeTimeout", { roomId });
+              console.log(`[STAKE] 120s timeout — game ${roomId} aborted`);
+              cleanupRegularGame(roomId);
+            }
+          } catch (e) {
+            console.error("[STAKE] Timeout cleanup error:", e);
+          }
+        }, 120000);
+        stakeTimeouts.set(roomId, timeout);
+
+        // Forward onChainGameId to Player 2 (black) via stakeReady
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+        if (blackPlayer) {
+          const blackSid = userSocketMap.get(blackPlayer.walletAddress);
+          if (blackSid) {
+            io.to(blackSid).emit("stakeReady", {
+              roomId,
+              onChainGameId: String(onChainGameId),
+              stakeToken: game.stakeToken,
+              stakeAmount: game.wagerAmount ? String(game.wagerAmount) : null,
+            });
+          }
+        }
+
+        console.log(`[STAKE] Player1 created on-chain game ${onChainGameId} for room ${roomId}`);
+      } catch (e) {
+        console.error("[STAKE] stakeCreated error:", e);
+      }
+    });
+
     // ─── Staked game: Player2 confirmed stake on-chain ───
     socket.on("stakeConfirmed", async ({ roomId }) => {
       try {
@@ -1198,8 +1282,8 @@ app.prepare().then(() => {
         await prisma.game.update({ where: { id: roomId }, data: { status: "IN_PROGRESS" } });
         initGameTimer(roomId, DEFAULT_GAME_TIME);
 
-        // Notify both players the game is ready
-        io.to(roomId).emit("gameReady", { roomId });
+        // Notify both players the game is ready (include onChainGameId so clients can store it)
+        io.to(roomId).emit("gameReady", { roomId, onChainGameId: game.onChainGameId });
         console.log(`[STAKE] Player2 confirmed stake — game ${roomId} is now IN_PROGRESS`);
       } catch (e) {
         console.error("[STAKE] stakeConfirmed error:", e);
@@ -1405,6 +1489,11 @@ app.prepare().then(() => {
         if (blackSocketId) io.to(blackSocketId).emit("gameOver", gameOverPayload);
 
         console.log(`[SERVER] Game ${roomId} ended in draw by agreement`);
+
+        // Settle staked game on-chain (fire-and-forget)
+        if (game.onChainGameId) {
+          settleStakedGame(game.onChainGameId, null, true).catch(() => {});
+        }
       } catch (error) {
         console.error("Error processing draw acceptance:", error);
       }
@@ -1520,6 +1609,12 @@ app.prepare().then(() => {
         }
 
         console.log(`[SERVER] gameOver event emitted successfully`);
+
+        // Settle staked game on-chain (fire-and-forget)
+        if (game.onChainGameId) {
+          const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
+          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => {});
+        }
       } catch (error) {
         console.error("Error processing resignation:", error);
         socket.emit("resignError", { error: "Server error processing resignation" });
@@ -1589,6 +1684,12 @@ app.prepare().then(() => {
         }
 
         console.log(`[SERVER] gameOver event emitted for game completion`);
+
+        // Settle staked game on-chain (fire-and-forget)
+        if (game.onChainGameId) {
+          const winnerWallet = winner === 'white' ? whitePlayer?.walletAddress : winner === 'black' ? blackPlayer?.walletAddress : null;
+          settleStakedGame(game.onChainGameId, winnerWallet, isDraw).catch(() => {});
+        }
       } catch (error) {
         console.error("Error processing game completion:", error);
       }
