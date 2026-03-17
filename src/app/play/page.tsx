@@ -22,6 +22,7 @@ export default function PlayPage() {
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
+  const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
   const [pendingMatch, setPendingMatch] = useState<{
     roomId: string;
@@ -114,7 +115,7 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
-    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; whiteTime: number; blackTime: number }) => {
+    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number }) => {
       console.log("GAME REJOINED EVENT:", data);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
@@ -123,6 +124,9 @@ export default function PlayPage() {
       setWhiteTime(data.whiteTime);
       setBlackTime(data.blackTime);
       setRejoinData(data.fen, data.moves);
+      if (data.chatMessages?.length) {
+        setRejoinChatMessages(data.chatMessages);
+      }
       if (!gameMode) setGameMode("online");
       setStatus("in-progress");
       toast.success("Reconnected to your game!");
@@ -139,7 +143,7 @@ export default function PlayPage() {
       socket.off('challengeError');
       socket.off('gameRejoined');
     };
-  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, gameMode, setGameMode, setOnChainGameId]);
+  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId]);
 
   const handleStartGame = (stakeInfo?: StakeInfo) => {
     if (!isConnected) {

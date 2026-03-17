@@ -68,7 +68,10 @@ export function GameBoard() {
     setOpponentDisconnectDeadline,
     // On-chain state
     onChainGameId,
-    reset: resetStore
+    reset: resetStore,
+    // Move navigation
+    viewMoveIndex,
+    moves: storeMoves,
   } = useGameStore();
 
   const [ping, setPing] = useState<number>(0);
@@ -651,6 +654,17 @@ export function GameBoard() {
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
+  // Compute the position to display: live game or historical view
+  const isViewingHistory = viewMoveIndex !== null;
+  const displayFen = useMemo(() => {
+    if (viewMoveIndex === null) return fen;
+    const temp = new Chess();
+    for (let i = 0; i <= viewMoveIndex && i < storeMoves.length; i++) {
+      temp.move(storeMoves[i].san);
+    }
+    return temp.fen();
+  }, [viewMoveIndex, storeMoves, fen]);
+
   const effectiveColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
   // Board orientation: "black" means black pieces at bottom, "white" means white pieces at bottom
   const orientation: "white" | "black" = effectiveColor === "black" ? "black" : "white";
@@ -722,7 +736,7 @@ export function GameBoard() {
               {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
             </p>
             <p className="text-xs text-white/30 truncate">
-              {opponent ? opponent.address.slice(0, 4) + '...' + opponent.address.slice(-4) : ''}
+              {status === 'in-progress' && !isMyTurn ? 'Thinking...' : opponent ? opponent.address.slice(0, 4) + '...' + opponent.address.slice(-4) : ''}
             </p>
           </div>
         </div>
@@ -761,9 +775,9 @@ export function GameBoard() {
           <Chessboard
             key={`board-${boardKey}-${orientation}`}
             options={{
-              position: fen,
+              position: displayFen,
               boardOrientation: orientation,
-              allowDragging: status === 'in-progress' && !!effectiveColor,
+              allowDragging: status === 'in-progress' && !!effectiveColor && !isViewingHistory,
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
@@ -918,7 +932,7 @@ export function GameBoard() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" />
               </svg>
-              End game
+              Resign
             </button>
           )}
           {gameMode === 'computer' && (

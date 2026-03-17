@@ -36,6 +36,7 @@ export default function GamePage({
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
+  const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
 
   // Login with wallet on mount
   useEffect(() => {
@@ -50,12 +51,10 @@ export default function GamePage({
     }
   }, [isConnected, address, setPlayer]);
 
-  // If game is already loaded in store (navigated from play page), no need to rejoin
-  // Otherwise, emit rejoinGame to restore state from server
+  // Effect 1: Always listen for gameRejoined (survives socket reconnections)
+  // This listener persists because it only depends on socket & gameId (not isSocketConnected)
   useEffect(() => {
-    if (!socket || !isSocketConnected || !gameId) return;
-    // Already loaded (came from play page with state set)
-    if (roomId === gameId && status === "in-progress") return;
+    if (!socket || !gameId) return;
 
     const handleGameRejoined = (data: {
       roomId: string;
@@ -65,6 +64,7 @@ export default function GamePage({
       playerRating: number;
       fen: string;
       moves: any[];
+      chatMessages?: { sender: string; text: string; timestamp: number }[];
       whiteTime: number;
       blackTime: number;
     }) => {
@@ -75,9 +75,26 @@ export default function GamePage({
       setWhiteTime(data.whiteTime);
       setBlackTime(data.blackTime);
       setRejoinData(data.fen, data.moves);
+      if (data.chatMessages?.length) {
+        setRejoinChatMessages(data.chatMessages);
+      }
       if (!gameMode) setGameMode("online");
       setStatus("in-progress");
-      toast.success("Reconnected to your game!");
+    };
+
+    socket.on("gameRejoined", handleGameRejoined);
+    return () => {
+      socket.off("gameRejoined", handleGameRejoined);
+    };
+  }, [socket, gameId, address, gameMode, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setStatus]);
+
+  // Effect 2: Emit rejoinGame on initial page load AND on every socket reconnection
+  // This ensures we always get fresh game state + chat even after tab close/reopen
+  useEffect(() => {
+    if (!socket || !gameId) return;
+
+    const emitRejoin = () => {
+      socket.emit("rejoinGame", { roomId: gameId });
     };
 
     const handleRejoinError = () => {
@@ -85,17 +102,19 @@ export default function GamePage({
       router.push("/play");
     };
 
-    socket.on("gameRejoined", handleGameRejoined);
     socket.on("rejoinError", handleRejoinError);
 
-    // Request rejoin from server
-    socket.emit("rejoinGame", { roomId: gameId });
+    // Emit immediately if connected, AND on every future reconnect
+    if (socket.connected) {
+      emitRejoin();
+    }
+    socket.on("connect", emitRejoin);
 
     return () => {
-      socket.off("gameRejoined", handleGameRejoined);
+      socket.off("connect", emitRejoin);
       socket.off("rejoinError", handleRejoinError);
     };
-  }, [socket, isSocketConnected, gameId, roomId, status, address, gameMode, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setGameMode, setStatus]);
+  }, [socket, gameId, router]);
 
   return (
     <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">

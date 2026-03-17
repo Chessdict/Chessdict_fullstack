@@ -1146,7 +1146,7 @@ app.prepare().then(() => {
     // Track active game for reconnection
     userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
     userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-    gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [] });
+    gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] });
 
     if (!isStaked) {
       // Non-staked: start timer immediately
@@ -1200,6 +1200,7 @@ app.prepare().then(() => {
           playerRating: activeGame.playerRating,
           fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
           moves: gs?.moves || [],
+          chatMessages: gs?.chatMessages || [],
           whiteTime: Math.round(whiteTime),
           blackTime: Math.round(blackTime),
         });
@@ -1366,6 +1367,7 @@ app.prepare().then(() => {
         playerRating: activeGame.playerRating,
         fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
         moves: gs?.moves || [],
+        chatMessages: gs?.chatMessages || [],
         whiteTime: Math.round(whiteTime),
         blackTime: Math.round(blackTime),
       });
@@ -1411,6 +1413,12 @@ app.prepare().then(() => {
       if (!roomId || !message || !userId) return;
       const text = String(message).slice(0, 500);
       const payload = { sender: userId, text, timestamp: Date.now() };
+      // Store chat message for reconnection
+      const gs = gameStateStore.get(roomId);
+      if (gs) {
+        if (!gs.chatMessages) gs.chatMessages = [];
+        gs.chatMessages.push(payload);
+      }
       // Broadcast to others in room only; sender adds message optimistically
       socket.to(roomId).emit("chatMessage", payload);
     });
@@ -1735,7 +1743,7 @@ app.prepare().then(() => {
               // Track active game for reconnection
               userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
               userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-              gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [] });
+              gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] });
 
               console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
             }
