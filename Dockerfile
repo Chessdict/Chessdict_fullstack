@@ -32,4 +32,4 @@ COPY --from=builder /app ./
 
 EXPOSE 8080
 
-CMD ["node", "server.mjs"]
+CMD ["sh", "-c", "npx prisma migrate deploy && PORT=8080 node server.mjs"]
