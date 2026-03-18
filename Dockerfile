@@ -25,23 +25,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME=0.0.0.0
 
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
-
-# Copy built app and production dependencies
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/server.mjs ./server.mjs
-COPY --from=builder /app/lib ./lib
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/next.config.ts ./next.config.ts
-
-USER nextjs
+# Copy the entire built app
+COPY --from=builder /app ./
 
 EXPOSE 8080
-ENV HOSTNAME=0.0.0.0
 
 CMD ["node", "server.mjs"]
