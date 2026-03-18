@@ -1,106 +1,134 @@
-# Next.js + Prisma Postgres Example
+# Chessdict
 
-![nextjs demo logos](https://github.com/user-attachments/assets/878d39b7-ca99-4dc5-a095-94ca9d010486)
+**Ultimate Chess Arena** — Challenge players around the world & earn rewards.
 
-This example demonstrates how to build a full-stack web application using [Next.js](https://nextjs.org/), [Prisma Client](https://www.prisma.io/docs/orm/overview/introduction/what-is-prisma), and [Prisma Postgres](https://www.prisma.io/postgres).
+Whether you're a grandmaster or just getting started, Chessdict redefines how chess is played, owned, and experienced. Play real-time matches, stake tokens on games, and compete in tournaments — all on-chain.
 
-> **TL;DR:** Prisma Postgres is a new kind of Postgres database that's optimized for developer productivity. It offers instant provisioning, built-in connection pooling, edge caching, and seamless integration with Prisma ORM.
->
-> [Learn more about Prisma Postgres →](https://www.prisma.io/postgres)
+## Features
 
-## Getting started
+- **Real-time multiplayer chess** — Socket.IO powered with server-authoritative timers
+- **On-chain staking & wagers** — ERC20 token support on Base network
+- **Stake-aware matchmaking** — Pairs players within ±10% wager range
+- **Tournament system** — Round-robin format with sponsorship support
+- **Elo rating system** — Dynamic ratings starting at 1200
+- **Wallet-based authentication** — Connect with RainbowKit, no passwords needed
+- **Game reconnection** — Rejoin in-progress games after disconnects
+- **In-game chat** — Message your opponent during matches
 
-### 1. Fill out .env file
+## Tech Stack
 
-If you just want to run the app locally, rename `.env.example` to `.env` and fill in the values.
+| Category | Technologies |
+|----------|-------------|
+| **Frontend** | Next.js 16, React 19, TypeScript, Tailwind CSS 4, Radix UI, Framer Motion |
+| **Backend** | Custom Node.js server, Socket.IO, Prisma ORM |
+| **Database** | PostgreSQL (local), Redis (caching + Socket.IO adapter) |
+| **Blockchain** | Wagmi, Viem, Ethers.js, RainbowKit, Solidity 0.8.20 (Foundry) |
+| **State** | Zustand, React Query |
+| **Testing** | Vitest |
 
-#### 1.1 Create a Prisma Postgres instance
+## Prerequisites
 
-Go to [the Console](https://console.prisma.io) and create a new Prisma Postgres instance. Use the `DATABASE_URL` value from the new instance to fill out the `.env` file.
+- **Node.js** 18+
+- **PostgreSQL** — running locally
+- **Redis** — running locally
 
-#### 1.2 Create a GitHub OAuth app
+On macOS:
 
-Go to [the GitHub Developer Settings](https://github.com/settings/developers) and create a new OAuth app.
-
-For the required fields:
-
-- Application name and homepage URL can be whatever you want.
-- Authorization callback URL should be `http://localhost:3000/api/auth/callback/github`
-
-After creating the app, you'll be redirected to the app's page. Copy the `Client ID` and `Client Secret` values and use them to fill out `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in the `.env` file.
-
-#### 1.3 Fill out Auth.js secrets
-
-Run `npx auth secret --copy` to generate a new `AUTH_SECRET` value. Fill out the `.env` file with the new value.
-
-### 2. Install dependencies
-
-Install npm dependencies:
-
+```bash
+brew install postgresql redis
+brew services start postgresql
+brew services start redis
 ```
+
+## Getting Started
+
+### 1. Clone & install dependencies
+
+```bash
+git clone https://github.com/Chessdict/Chessdict_fullstack.git
+cd Chessdict_fullstack
 npm install
 ```
 
-### 3. Create and seed the database
+### 2. Configure environment
 
-Run the following command to create your database. This also creates the needed tables that are defined in [`prisma/schema.prisma`](./prisma/schema.prisma):
-
-```
-npx prisma migrate dev --name init
+```bash
+cp .env.example .env
 ```
 
-When `npx prisma migrate dev` is executed against a newly created database, seeding is also triggered. The seed file in [`prisma/seed.ts`](./prisma/seed.ts) will be executed and your database will be populated with the sample data.
+Fill in the values in `.env` (see [Environment Variables](#environment-variables) below).
 
-**If you switched to Prisma Postgres in the previous step**, you need to trigger seeding manually (because Prisma Postgres already created an empty database instance for you, so seeding isn't triggered):
+### 3. Create database & run migrations
 
+```bash
+createdb chessdict
+npm run db:migrate
 ```
-npx prisma db seed
+
+### 4. Seed the database (optional)
+
+```bash
+npm run seed
 ```
 
-### 4. Start the Next.js server
+### 5. Start the dev server
 
-```
+```bash
 npm run dev
 ```
 
-The server is now running on `http://localhost:3000`.
+The app is now running at `http://localhost:3000`.
 
-<details>
-<summary>📸 Expand for a tour of the app</summary>
+## Available Scripts
 
-### Homepage
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Start development server |
+| `npm run build` | Build for production |
+| `npm start` | Start production server |
+| `npm run lint` | Run ESLint |
+| `npm run db:migrate` | Create and apply database migrations |
+| `npm run db:migrate:create` | Create a migration without applying it |
+| `npm run db:migrate:deploy` | Apply pending migrations (CI/CD) |
+| `npm run db:migrate:reset` | Reset database and re-apply all migrations |
+| `npm run db:migrate:status` | Check migration status |
+| `npm run db:push` | Push schema changes without creating a migration |
+| `npm run db:studio` | Open Prisma Studio GUI |
+| `npm run seed` | Seed the database |
+| `npm test` | Run tests |
+| `npm run test:watch` | Run tests in watch mode |
 
-Logged out view:
-![Homepage](/public/logged-out-homepage.png)
+## Project Structure
 
-Logged in view:
-![Homepage](/public/logged-in-homepage.png)
+```
+.
+├── src/
+│   ├── app/                  # Next.js App Router (pages & API routes)
+│   ├── components/           # React components (game/, tournament/, ui/)
+│   ├── hooks/                # Custom hooks (useSocket, useChessdict)
+│   ├── lib/                  # Utilities (prisma, redis, contract ABIs)
+│   ├── providers/            # Context providers (wallet, react-query)
+│   └── stores/               # Zustand stores (game, tournament)
+├── lib/                      # Server-side utilities (matchmaking, redis)
+├── prisma/
+│   ├── schema.prisma         # Database schema
+│   ├── migrations/           # SQL migration files
+│   └── seed.ts               # Database seed script
+├── chessdict-contracts/      # Solidity smart contracts (Foundry)
+├── server.mjs                # Custom HTTP + Socket.IO server
+└── package.json
+```
 
-### User Profile
+## Environment Variables
 
-![User Profile](/public/user-profile.png)
-
-### Creating Posts
-
-![Create Post](/public/create-post.png)
-
-### View your posts and drafts
-
-![View Posts](/public/view-posts.png)
-
-</details>
-
-## Next Steps
-
-Here are some ways to learn more and expand upon this example:
-
-1. 🚀 [Deploy your app to Vercel](https://vercel.com/docs/frameworks/nextjs) in just a few clicks
-2. 📚 Learn more about [Prisma ORM](https://www.prisma.io/docs/orm/overview/introduction/what-is-prisma) and database workflows.
-3. 🔍 Explore the [Prisma Client API](https://www.prisma.io/docs/orm/reference/prisma-client-reference) to add more database features.
-4. ⭐ Check out more [Prisma examples](https://github.com/prisma/prisma-examples) for inspiration.
-
-## Join our community!
-
-- [Discord](https://pris.ly/discord)
-- [Twitter](https://twitter.com/prisma)
-- [Bluesky](https://bsky.app/profile/prisma.dev)
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string (defaults to `redis://localhost:6379`) |
+| `AUTH_SECRET` | NextAuth secret (generate with `npx auth secret`) |
+| `AUTH_GITHUB_ID` | GitHub OAuth app client ID (optional) |
+| `AUTH_GITHUB_SECRET` | GitHub OAuth app client secret (optional) |
+| `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | WalletConnect project ID |
+| `NEXT_PUBLIC_NETWORK` | `mainnet` (Base) or `testnet` (Base Sepolia) |
+| `REDEEMER_PRIVATE_KEY` | Server wallet key for on-chain settlement (optional) |
+| `RPC_URL` | RPC endpoint for on-chain transactions |
