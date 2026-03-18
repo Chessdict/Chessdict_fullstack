@@ -1,15 +1,18 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import Image from "next/image";
 import { GlassBg } from "../glass-bg";
 import { formatName } from "@/lib/utils";
 import { useChessdict, useTokenSymbol, useTokenDecimals } from "@/hooks/useChessdict";
+import { getMemojiForAddress } from "@/lib/memoji";
 
 interface MatchFoundModalProps {
     opponent: string;
     color: "white" | "black";
     onAccept: () => void;
     onDecline?: () => void;
+    memoji?: string | null;
     // Staking info
     staked?: boolean;
     stakeToken?: string | null;
@@ -26,6 +29,7 @@ export function MatchFoundModal({
     color,
     onAccept,
     onDecline,
+    memoji,
     staked,
     stakeToken,
     stakeAmount,
@@ -47,6 +51,7 @@ export function MatchFoundModal({
 
     const isCreator = staked && color === "white";
     const isJoiner = staked && color === "black";
+    const opponentMemoji = memoji ?? getMemojiForAddress(opponent);
 
     // ─── Player 1 (white/creator): auto-create on-chain game on mount ───
     useEffect(() => {
@@ -148,8 +153,8 @@ export function MatchFoundModal({
                     <GlassBg className="p-5 sm:p-8 text-center" height="auto">
                         <div className="flex flex-col items-center gap-4 sm:gap-6">
                             <div className="relative">
-                                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-yellow-500/20 to-orange-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-yellow-500/10">
-                                    <span className="text-2xl sm:text-3xl font-bold text-white uppercase">{opponent.slice(2, 4)}</span>
+                                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-yellow-500/20 to-orange-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-yellow-500/10 overflow-hidden">
+                                    <Image src={opponentMemoji} alt="Opponent" width={96} height={96} className="h-full w-full object-contain" />
                                 </div>
                                 <div className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-yellow-500 border-4 border-[#121212] flex items-center justify-center">
                                     <div className="h-3 w-3 rounded-full border-2 border-yellow-200 border-t-transparent animate-spin" />
@@ -220,8 +225,8 @@ export function MatchFoundModal({
                     <GlassBg className="p-5 sm:p-8 text-center" height="auto">
                         <div className="flex flex-col items-center gap-4 sm:gap-6">
                             <div className="relative">
-                                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10">
-                                    <span className="text-2xl sm:text-3xl font-bold text-white uppercase">{opponent.slice(2, 4)}</span>
+                                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10 overflow-hidden">
+                                    <Image src={opponentMemoji} alt="Opponent" width={96} height={96} className="h-full w-full object-contain" />
                                 </div>
                                 <div className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-green-500 border-4 border-[#121212]" />
                             </div>
@@ -323,8 +328,8 @@ export function MatchFoundModal({
                 <GlassBg className="p-5 sm:p-8 text-center" height="auto">
                     <div className="flex flex-col items-center gap-4 sm:gap-6">
                         <div className="relative">
-                            <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10">
-                                <span className="text-2xl sm:text-3xl font-bold text-white uppercase">{opponent.slice(2, 4)}</span>
+                            <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10 overflow-hidden">
+                                <Image src={opponentMemoji} alt="Opponent" width={96} height={96} className="h-full w-full object-contain" />
                             </div>
                             <div className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-green-500 border-4 border-[#121212]" />
                         </div>

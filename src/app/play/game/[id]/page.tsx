@@ -9,6 +9,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { loginWithWallet } from "@/app/actions";
 import { toast } from "sonner";
+import { getMemojiForAddress } from "@/lib/memoji";
 
 export default function GamePage({
   params,
@@ -43,7 +44,7 @@ export default function GamePage({
       loginWithWallet(address)
         .then((result) => {
           if (result.success && result.user) {
-            setPlayer({ address, rating: result.user.rating ?? 1200 });
+            setPlayer({ address, rating: result.user.rating ?? 1200, memoji: getMemojiForAddress(address) });
           }
         })
         .catch(console.error);
@@ -70,8 +71,8 @@ export default function GamePage({
     }) => {
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
-      setOpponent({ address: data.opponentAddress, rating: data.opponentRating });
-      if (address) setPlayer({ address, rating: data.playerRating });
+      setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
+      if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
       setWhiteTime(data.whiteTime);
       setBlackTime(data.blackTime);
       setRejoinData(data.fen, data.moves);
