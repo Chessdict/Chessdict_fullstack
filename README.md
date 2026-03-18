@@ -1,13 +1,3 @@
-# Next.js + Prisma Postgres Example
-
-![nextjs demo logos](https://github.com/user-attachments/assets/878d39b7-ca99-4dc5-a095-94ca9d010486)
-
-This example demonstrates how to build a full-stack web application using [Next.js](https://nextjs.org/), [Prisma Client](https://www.prisma.io/docs/orm/overview/introduction/what-is-prisma), and [Prisma Postgres](https://www.prisma.io/postgres).
-
-> **TL;DR:** Prisma Postgres is a new kind of Postgres database that's optimized for developer productivity. It offers instant provisioning, built-in connection pooling, edge caching, and seamless integration with Prisma ORM.
->
-> [Learn more about Prisma Postgres →](https://www.prisma.io/postgres)
-
 ## Getting started
 
 ### 1. Fill out .env file
