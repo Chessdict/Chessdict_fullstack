@@ -30,7 +30,7 @@ import {
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8080;
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -172,12 +172,12 @@ app.prepare().then(async () => {
 
   function cleanupRegularGame(roomId) {
     gameStateStore.delete(roomId);
-    deleteGameState(roomId).catch(() => {});
-    deleteGameTimer(roomId).catch(() => {});
+    deleteGameState(roomId).catch(() => { });
+    deleteGameTimer(roomId).catch(() => { });
     for (const [wallet, data] of userActiveGames.entries()) {
       if (data.roomId === roomId) {
         userActiveGames.delete(wallet);
-        deleteUserActiveGame(wallet).catch(() => {});
+        deleteUserActiveGame(wallet).catch(() => { });
       }
     }
     for (const [wallet, data] of gameDisconnectTimers.entries()) {
@@ -236,7 +236,7 @@ app.prepare().then(async () => {
         const newRatings = await updateRatings(updatedGame);
 
         recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => {});
+        markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
         const payload = { winner: winnerColor, reason: 'timeout', ratings: newRatings };
@@ -255,7 +255,7 @@ app.prepare().then(async () => {
         // Settle staked game on-chain (fire-and-forget)
         if (game.onChainGameId) {
           const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
-          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => {});
+          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => { });
         }
       } catch (error) {
         console.error('[TIMER] Error processing server timeout:', error);
@@ -1190,9 +1190,9 @@ app.prepare().then(async () => {
     userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
     const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] };
     gameStateStore.set(roomId, initialState);
-    setUserActiveGame(p1.userId, userActiveGames.get(p1.userId)).catch(() => {});
-    setUserActiveGame(p2.userId, userActiveGames.get(p2.userId)).catch(() => {});
-    setGameState(roomId, initialState).catch(() => {});
+    setUserActiveGame(p1.userId, userActiveGames.get(p1.userId)).catch(() => { });
+    setUserActiveGame(p2.userId, userActiveGames.get(p2.userId)).catch(() => { });
+    setGameState(roomId, initialState).catch(() => { });
 
     if (!isStaked) {
       // Non-staked: start timer immediately
@@ -1212,7 +1212,7 @@ app.prepare().then(async () => {
 
     if (userId) {
       userSocketMap.set(userId, socket.id);
-      setUserSocket(userId, socket.id).catch(() => {}); // mirror to Redis
+      setUserSocket(userId, socket.id).catch(() => { }); // mirror to Redis
 
       // ─── Reconnection: cancel disconnect grace period if exists ───
       const disconnectData = gameDisconnectTimers.get(userId);
@@ -1530,7 +1530,7 @@ app.prepare().then(async () => {
         const newRatings = await updateRatings(game, true);
 
         recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => {});
+        markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
         const gameOverPayload = { winner: "draw", reason: "draw", ratings: newRatings };
@@ -1548,7 +1548,7 @@ app.prepare().then(async () => {
 
         // Settle staked game on-chain (fire-and-forget)
         if (game.onChainGameId) {
-          settleStakedGame(game.onChainGameId, null, true).catch(() => {});
+          settleStakedGame(game.onChainGameId, null, true).catch(() => { });
         }
       } catch (error) {
         console.error("Error processing draw acceptance:", error);
@@ -1640,7 +1640,7 @@ app.prepare().then(async () => {
 
         // Mark game as recently completed to prevent false disconnect forfeits
         recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => {});
+        markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to all players in the room
@@ -1670,7 +1670,7 @@ app.prepare().then(async () => {
         // Settle staked game on-chain (fire-and-forget)
         if (game.onChainGameId) {
           const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
-          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => {});
+          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => { });
         }
       } catch (error) {
         console.error("Error processing resignation:", error);
@@ -1720,7 +1720,7 @@ app.prepare().then(async () => {
 
         // Mark game as recently completed to prevent false disconnect forfeits
         recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => {});
+        markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to both players
@@ -1746,7 +1746,7 @@ app.prepare().then(async () => {
         // Settle staked game on-chain (fire-and-forget)
         if (game.onChainGameId) {
           const winnerWallet = winner === 'white' ? whitePlayer?.walletAddress : winner === 'black' ? blackPlayer?.walletAddress : null;
-          settleStakedGame(game.onChainGameId, winnerWallet, isDraw).catch(() => {});
+          settleStakedGame(game.onChainGameId, winnerWallet, isDraw).catch(() => { });
         }
       } catch (error) {
         console.error("Error processing game completion:", error);
@@ -1795,9 +1795,9 @@ app.prepare().then(async () => {
               userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
               const challengeInitState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] };
               gameStateStore.set(roomId, challengeInitState);
-              setUserActiveGame(opponentId, userActiveGames.get(opponentId)).catch(() => {});
-              setUserActiveGame(myId, userActiveGames.get(myId)).catch(() => {});
-              setGameState(roomId, challengeInitState).catch(() => {});
+              setUserActiveGame(opponentId, userActiveGames.get(opponentId)).catch(() => { });
+              setUserActiveGame(myId, userActiveGames.get(myId)).catch(() => { });
+              setGameState(roomId, challengeInitState).catch(() => { });
 
               console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
             }
@@ -2158,7 +2158,7 @@ app.prepare().then(async () => {
                       const newRatings = await updateRatings(updatedGame);
 
                       recentlyCompletedGames.add(activeRoomId);
-                      markGameCompleted(activeRoomId, 10).catch(() => {});
+                      markGameCompleted(activeRoomId, 10).catch(() => { });
                       setTimeout(() => recentlyCompletedGames.delete(activeRoomId), 10000);
 
                       const gameOverPayload = { winner: winnerColor, reason: "disconnection", ratings: newRatings };
@@ -2190,12 +2190,12 @@ app.prepare().then(async () => {
 
       if (userId) {
         userSocketMap.delete(userId);
-        deleteUserSocket(userId).catch(() => {}); // mirror to Redis
+        deleteUserSocket(userId).catch(() => { }); // mirror to Redis
       } else {
         for (const [uid, sid] of userSocketMap.entries()) {
           if (sid === socket.id) {
             userSocketMap.delete(uid);
-            deleteUserSocket(uid).catch(() => {}); // mirror to Redis
+            deleteUserSocket(uid).catch(() => { }); // mirror to Redis
             console.log(`User ${uid} removed from map (cleanup)`);
             break;
           }
