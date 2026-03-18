@@ -2163,13 +2163,12 @@ app.prepare().then(async () => {
 
                       const gameOverPayload = { winner: winnerColor, reason: "disconnection", ratings: newRatings };
 
-                      // Send only to the winner (opponent of disconnected player), not to the whole room
+                      // Only emit to the winner's socket — do NOT broadcast to the room,
+                      // because the disconnected player's socket may still be in the room
+                      // and would incorrectly receive the gameOver event.
                       const opponentWallet = whiteUser?.walletAddress === disconnectedUserId ? blackUser?.walletAddress : whiteUser?.walletAddress;
                       const opponentSid = opponentWallet ? userSocketMap.get(opponentWallet) : null;
                       if (opponentSid) io.to(opponentSid).emit("gameOver", gameOverPayload);
-
-                      // Also broadcast to room for any other listeners, using the actual winner color
-                      io.to(activeRoomId).emit("gameOver", gameOverPayload);
 
                       console.log(`[DISCONNECT] Game ${activeRoomId} forfeited by ${disconnectedUserId}. Winner: ${winnerColor}`);
                     }
