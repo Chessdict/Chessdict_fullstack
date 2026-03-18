@@ -41,7 +41,12 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     reset,
     drawOfferSent,
     setDrawOfferSent,
+    viewMoveIndex,
+    setViewMoveIndex,
   } = useGameStore();
+
+  const rejoinChatMessages = useGameStore((s) => s.rejoinChatMessages);
+  const clearRejoinChatMessages = useGameStore((s) => s.clearRejoinChatMessages);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
@@ -60,6 +65,41 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
   const movesEndRef = useRef<HTMLDivElement>(null);
   const movesContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-play state: step forward one move at a time until reaching live position
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
+  const autoPlayRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopAutoPlay = useCallback(() => {
+    setIsAutoPlaying(false);
+    if (autoPlayRef.current) {
+      clearInterval(autoPlayRef.current);
+      autoPlayRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAutoPlaying || viewMoveIndex === null) {
+      stopAutoPlay();
+      return;
+    }
+    autoPlayRef.current = setInterval(() => {
+      const currentIndex = useGameStore.getState().viewMoveIndex;
+      const totalMoves = useGameStore.getState().moves.length;
+      if (currentIndex === null || currentIndex >= totalMoves - 1) {
+        setViewMoveIndex(null);
+        stopAutoPlay();
+      } else {
+        setViewMoveIndex(currentIndex + 1);
+      }
+    }, 600);
+    return () => {
+      if (autoPlayRef.current) {
+        clearInterval(autoPlayRef.current);
+        autoPlayRef.current = null;
+      }
+    };
+  }, [isAutoPlaying, viewMoveIndex, setViewMoveIndex, stopAutoPlay]);
 
   // Handle resign action
   const handleResign = useCallback(() => {
@@ -109,6 +149,27 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
 
+  // Load chat messages from rejoin data (reconnection via store)
+  useEffect(() => {
+    if (rejoinChatMessages.length > 0) {
+      setChatMessages(rejoinChatMessages);
+      clearRejoinChatMessages();
+    }
+  }, [rejoinChatMessages, clearRejoinChatMessages]);
+
+  // Direct socket listener for gameRejoined — restores chat even if the store
+  // intermediate is missed due to race conditions during reconnection
+  useEffect(() => {
+    if (!socket) return;
+    const handleGameRejoined = (data: { chatMessages?: ChatMessage[] }) => {
+      if (data.chatMessages && data.chatMessages.length > 0) {
+        setChatMessages(data.chatMessages);
+      }
+    };
+    socket.on("gameRejoined", handleGameRejoined);
+    return () => { socket.off("gameRejoined", handleGameRejoined); };
+  }, [socket]);
+
   // Send chat message
   const sendChatMessage = useCallback(() => {
     if (!socket || !roomId || !chatInput.trim() || !address) return;
@@ -119,9 +180,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     setChatInput("");
   }, [socket, roomId, chatInput, address]);
 
-  // Clear chat when game changes
+  // Clear chat only when switching to a genuinely different game
+  const prevRoomIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    setChatMessages([]);
+    if (roomId && prevRoomIdRef.current && roomId !== prevRoomIdRef.current) {
+      setChatMessages([]);
+    }
+    prevRoomIdRef.current = roomId;
   }, [roomId]);
 
   // Auto-scroll to latest move within the container only
@@ -347,22 +412,34 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                         className="flex items-center gap-2 py-2 border-b border-white/5 last:border-0"
                       >
                         <span className="w-6 text-sm text-white/30 font-mono shrink-0">{pair.moveNumber}.</span>
-                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                        <button
+                          onClick={() => setViewMoveIndex(idx * 2)}
+                          className={cn(
+                            "flex items-center gap-1.5 flex-1 min-w-0 rounded px-1 -mx-1 transition",
+                            viewMoveIndex === idx * 2 ? "bg-blue-500/20" : "hover:bg-white/5"
+                          )}
+                        >
                           {pair.white && (
                             <>
                               <span className="text-white/50 text-lg leading-none">{pieceIcons[pair.white.piece]}</span>
                               <span className="text-sm font-medium text-white">{pair.white.san}</span>
                             </>
                           )}
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                        </button>
+                        <button
+                          onClick={() => pair.black && setViewMoveIndex(idx * 2 + 1)}
+                          className={cn(
+                            "flex items-center gap-1.5 flex-1 min-w-0 rounded px-1 -mx-1 transition",
+                            viewMoveIndex === idx * 2 + 1 ? "bg-blue-500/20" : "hover:bg-white/5"
+                          )}
+                        >
                           {pair.black && (
                             <>
                               <span className="text-white/50 text-lg leading-none">{pieceIcons[pair.black.piece]}</span>
                               <span className="text-sm font-medium text-white">{pair.black.san}</span>
                             </>
                           )}
-                        </div>
+                        </button>
                         <div className="flex flex-col gap-1 items-end shrink-0 w-20">
                           {pair.white && (
                             <div className="flex items-center gap-1.5">
@@ -395,15 +472,35 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
               {moves.length > 0 && (
                 <div className="flex items-center justify-center gap-3 pt-2">
                   {[
-                    { path: "M11 17L6 12L11 7M18 17L13 12L18 7", label: "First" },
-                    { path: "M15 18L9 12L15 6", label: "Prev" },
-                    { path: "M5 3L19 12L5 21Z", label: "Play", fill: true },
-                    { path: "M9 18L15 12L9 6", label: "Next" },
-                    { path: "M13 17L18 12L13 7M6 17L11 12L6 7", label: "Last" },
-                  ].map(({ path, label, fill }) => (
+                    { path: "M11 17L6 12L11 7M18 17L13 12L18 7", label: "First", onClick: () => { stopAutoPlay(); setViewMoveIndex(0); } },
+                    { path: "M15 18L9 12L15 6", label: "Prev", onClick: () => {
+                      stopAutoPlay();
+                      if (viewMoveIndex === null) setViewMoveIndex(moves.length - 2);
+                      else if (viewMoveIndex > 0) setViewMoveIndex(viewMoveIndex - 1);
+                    }},
+                    { path: isAutoPlaying ? "M6 4h4v16H6zM14 4h4v16h-4z" : "M5 3L19 12L5 21Z", label: "Play", fill: true, onClick: () => {
+                      if (isAutoPlaying) {
+                        stopAutoPlay();
+                      } else if (viewMoveIndex !== null) {
+                        setIsAutoPlaying(true); 
+                      } else {
+                        // Already at live — do nothing
+                      }
+                    }},
+                    { path: "M9 18L15 12L9 6", label: "Next", onClick: () => {
+                      stopAutoPlay();
+                      if (viewMoveIndex !== null && viewMoveIndex < moves.length - 1) setViewMoveIndex(viewMoveIndex + 1);
+                      else setViewMoveIndex(null);
+                    }},
+                    { path: "M13 17L18 12L13 7M6 17L11 12L6 7", label: "Last", onClick: () => { stopAutoPlay(); setViewMoveIndex(null); } },
+                  ].map(({ path, label, fill, onClick }) => (
                     <button
                       key={label}
-                      className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white"
+                      onClick={onClick}
+                      className={cn(
+                        "flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white",
+                        label === "Play" && isAutoPlaying && "bg-blue-500/20 border-blue-500/30 text-blue-400"
+                      )}
                       title={label}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill={fill ? "currentColor" : "none"} stroke={fill ? "none" : "currentColor"} strokeWidth="2.5">
@@ -425,7 +522,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   {opponentName} VS {playerName} (You)
                 </p>
               </div>
-              <div className="flex flex-col gap-2 rounded-xl bg-white/5 p-3 max-h-[140px] min-h-[80px] overflow-y-auto elegant-scrollbar">
+              <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-3 max-h-[140px] min-h-[80px] overflow-y-auto elegant-scrollbar">
                 {chatMessages.length === 0 ? (
                   <p className="text-center text-[11px] text-white/20 py-2">No messages yet</p>
                 ) : (
@@ -433,14 +530,9 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                     const isMe = msg.sender === address;
                     const senderName = isMe ? playerName : opponentName;
                     return (
-                      <div key={i} className={cn("flex flex-col gap-0.5", isMe ? "items-end" : "items-start")}>
+                      <div key={i} className="flex flex-col gap-0.5 items-start">
                         <span className="text-[10px] text-white/30">{senderName}</span>
-                        <div className={cn(
-                          "rounded-2xl px-3 py-1.5 text-sm max-w-[80%] break-words",
-                          isMe
-                            ? "bg-blue-600/80 text-white rounded-br-md"
-                            : "bg-white/10 text-white/90 rounded-bl-md"
-                        )}>
+                        <div className="rounded-2xl rounded-bl-md px-3 py-1.5 text-sm max-w-[80%] break-words bg-white/10 text-white/90">
                           {msg.text}
                         </div>
                       </div>
@@ -449,7 +541,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                 )}
                 <div ref={chatEndRef} />
               </div>
-              <div className="flex items-center gap-2 rounded-full bg-white/5 border border-white/10 px-4 py-2.5">
+              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] backdrop-blur-sm px-4 py-2.5">
                 <input
                   type="text"
                   placeholder="Send message..."

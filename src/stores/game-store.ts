@@ -46,6 +46,9 @@ type GameState = {
   moves: MoveRecord[];
   addMove: (move: MoveRecord) => void;
   clearMoves: () => void;
+  // Move navigation (null = viewing latest/live position)
+  viewMoveIndex: number | null;
+  setViewMoveIndex: (index: number | null) => void;
   // Connection status
   isOpponentConnected: boolean;
   setOpponentConnected: (connected: boolean) => void;
@@ -91,6 +94,10 @@ type GameState = {
   rejoinMoves: MoveRecord[];
   setRejoinData: (fen: string, moves: MoveRecord[]) => void;
   clearRejoinData: () => void;
+  // Rejoin chat messages
+  rejoinChatMessages: { sender: string; text: string; timestamp: number }[];
+  setRejoinChatMessages: (messages: { sender: string; text: string; timestamp: number }[]) => void;
+  clearRejoinChatMessages: () => void;
   // Opponent disconnect countdown
   opponentDisconnectDeadline: number | null;
   setOpponentDisconnectDeadline: (deadline: number | null) => void;
@@ -110,6 +117,7 @@ const initialState = {
   player: undefined,
   opponent: undefined,
   moves: [] as MoveRecord[],
+  viewMoveIndex: null as number | null,
   isOpponentConnected: false,
   drawOfferReceived: false,
   drawOfferSent: false,
@@ -120,6 +128,7 @@ const initialState = {
   gameOver: null,
   rejoinFen: null,
   rejoinMoves: [] as MoveRecord[],
+  rejoinChatMessages: [] as { sender: string; text: string; timestamp: number }[],
   opponentDisconnectDeadline: null,
 };
 
@@ -136,8 +145,9 @@ export const useGameStore = create<GameState>((set) => ({
   setOpponent: (opponent) => set({ opponent }),
   setRoomId: (roomId) => set({ roomId }),
   setPlayerColor: (playerColor) => set({ playerColor }),
-  addMove: (move) => set((state) => ({ moves: [...state.moves, move] })),
-  clearMoves: () => set({ moves: [] }),
+  addMove: (move) => set((state) => ({ moves: [...state.moves, move], viewMoveIndex: null })),
+  clearMoves: () => set({ moves: [], viewMoveIndex: null }),
+  setViewMoveIndex: (index) => set({ viewMoveIndex: index }),
   setOpponentConnected: (connected) => set({ isOpponentConnected: connected }),
   setDrawOfferReceived: (received) => set({ drawOfferReceived: received }),
   setDrawOfferSent: (sent) => set({ drawOfferSent: sent }),
@@ -158,6 +168,8 @@ export const useGameStore = create<GameState>((set) => ({
   setGameOver: (winner, reason) => set({ gameOver: { winner, reason } }),
   setRejoinData: (fen, moves) => set({ rejoinFen: fen, rejoinMoves: moves }),
   clearRejoinData: () => set({ rejoinFen: null, rejoinMoves: [] }),
+  setRejoinChatMessages: (messages) => set({ rejoinChatMessages: messages }),
+  clearRejoinChatMessages: () => set({ rejoinChatMessages: [] }),
   setOpponentDisconnectDeadline: (deadline) => set({ opponentDisconnectDeadline: deadline }),
   reset: () =>
     set({
@@ -165,6 +177,7 @@ export const useGameStore = create<GameState>((set) => ({
       roomId: undefined,
       playerColor: undefined,
       moves: [],
+      viewMoveIndex: null,
       isOpponentConnected: false,
       drawOfferReceived: false,
       drawOfferSent: false,
@@ -176,6 +189,7 @@ export const useGameStore = create<GameState>((set) => ({
       stakeAmountRaw: null,
       rejoinFen: null,
       rejoinMoves: [],
+      rejoinChatMessages: [],
       opponentDisconnectDeadline: null,
     }),
 }));
