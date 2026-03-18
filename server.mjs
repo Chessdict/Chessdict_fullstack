@@ -126,12 +126,16 @@ async function updateRatings(game, isDraw = false) {
 }
 
 app.prepare().then(async () => {
-  // Connect Redis before starting the server
+  console.log("[STARTUP] app.prepare() done");
+  console.log("[STARTUP] REDIS_URL set:", !!process.env.REDIS_URL);
+  console.log("[STARTUP] Connecting Redis...");
   try {
     await connectRedis();
+    console.log("[STARTUP] Redis connected");
   } catch (err) {
     console.error("[REDIS] Failed to connect — running without Redis:", err.message);
   }
+  console.log("[STARTUP] Creating HTTP server...");
 
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url, true);
