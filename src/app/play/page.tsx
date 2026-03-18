@@ -91,18 +91,14 @@ export default function PlayPage() {
       });
     });
 
-    // Staked game: Player2 declined — Player1 gets notified
-    socket.on('opponentDeclinedStake', (data: { roomId: string }) => {
+    // Staked game: Player2 declined or timeout — handled by MatchFoundModal
+    // (modal shows "Cancel Game & Reclaim Stake" UI, so we don't dismiss here)
+    socket.on('opponentDeclinedStake', (data: { roomId: string; onChainGameId?: string }) => {
       console.log("OPPONENT DECLINED STAKE:", data);
-      setPendingMatch(null);
-      toast.error("Opponent declined the stake. You can search again.");
     });
 
-    // Staked game: 120s timeout
-    socket.on('stakeTimeout', (data: { roomId: string }) => {
+    socket.on('stakeTimeout', (data: { roomId: string; onChainGameId?: string }) => {
       console.log("STAKE TIMEOUT:", data);
-      setPendingMatch(null);
-      toast.error("Stake confirmation timed out. Game cancelled.");
     });
 
     socket.on('challengeReceived', (data: { from: string }) => {

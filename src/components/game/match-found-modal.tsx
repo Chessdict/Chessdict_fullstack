@@ -21,7 +21,7 @@ interface MatchFoundModalProps {
     socket?: any;
 }
 
-type CreatorState = "creating" | "waiting" | "failed";
+type CreatorState = "creating" | "waiting" | "failed" | "opponent-left" | "cancelling" | "reclaimed";
 type JoinerState = "waiting-for-creator" | "idle" | "joining" | "confirmed" | "failed";
 
 export function MatchFoundModal({
@@ -41,7 +41,7 @@ export function MatchFoundModal({
     const [onChainGameId, setOnChainGameId] = useState<string | null>(null);
     const hasStartedCreation = useRef(false);
 
-    const { createGameSingle, joinGameSingle, isLoading } = useChessdict();
+    const { createGameSingle, joinGameSingle, cancelGameSingle, isLoading } = useChessdict();
     const { data: tokenSymbol } = useTokenSymbol(
         stakeToken ? (stakeToken as `0x${string}`) : null
     );
@@ -56,9 +56,11 @@ export function MatchFoundModal({
     // ─── Player 1 (white/creator): auto-create on-chain game on mount ───
     useEffect(() => {
         if (!isCreator || !stakeToken || !stakeAmount || !roomId || hasStartedCreation.current) return;
+        // Wait for decimals to load — USDC is 6, defaulting to 18 would over-approve
+        if (tokenDecimalsData == null) return;
         hasStartedCreation.current = true;
 
-        const decimals = (tokenDecimalsData as number) ?? 18;
+        const decimals = tokenDecimalsData as number;
 
         (async () => {
             try {
@@ -80,6 +82,32 @@ export function MatchFoundModal({
         })();
     }, [isCreator, stakeToken, stakeAmount, roomId, tokenDecimalsData, createGameSingle, socket]);
 
+    // ─── Player 1 (white/creator): listen for opponent leaving/declining/timeout ───
+    useEffect(() => {
+        if (!isCreator || !socket) return;
+
+        const handleOpponentLeft = (data: { roomId: string; onChainGameId?: string }) => {
+            if (data.roomId === roomId) {
+                if (data.onChainGameId) setOnChainGameId(data.onChainGameId);
+                setCreatorState("opponent-left");
+            }
+        };
+
+        const handleStakeTimeout = (data: { roomId: string; onChainGameId?: string }) => {
+            if (data.roomId === roomId) {
+                if (data.onChainGameId) setOnChainGameId(data.onChainGameId);
+                setCreatorState("opponent-left");
+            }
+        };
+
+        socket.on("opponentDeclinedStake", handleOpponentLeft);
+        socket.on("stakeTimeout", handleStakeTimeout);
+        return () => {
+            socket.off("opponentDeclinedStake", handleOpponentLeft);
+            socket.off("stakeTimeout", handleStakeTimeout);
+        };
+    }, [isCreator, socket, roomId]);
+
     // ─── Player 2 (black/joiner): listen for stakeReady from server ───
     useEffect(() => {
         if (!isJoiner || !socket) return;
@@ -96,9 +124,9 @@ export function MatchFoundModal({
     }, [isJoiner, socket, roomId]);
 
     const handleRetryCreate = async () => {
-        if (!stakeToken || !stakeAmount || !roomId) return;
+        if (!stakeToken || !stakeAmount || !roomId || tokenDecimalsData == null) return;
         setCreatorState("creating");
-        const decimals = (tokenDecimalsData as number) ?? 18;
+        const decimals = tokenDecimalsData as number;
 
         try {
             const result = await createGameSingle(
@@ -119,13 +147,15 @@ export function MatchFoundModal({
     };
 
     const handleJoinStake = async () => {
-        if (!onChainGameId || !stakeToken || !stakeAmount || !roomId) return;
+        if (!onChainGameId || !stakeToken || !stakeAmount || !roomId || tokenDecimalsData == null) return;
         setJoinerState("joining");
+        const decimals = tokenDecimalsData as number;
         try {
             const ok = await joinGameSingle(
                 BigInt(onChainGameId),
                 stakeToken as `0x${string}`,
                 stakeAmount,
+                decimals,
             );
             if (ok) {
                 setJoinerState("confirmed");
@@ -143,6 +173,20 @@ export function MatchFoundModal({
             socket?.emit("stakeDeclined", { roomId });
         }
         onDecline?.();
+    };
+
+    const handleCancelAndReclaim = async () => {
+        if (!onChainGameId) {
+            onDecline?.();
+            return;
+        }
+        setCreatorState("cancelling");
+        try {
+            await cancelGameSingle(BigInt(onChainGameId));
+            setCreatorState("reclaimed");
+        } catch {
+            setCreatorState("opponent-left");
+        }
     };
 
     // ─── Staked + Creator (white): create on-chain then wait ───
@@ -207,6 +251,55 @@ export function MatchFoundModal({
                                         className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"
                                     >
                                         Cancel
+                                    </button>
+                                </div>
+                            )}
+
+                            {creatorState === "opponent-left" && (
+                                <div className="w-full flex flex-col gap-3">
+                                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3">
+                                        <p className="text-xs text-red-400 font-medium">Opponent left the match</p>
+                                        <p className="text-[10px] text-white/50 mt-1">Cancel the on-chain game to reclaim your stake</p>
+                                    </div>
+                                    <button
+                                        onClick={handleCancelAndReclaim}
+                                        disabled={isLoading}
+                                        className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95 disabled:opacity-50"
+                                    >
+                                        <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                        <span className="relative text-sm font-bold text-white">
+                                            Cancel Game & Reclaim Stake
+                                        </span>
+                                    </button>
+                                    <button
+                                        onClick={() => onDecline?.()}
+                                        className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"
+                                    >
+                                        Dismiss (reclaim later)
+                                    </button>
+                                </div>
+                            )}
+
+                            {creatorState === "cancelling" && (
+                                <div className="w-full flex flex-col items-center gap-2 py-3">
+                                    <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-yellow-400 animate-spin" />
+                                    <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest">
+                                        Cancelling game & reclaiming stake...
+                                    </p>
+                                </div>
+                            )}
+
+                            {creatorState === "reclaimed" && (
+                                <div className="w-full flex flex-col gap-3">
+                                    <div className="rounded-xl border border-green-500/20 bg-green-500/10 px-4 py-3">
+                                        <p className="text-xs text-green-400 font-medium">Stake reclaimed successfully</p>
+                                    </div>
+                                    <button
+                                        onClick={() => onDecline?.()}
+                                        className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95"
+                                    >
+                                        <div className="absolute inset-0 bg-linear-to-r from-green-600 to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                        <span className="relative text-sm font-bold text-white">Done</span>
                                     </button>
                                 </div>
                             )}

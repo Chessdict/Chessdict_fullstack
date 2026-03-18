@@ -15,8 +15,11 @@ import {
 } from "@/lib/contract";
 import { erc20Abi } from "@/lib/erc20-abi";
 import { parseUnits, decodeEventLog } from "viem";
+import { baseSepolia, base } from "viem/chains";
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
+
+const TARGET_CHAIN = CHESSDICT_CHAIN_ID === baseSepolia.id ? baseSepolia : base;
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -111,8 +114,33 @@ export function useChessdict() {
 
   const ensureNetwork = useCallback(async () => {
     if (chainId !== CHESSDICT_CHAIN_ID) {
-      toast.info("Switching to Base Sepolia…");
-      await switchChain({ chainId: CHESSDICT_CHAIN_ID });
+      toast.info(`Switching to ${TARGET_CHAIN.name}…`);
+      try {
+        await switchChain({ chainId: CHESSDICT_CHAIN_ID });
+      } catch (err: any) {
+        // 4902 = chain not added to wallet — add it first, then switch
+        if (err?.code === 4902 || err?.cause?.code === 4902) {
+          const provider = (window as any).ethereum;
+          if (provider) {
+            await provider.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: `0x${CHESSDICT_CHAIN_ID.toString(16)}`,
+                chainName: TARGET_CHAIN.name,
+                nativeCurrency: TARGET_CHAIN.nativeCurrency,
+                rpcUrls: [TARGET_CHAIN.rpcUrls.default.http[0]],
+                blockExplorerUrls: TARGET_CHAIN.blockExplorers
+                  ? [TARGET_CHAIN.blockExplorers.default.url]
+                  : [],
+              }],
+            });
+            // Retry switch after adding
+            await switchChain({ chainId: CHESSDICT_CHAIN_ID });
+          }
+        } else {
+          throw err;
+        }
+      }
     }
   }, [chainId, switchChain]);
 
@@ -125,6 +153,7 @@ export function useChessdict() {
         functionName: "approve",
         args: [CHESSDICT_ADDRESS, amount],
         chainId: CHESSDICT_CHAIN_ID,
+        gas: BigInt(100_000),
       });
       await publicClient?.waitForTransactionReceipt({ hash });
     },
@@ -220,6 +249,7 @@ export function useChessdict() {
           functionName: "createGameSingle",
           args: [tokenAddress, stakeWei],
           chainId: CHESSDICT_CHAIN_ID,
+          gas: BigInt(300_000),
         });
         const receipt = await publicClient?.waitForTransactionReceipt({ hash });
         toast.success("Transaction confirmed!");
@@ -273,6 +303,7 @@ export function useChessdict() {
             functionName: "joinGameSingle",
             args: [gameId],
             chainId: CHESSDICT_CHAIN_ID,
+            gas: BigInt(300_000),
           }),
         "Step 2/2: Joining game on-chain…",
       );
@@ -290,6 +321,7 @@ export function useChessdict() {
             functionName: "cancelGameSingle",
             args: [gameId],
             chainId: CHESSDICT_CHAIN_ID,
+            gas: BigInt(200_000),
           }),
         "Cancelling game…",
       );
@@ -307,6 +339,7 @@ export function useChessdict() {
             functionName: "claimPrizeSingle",
             args: [gameId],
             chainId: CHESSDICT_CHAIN_ID,
+            gas: BigInt(200_000),
           }),
         "Claiming prize…",
       );

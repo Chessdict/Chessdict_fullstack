@@ -1285,15 +1285,9 @@ app.prepare().then(async () => {
           try {
             const g = await prisma.game.findUnique({ where: { id: roomId } });
             if (g && g.status === "WAITING") {
-              // Settle on-chain as draw to refund Player 1's stake
-              if (g.onChainGameId) {
-                await settleStakedGame(g.onChainGameId, null, true).catch((err) =>
-                  console.error(`[STAKE] Refund settlement failed for game ${roomId}:`, err)
-                );
-              }
               await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
-              io.to(roomId).emit("stakeTimeout", { roomId });
-              console.log(`[STAKE] 120s timeout — game ${roomId} aborted, stake refunded`);
+              io.to(roomId).emit("stakeTimeout", { roomId, onChainGameId: g.onChainGameId });
+              console.log(`[STAKE] 120s timeout — game ${roomId} aborted (Player 1 must cancel on-chain to reclaim)`);
               cleanupRegularGame(roomId);
             }
           } catch (e) {
@@ -1354,26 +1348,19 @@ app.prepare().then(async () => {
         const timeout = stakeTimeouts.get(roomId);
         if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(roomId); }
 
-        // Settle on-chain as draw to refund Player 1's stake
-        if (game.onChainGameId) {
-          await settleStakedGame(game.onChainGameId, null, true).catch((err) =>
-            console.error(`[STAKE] Refund settlement failed for game ${roomId}:`, err)
-          );
-        }
-
         // Abort the game
         await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
 
-        // Notify Player1 (white) so they can re-queue
+        // Notify Player1 (white) so they can cancel on-chain and reclaim stake
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
         if (whitePlayer) {
           const whiteSid = userSocketMap.get(whitePlayer.walletAddress);
           if (whiteSid) {
-            io.to(whiteSid).emit("opponentDeclinedStake", { roomId });
+            io.to(whiteSid).emit("opponentDeclinedStake", { roomId, onChainGameId: game.onChainGameId });
           }
         }
 
-        console.log(`[STAKE] Player2 declined stake — game ${roomId} aborted, stake refunded`);
+        console.log(`[STAKE] Player2 declined stake — game ${roomId} aborted (Player 1 must cancel on-chain to reclaim)`);
         cleanupRegularGame(roomId);
       } catch (e) {
         console.error("[STAKE] stakeDeclined error:", e);
@@ -2105,21 +2092,14 @@ app.prepare().then(async () => {
                   const timeout = stakeTimeouts.get(activeRoomId);
                   if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(activeRoomId); }
 
-                  // Settle on-chain as draw to refund Player 1's stake
-                  if (game.onChainGameId) {
-                    await settleStakedGame(game.onChainGameId, null, true).catch((err) =>
-                      console.error(`[DISCONNECT] Refund settlement failed for game ${activeRoomId}:`, err)
-                    );
-                  }
-
                   await prisma.game.update({ where: { id: activeRoomId }, data: { status: "ABORTED" } });
 
-                  // Notify Player 1 (white) so they can re-queue
+                  // Notify Player 1 (white) so they can cancel on-chain and reclaim stake
                   const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
                   if (whitePlayer) {
                     const whiteSid = userSocketMap.get(whitePlayer.walletAddress);
                     if (whiteSid) {
-                      io.to(whiteSid).emit("opponentDeclinedStake", { roomId: activeRoomId });
+                      io.to(whiteSid).emit("opponentDeclinedStake", { roomId: activeRoomId, onChainGameId: game.onChainGameId });
                     }
                   }
 

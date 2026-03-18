@@ -564,7 +564,11 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                   return;
                 }
                 if (stakeEnabled && selectedToken && stakeAmount) {
-                  const decimals = (tokenDecimalsData as number) ?? 18;
+                  if (tokenDecimalsData == null) {
+                    toast.error("Loading token info, please try again");
+                    return;
+                  }
+                  const decimals = tokenDecimalsData as number;
                   const ok = await createGameSingle(selectedToken, stakeAmount, decimals);
                   if (!ok) return; // tx rejected or failed — don't send challenge
                   setStakeToken(selectedToken);
