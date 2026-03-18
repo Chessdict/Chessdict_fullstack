@@ -2161,13 +2161,15 @@ app.prepare().then(async () => {
                       markGameCompleted(activeRoomId, 10).catch(() => {});
                       setTimeout(() => recentlyCompletedGames.delete(activeRoomId), 10000);
 
-                      const gameOverPayload = { winner: "opponent", reason: "disconnection", ratings: newRatings };
-                      io.to(activeRoomId).emit("gameOver", gameOverPayload);
+                      const gameOverPayload = { winner: winnerColor, reason: "disconnection", ratings: newRatings };
 
-                      // Direct emit to opponent for reliability
+                      // Send only to the winner (opponent of disconnected player), not to the whole room
                       const opponentWallet = whiteUser?.walletAddress === disconnectedUserId ? blackUser?.walletAddress : whiteUser?.walletAddress;
                       const opponentSid = opponentWallet ? userSocketMap.get(opponentWallet) : null;
                       if (opponentSid) io.to(opponentSid).emit("gameOver", gameOverPayload);
+
+                      // Also broadcast to room for any other listeners, using the actual winner color
+                      io.to(activeRoomId).emit("gameOver", gameOverPayload);
 
                       console.log(`[DISCONNECT] Game ${activeRoomId} forfeited by ${disconnectedUserId}. Winner: ${winnerColor}`);
                     }

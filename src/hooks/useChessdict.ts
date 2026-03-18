@@ -90,6 +90,21 @@ export function useTokenBalance(
   });
 }
 
+export function useTokenAllowance(
+  tokenAddress: `0x${string}` | null,
+  ownerAddress: `0x${string}` | undefined,
+) {
+  return useReadContract({
+    address: tokenAddress ?? undefined,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args:
+      ownerAddress ? [ownerAddress, CHESSDICT_ADDRESS] : undefined,
+    query: { enabled: !!tokenAddress && !!ownerAddress },
+    chainId: CHESSDICT_CHAIN_ID,
+  });
+}
+
 // ─── Write Hook ───────────────────────────────────────────────────────────────
 
 /**
@@ -160,8 +175,24 @@ export function useChessdict() {
     [writeContractAsync, publicClient],
   );
 
+  /** Check current allowance for the Chessdict contract. */
+  const checkAllowance = useCallback(
+    async (tokenAddress: `0x${string}`): Promise<bigint> => {
+      if (!address || !publicClient) return BigInt(0);
+      const allowance = await publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [address, CHESSDICT_ADDRESS],
+      });
+      return allowance as bigint;
+    },
+    [address, publicClient],
+  );
+
   /**
-   * Runs approve → write → confirm.
+   * Runs (approve if needed) → write → confirm.
+   * Skips the approval step if the current allowance already covers the amount.
    * Used by any action that requires a token stake (create, join).
    */
   const executeStakedWrite = useCallback(
@@ -178,7 +209,14 @@ export function useChessdict() {
       try {
         setIsLoading(true);
         await ensureNetwork();
-        await approveToken(tokenAddress, amount);
+
+        const currentAllowance = await checkAllowance(tokenAddress);
+        if (currentAllowance < amount) {
+          await approveToken(tokenAddress, amount);
+        } else {
+          toast.info("Allowance sufficient — skipping approval");
+        }
+
         toast.info(label);
         const hash = await writeFn();
         await publicClient?.waitForTransactionReceipt({ hash });
@@ -191,7 +229,7 @@ export function useChessdict() {
         setIsLoading(false);
       }
     },
-    [address, ensureNetwork, approveToken, publicClient],
+    [address, ensureNetwork, approveToken, checkAllowance, publicClient],
   );
 
   /**
@@ -241,8 +279,15 @@ export function useChessdict() {
         setIsLoading(true);
         await ensureNetwork();
         const stakeWei = parseUnits(stakeAmount, decimals);
-        await approveToken(tokenAddress, stakeWei);
-        toast.info("Step 2/2: Creating game on-chain…");
+
+        const currentAllowance = await checkAllowance(tokenAddress);
+        if (currentAllowance < stakeWei) {
+          await approveToken(tokenAddress, stakeWei);
+        } else {
+          toast.info("Allowance sufficient — skipping approval");
+        }
+
+        toast.info("Creating game on-chain…");
         const hash = await writeContractAsync({
           address: CHESSDICT_ADDRESS,
           abi: chessdictAbi,
@@ -282,7 +327,7 @@ export function useChessdict() {
         setIsLoading(false);
       }
     },
-    [address, ensureNetwork, approveToken, publicClient, writeContractAsync],
+    [address, ensureNetwork, approveToken, checkAllowance, publicClient, writeContractAsync],
   );
 
   const joinGameSingle = useCallback(
@@ -349,6 +394,9 @@ export function useChessdict() {
 
   return {
     isLoading,
+    checkAllowance,
+    approveToken,
+    ensureNetwork,
     createGameSingle,
     joinGameSingle,
     cancelGameSingle,

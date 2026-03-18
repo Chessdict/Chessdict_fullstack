@@ -15,9 +15,10 @@ import {
   useTokenSymbol,
   useTokenDecimals,
   useTokenBalance,
+  useTokenAllowance,
 } from "@/hooks/useChessdict";
 import { useAccount } from "wagmi";
-import { formatUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
 import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
 
 type Tab = "new-game" | "games" | "players";
@@ -208,8 +209,11 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   const [selectedToken, setSelectedToken] = useState<`0x${string}` | null>(DEFAULT_STAKE_TOKEN);
   const [stakeAmount, setStakeAmount] = useState("");
 
-  const { createGameSingle, isLoading: isStaking } = useChessdict(); // used by friend challenge
+  const { createGameSingle, checkAllowance, approveToken, ensureNetwork, isLoading: isStaking } = useChessdict();
   const { data: tokenDecimalsData } = useTokenDecimals(selectedToken);
+  const { address } = useAccount();
+  const { data: currentAllowance, refetch: refetchAllowance } = useTokenAllowance(selectedToken, address);
+  const [isApproving, setIsApproving] = useState(false);
 
   useEffect(() => {
     if (userId) {
@@ -427,9 +431,36 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             />
 
             <button
-              disabled={stakeEnabled && (!selectedToken || !stakeAmount)}
-              onClick={() => {
+              disabled={(stakeEnabled && (!selectedToken || !stakeAmount)) || isApproving}
+              onClick={async () => {
                 if (stakeEnabled && selectedToken && stakeAmount) {
+                  if (tokenDecimalsData == null) {
+                    toast.error("Loading token info, please try again");
+                    return;
+                  }
+                  const decimals = tokenDecimalsData as number;
+                  const stakeWei = parseUnits(stakeAmount, decimals);
+
+                  // Check if current allowance covers the requested stake
+                  const allowance = await checkAllowance(selectedToken);
+                  if (allowance < stakeWei) {
+                    // Allowance insufficient — prompt user to approve before finding a match
+                    toast.info("Approving token spend before finding a match…");
+                    setIsApproving(true);
+                    try {
+                      await ensureNetwork();
+                      await approveToken(selectedToken, stakeWei);
+                      toast.success("Approval confirmed — finding a match!");
+                    } catch (err: any) {
+                      toast.error(err?.shortMessage ?? err?.message ?? "Approval failed");
+                      return;
+                    } finally {
+                      setIsApproving(false);
+                      refetchAllowance();
+                    }
+                  }
+
+                  // Allowance is sufficient — proceed to find match
                   setStakeToken(selectedToken);
                   onStartGame({
                     staked: true,
@@ -444,7 +475,9 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             >
               <div className="absolute inset-0 border border-white/20 rounded-full" />
               <div className="absolute inset-px rounded-full bg-linear-to-b from-white/10 to-transparent" />
-              <span className="relative font-medium text-white">Start game</span>
+              <span className="relative font-medium text-white">
+                {isApproving ? "Approving…" : "Start game"}
+              </span>
               <div className="absolute bottom-0 h-px w-1/2 bg-white/50 blur-[2px]" />
             </button>
           </div>
