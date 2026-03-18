@@ -2,10 +2,31 @@ import { createServer } from "http";
 import { parse } from "url";
 import next from "next";
 import { Server } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
 import { PrismaClient } from "@prisma/client";
 import { createMatchmaking } from "./lib/matchmaking.mjs";
 import { ethers } from "ethers";
 import { setWinnerSingleAbi } from "./lib/chessdict-abi-server.mjs";
+import {
+  redis,
+  redisPub,
+  redisSub,
+  connectRedis,
+  setGameState,
+  getGameState,
+  deleteGameState,
+  setUserSocket,
+  getUserSocket,
+  deleteUserSocket,
+  setUserActiveGame,
+  getUserActiveGame,
+  deleteUserActiveGame,
+  markGameCompleted,
+  isGameRecentlyCompleted,
+  setGameTimer,
+  getGameTimer,
+  deleteGameTimer,
+} from "./lib/redis.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
@@ -104,7 +125,14 @@ async function updateRatings(game, isDraw = false) {
   return { [winner.walletAddress]: newWinnerRating, [loser.walletAddress]: newLoserRating };
 }
 
-app.prepare().then(() => {
+app.prepare().then(async () => {
+  // Connect Redis before starting the server
+  try {
+    await connectRedis();
+  } catch (err) {
+    console.error("[REDIS] Failed to connect — running without Redis:", err.message);
+  }
+
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url, true);
     handle(req, res, parsedUrl);
@@ -116,6 +144,14 @@ app.prepare().then(() => {
       methods: ["GET", "POST"],
     },
   });
+
+  // Attach Redis adapter for multi-instance Socket.IO support
+  try {
+    io.adapter(createAdapter(redisPub, redisSub));
+    console.log("[SOCKET.IO] Redis adapter attached");
+  } catch (err) {
+    console.error("[SOCKET.IO] Redis adapter failed — using in-memory:", err.message);
+  }
 
   // Expose io globally so server actions can emit events
   globalThis.__io = io;
@@ -136,8 +172,13 @@ app.prepare().then(() => {
 
   function cleanupRegularGame(roomId) {
     gameStateStore.delete(roomId);
+    deleteGameState(roomId).catch(() => {});
+    deleteGameTimer(roomId).catch(() => {});
     for (const [wallet, data] of userActiveGames.entries()) {
-      if (data.roomId === roomId) userActiveGames.delete(wallet);
+      if (data.roomId === roomId) {
+        userActiveGames.delete(wallet);
+        deleteUserActiveGame(wallet).catch(() => {});
+      }
     }
     for (const [wallet, data] of gameDisconnectTimers.entries()) {
       if (data.roomId === roomId) {
@@ -195,6 +236,7 @@ app.prepare().then(() => {
         const newRatings = await updateRatings(updatedGame);
 
         recentlyCompletedGames.add(roomId);
+        markGameCompleted(roomId, 10).catch(() => {});
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
         const payload = { winner: winnerColor, reason: 'timeout', ratings: newRatings };
@@ -1143,10 +1185,14 @@ app.prepare().then(() => {
     if (s1) { s1.join(roomId); activeGames.set(s1.id, roomId); }
     if (s2) { s2.join(roomId); activeGames.set(s2.id, roomId); }
 
-    // Track active game for reconnection
+    // Track active game for reconnection (in-memory + Redis)
     userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
     userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-    gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] });
+    const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] };
+    gameStateStore.set(roomId, initialState);
+    setUserActiveGame(p1.userId, userActiveGames.get(p1.userId)).catch(() => {});
+    setUserActiveGame(p2.userId, userActiveGames.get(p2.userId)).catch(() => {});
+    setGameState(roomId, initialState).catch(() => {});
 
     if (!isStaked) {
       // Non-staked: start timer immediately
@@ -1166,6 +1212,7 @@ app.prepare().then(() => {
 
     if (userId) {
       userSocketMap.set(userId, socket.id);
+      setUserSocket(userId, socket.id).catch(() => {}); // mirror to Redis
 
       // ─── Reconnection: cancel disconnect grace period if exists ───
       const disconnectData = gameDisconnectTimers.get(userId);
@@ -1483,6 +1530,7 @@ app.prepare().then(() => {
         const newRatings = await updateRatings(game, true);
 
         recentlyCompletedGames.add(roomId);
+        markGameCompleted(roomId, 10).catch(() => {});
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
         const gameOverPayload = { winner: "draw", reason: "draw", ratings: newRatings };
@@ -1592,6 +1640,7 @@ app.prepare().then(() => {
 
         // Mark game as recently completed to prevent false disconnect forfeits
         recentlyCompletedGames.add(roomId);
+        markGameCompleted(roomId, 10).catch(() => {});
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to all players in the room
@@ -1671,6 +1720,7 @@ app.prepare().then(() => {
 
         // Mark game as recently completed to prevent false disconnect forfeits
         recentlyCompletedGames.add(roomId);
+        markGameCompleted(roomId, 10).catch(() => {});
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to both players
@@ -1740,10 +1790,14 @@ app.prepare().then(() => {
               io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
               initGameTimer(roomId, DEFAULT_GAME_TIME);
 
-              // Track active game for reconnection
+              // Track active game for reconnection (in-memory + Redis)
               userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
               userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-              gameStateStore.set(roomId, { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] });
+              const challengeInitState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] };
+              gameStateStore.set(roomId, challengeInitState);
+              setUserActiveGame(opponentId, userActiveGames.get(opponentId)).catch(() => {});
+              setUserActiveGame(myId, userActiveGames.get(myId)).catch(() => {});
+              setGameState(roomId, challengeInitState).catch(() => {});
 
               console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
             }
@@ -2080,6 +2134,7 @@ app.prepare().then(() => {
                       const newRatings = await updateRatings(updatedGame);
 
                       recentlyCompletedGames.add(activeRoomId);
+                      markGameCompleted(activeRoomId, 10).catch(() => {});
                       setTimeout(() => recentlyCompletedGames.delete(activeRoomId), 10000);
 
                       const gameOverPayload = { winner: "opponent", reason: "disconnection", ratings: newRatings };
@@ -2110,10 +2165,12 @@ app.prepare().then(() => {
 
       if (userId) {
         userSocketMap.delete(userId);
+        deleteUserSocket(userId).catch(() => {}); // mirror to Redis
       } else {
         for (const [uid, sid] of userSocketMap.entries()) {
           if (sid === socket.id) {
             userSocketMap.delete(uid);
+            deleteUserSocket(uid).catch(() => {}); // mirror to Redis
             console.log(`User ${uid} removed from map (cleanup)`);
             break;
           }
