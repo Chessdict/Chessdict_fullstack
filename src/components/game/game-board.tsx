@@ -13,6 +13,8 @@ import { DrawOfferModal } from "./draw-offer-modal";
 import { GlassBg } from "../glass-bg";
 import { useChessSounds } from "@/hooks/useChessSounds";
 import { SignalStrength } from "./signal-strength";
+import { getMemojiForAddress } from "@/lib/memoji";
+import Image from "next/image";
 
 
 // Helper to format time as MM:SS
@@ -726,10 +728,14 @@ export function GameBoard() {
       {/* Top Info (Opponent) */}
       <div className="flex items-center justify-between rounded-2xl bg-[#1A1A1A]/80 px-4 py-3 border border-white/5">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-amber-700/50 to-amber-900/30 border border-white/10 flex items-center justify-center">
-            <span className="text-xs font-bold text-white/70 uppercase">
-              {gameMode === 'computer' ? 'AI' : opponent?.address.slice(2, 4) || '??'}
-            </span>
+          <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-amber-700/50 to-amber-900/30 border border-white/10 flex items-center justify-center overflow-hidden">
+            {opponent?.memoji ? (
+              <Image src={opponent.memoji} alt="Opponent" width={40} height={40} className="h-full w-full object-contain" />
+            ) : (
+              <span className="text-xs font-bold text-white/70 uppercase">
+                {gameMode === 'computer' ? 'AI' : opponent?.address.slice(2, 4) || '??'}
+              </span>
+            )}
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-white truncate">
@@ -874,8 +880,12 @@ export function GameBoard() {
       {/* Bottom Info (Player) */}
       <div className="flex items-center justify-between rounded-2xl bg-[#1A1A1A]/80 px-4 py-3 border border-white/5">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="h-10 w-10 shrink-0 rounded-full bg-white/10 border border-white/10 flex items-center justify-center">
-            <span className="text-xs font-bold text-white/50">YOU</span>
+          <div className="h-10 w-10 shrink-0 rounded-full bg-white/10 border border-white/10 flex items-center justify-center overflow-hidden">
+            {player?.memoji ? (
+              <Image src={player.memoji} alt="You" width={40} height={40} className="h-full w-full object-contain" />
+            ) : (
+              <span className="text-xs font-bold text-white/50">YOU</span>
+            )}
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-white">You(Player)</p>

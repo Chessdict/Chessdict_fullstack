@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { GameBoard } from "../../components/game/game-board";
 import { GameOptions } from "../../components/game/game-options";
@@ -14,6 +14,7 @@ import { ChallengeModal } from "@/components/game/challenge-modal";
 import { MatchFoundModal } from "@/components/game/match-found-modal";
 import { toast } from "sonner";
 import type { StakeInfo } from "@/components/game/game-options";
+import { getMemojiForAddress } from "@/lib/memoji";
 
 export default function PlayPage() {
   const router = useRouter();
@@ -37,6 +38,7 @@ export default function PlayPage() {
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
+  const searchMemojiRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isConnected && address) {
@@ -44,7 +46,7 @@ export default function PlayPage() {
         .then((result) => {
           if (result.success && result.user) {
             console.log("Logged in with wallet:", result.user);
-            setPlayer({ address, rating: result.user.rating ?? 1200 });
+            setPlayer({ address, rating: result.user.rating ?? 1200, memoji: getMemojiForAddress(address) });
           } else {
             console.error("Login failed:", result.error);
           }
@@ -80,8 +82,8 @@ export default function PlayPage() {
         // Auto-enter match for the creator (white) who was waiting
         setRoomId(prev.roomId);
         setPlayerColor(prev.color);
-        setOpponent({ address: prev.opponent, rating: prev.opponentRating });
-        setPlayer({ address: address!, rating: prev.playerRating });
+        setOpponent({ address: prev.opponent, rating: prev.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(prev.opponent) });
+        setPlayer({ address: address!, rating: prev.playerRating, memoji: getMemojiForAddress(address!) });
         if (!gameMode) setGameMode("online");
         setStatus("in-progress");
         router.push(`/play/game/${prev.roomId}`);
@@ -119,8 +121,8 @@ export default function PlayPage() {
       console.log("GAME REJOINED EVENT:", data);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
-      setOpponent({ address: data.opponentAddress, rating: data.opponentRating });
-      if (address) setPlayer({ address, rating: data.playerRating });
+      setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
+      if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
       setWhiteTime(data.whiteTime);
       setBlackTime(data.blackTime);
       setRejoinData(data.fen, data.moves);
@@ -169,7 +171,7 @@ export default function PlayPage() {
       }
     } else if (gameMode === 'computer') {
       setPlayerColor("white");
-      setOpponent({ address: 'stockfish', rating: 1500 });
+      setOpponent({ address: 'stockfish', rating: 1500, memoji: getMemojiForAddress('stockfish') });
       setStatus("in-progress");
       console.log("computer mode started");
     }
@@ -199,6 +201,7 @@ export default function PlayPage() {
           <MatchFoundModal
             opponent={pendingMatch.opponent}
             color={pendingMatch.color}
+            memoji={searchMemojiRef.current}
             staked={pendingMatch.staked}
             stakeToken={pendingMatch.stakeToken}
             stakeAmount={pendingMatch.stakeAmount}
@@ -212,8 +215,8 @@ export default function PlayPage() {
               });
               setRoomId(pendingMatch.roomId);
               setPlayerColor(pendingMatch.color);
-              setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating });
-              setPlayer({ address: address!, rating: pendingMatch.playerRating });
+              setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(pendingMatch.opponent) });
+              setPlayer({ address: address!, rating: pendingMatch.playerRating, memoji: getMemojiForAddress(address!) });
               if (!gameMode) setGameMode("online");
               setStatus("in-progress");
               setPendingMatch(null);
@@ -240,6 +243,9 @@ export default function PlayPage() {
         onClose={() => {
           socket?.emit("leaveQueue");
           setIsSearchOpen(false);
+        }}
+        onMemojiSelected={(memoji) => {
+          searchMemojiRef.current = memoji;
         }}
       />
     </main>

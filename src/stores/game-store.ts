@@ -3,6 +3,7 @@ import { create } from "zustand";
 export type Player = {
   address: string;
   rating: number;
+  memoji?: string;
 };
 
 export type GameStatus = "waiting" | "matched" | "in-progress" | "finished";

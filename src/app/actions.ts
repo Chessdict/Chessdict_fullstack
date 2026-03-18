@@ -191,8 +191,65 @@ export async function createGame(
   }
 }
 
-export async function getGameHistory(walletAddress: string) {
-  if (!walletAddress) return { success: false, error: "Wallet address is required" };
+export async function getUserProfile(walletAddress: string) {
+  if (!walletAddress)
+    return { success: false, error: "Wallet address is required" };
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { walletAddress },
+      select: { id: true, walletAddress: true, rating: true, createdAt: true },
+    });
+
+    if (!user) return { success: false, error: "User not found" };
+
+    const [totalGames, wins, draws] = await Promise.all([
+      prisma.game.count({
+        where: {
+          status: "COMPLETED",
+          OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+        },
+      }),
+      prisma.game.count({
+        where: { status: "COMPLETED", winnerId: user.id },
+      }),
+      prisma.game.count({
+        where: {
+          status: "COMPLETED",
+          winnerId: null,
+          OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+        },
+      }),
+    ]);
+
+    const losses = totalGames - wins - draws;
+
+    return {
+      success: true,
+      profile: {
+        walletAddress: user.walletAddress,
+        rating: user.rating,
+        joinedAt: user.createdAt.toISOString(),
+        totalGames,
+        wins,
+        losses,
+        draws,
+        winRate: totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0,
+      },
+    };
+  } catch (error) {
+    console.error("Error fetching user profile:", error);
+    return { success: false, error: "Failed to fetch user profile" };
+  }
+}
+
+export async function getGameHistory(
+  walletAddress: string,
+  page = 1,
+  pageSize = 10,
+) {
+  if (!walletAddress)
+    return { success: false, error: "Wallet address is required" };
 
   try {
     const user = await prisma.user.findUnique({
@@ -200,21 +257,31 @@ export async function getGameHistory(walletAddress: string) {
       select: { id: true },
     });
 
-    if (!user) return { success: true, games: [] };
+    if (!user) return { success: true, games: [], totalPages: 0 };
 
-    const games = await prisma.game.findMany({
-      where: {
-        status: "COMPLETED",
-        OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 20,
-      include: {
-        whitePlayer: { select: { id: true, walletAddress: true, rating: true } },
-        blackPlayer: { select: { id: true, walletAddress: true, rating: true } },
-        winner: { select: { id: true, walletAddress: true } },
-      },
-    });
+    const where = {
+      status: "COMPLETED" as const,
+      OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+    };
+
+    const [games, totalCount] = await Promise.all([
+      prisma.game.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          whitePlayer: {
+            select: { id: true, walletAddress: true, rating: true },
+          },
+          blackPlayer: {
+            select: { id: true, walletAddress: true, rating: true },
+          },
+          winner: { select: { id: true, walletAddress: true } },
+        },
+      }),
+      prisma.game.count({ where }),
+    ]);
 
     const mapped = games.map((g) => {
       const isWhite = g.whitePlayerId === user.id;
@@ -235,7 +302,11 @@ export async function getGameHistory(walletAddress: string) {
       };
     });
 
-    return { success: true, games: mapped };
+    return {
+      success: true,
+      games: mapped,
+      totalPages: Math.ceil(totalCount / pageSize),
+    };
   } catch (error) {
     console.error("Error fetching game history:", error);
     return { success: false, error: "Failed to fetch game history" };
