@@ -12,7 +12,7 @@ const PIECE_CODES = ['K', 'Q', 'R', 'B', 'N', 'P'] as const;
 const customPieces: Record<string, () => React.JSX.Element> = {};
 for (const code of PIECE_CODES) {
   const isPawn = code === 'P';
-  const size = isPawn ? '55%' : '65%';
+  const size = isPawn ? '68%' : '75%';
   customPieces[`w${code}`] = () => (
     <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <img src={`/pieces/w${code}.svg`} alt={`w${code}`} style={{ width: size, height: size }} />
@@ -349,9 +349,10 @@ export function TournamentGameBoard({
   }, [opponentDeadline]);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-[clamp(480px,calc(100vh-7rem),1300px)] flex-col gap-2 sm:gap-4">
+     <div className="flex flex-col gap-2 sm:gap-3 rounded-2xl bg-[#1A1A1A]/80 border border-white/5 px-4 py-3 sm:px-5 sm:py-4">
       {/* Opponent timer + info */}
-      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-4 backdrop-blur-xl border border-white/5 shadow-2xl">
+      <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 overflow-hidden rounded-full bg-gradient-to-br from-red-500/20 to-transparent border border-white/10 ring-2 ring-red-500/20">
             <div className="h-full w-full flex items-center justify-center text-xs font-bold text-white/40 uppercase">
@@ -407,9 +408,8 @@ export function TournamentGameBoard({
       )}
 
       {/* Chess Board */}
-      <div className="relative group mx-auto w-full max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
-        <div className="absolute -inset-1 bg-gradient-to-r from-blue-600/20 to-purple-600/20 rounded-xl blur-lg group-hover:opacity-100 opacity-50 transition-opacity" />
-        <div className="relative h-full w-full overflow-hidden rounded-xl border border-white/10 shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] bg-[#1a1816]">
+      <div className="relative w-full aspect-square">
+        <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#1a1816]">
           <Chessboard
             key={`tboard-${gameId}-${orientation}`}
             options={{
@@ -432,7 +432,7 @@ export function TournamentGameBoard({
       </div>
 
       {/* Player timer + info */}
-      <div className="flex items-center justify-between rounded-xl bg-[#0A0A0A]/60 p-4 backdrop-blur-xl border border-white/5 shadow-2xl">
+      <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 overflow-hidden rounded-full bg-gradient-to-br from-blue-500/20 to-transparent border border-blue-500/30 ring-2 ring-blue-500/20">
             <div className="h-full w-full flex items-center justify-center text-xs font-bold text-blue-400">
@@ -463,6 +463,8 @@ export function TournamentGameBoard({
         </div>
         </div>
       </div>
+
+     </div>
 
       {/* Resign button */}
       {!gameResult && (

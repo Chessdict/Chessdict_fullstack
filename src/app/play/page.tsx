@@ -176,9 +176,8 @@ export default function PlayPage() {
   return (
     <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
-
       {/* Main Content */}
-      <div className="container relative mx-auto flex flex-1 flex-col items-center gap-6 px-3 pt-20 pb-6 sm:px-6 sm:pt-32 sm:gap-12 lg:flex-row lg:items-start lg:justify-center">
+      <div className="container relative mx-auto flex flex-1 flex-col items-center gap-6 px-3 pb-6 sm:px-6 sm:gap-12 lg:flex-row lg:items-start">
         {incomingChallenge && (
           <ChallengeModal
             from={incomingChallenge}
@@ -224,7 +223,7 @@ export default function PlayPage() {
           />
         )}
         {/* Left Panel - Chess Board */}
-        <div className="w-full max-w-[720px] flex-none">
+        <div className="w-full max-w-[720px]">
           <GameBoard />
         </div>
 
