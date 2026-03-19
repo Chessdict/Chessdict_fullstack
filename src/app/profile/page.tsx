@@ -114,7 +114,7 @@ export default function ProfilePage() {
         <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
             <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
 
-            <div className="container relative mx-auto flex flex-1 flex-col gap-6 px-3 pt-20 pb-6 sm:px-6 sm:pt-32 sm:gap-8 max-w-2xl">
+            <div className="container relative mx-auto flex flex-1 flex-col gap-6 px-3 pb-6 sm:px-6 sm:gap-8 max-w-2xl">
                 {/* Wallet Address */}
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6">
                     <p className="text-xs uppercase tracking-widest text-white/40 mb-3">Wallet Address</p>

@@ -39,7 +39,7 @@ const PIECE_CODES = ['K', 'Q', 'R', 'B', 'N', 'P'] as const;
 const customPieces: Record<string, () => React.JSX.Element> = {};
 for (const code of PIECE_CODES) {
   const isPawn = code === 'P';
-  const size = isPawn ? '58%' : '65%';
+  const size = isPawn ? '68%' : '75%';
   customPieces[`w${code}`] = () => (
     <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <img src={`/pieces/w${code}.svg`} alt={`w${code}`} style={{ width: size, height: size }} />
@@ -742,9 +742,10 @@ export function GameBoard() {
   const isMyTurn = currentTurn === playerTurnCode;
 
   return (
-    <div className="flex flex-col gap-2 sm:gap-4 w-full">
+    <div className="mx-auto flex w-full max-w-[clamp(480px,calc(100vh-7rem),1300px)] flex-col gap-2 sm:gap-4">
+     <div className="flex flex-col gap-2 sm:gap-3 rounded-2xl bg-[#1A1A1A]/80 border border-white/5 px-4 py-3 sm:px-5 sm:py-4">
       {/* Top Info (Opponent) */}
-      <div className="flex items-center justify-between rounded-2xl bg-[#1A1A1A]/80 px-4 py-3 border border-white/5">
+      <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-amber-700/50 to-amber-900/30 border border-white/10 flex items-center justify-center overflow-hidden">
             {opponent?.memoji ? (
@@ -793,9 +794,8 @@ export function GameBoard() {
       )}
 
       {/* Main Board Container */}
-      <div className="relative group mx-auto w-full max-w-[min(720px,calc(100vw-24px))] sm:max-w-[min(720px,65vh)] aspect-square transition-transform duration-500">
-        <div className="absolute -inset-1 bg-linear-to-r from-blue-600/20 to-purple-600/20 rounded-xl blur-lg group-hover:opacity-100 opacity-50 transition-opacity" />
-        <div className="relative h-full w-full overflow-hidden rounded-xl border border-white/10 shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] bg-[#1a1816]">
+        <div className="relative w-full aspect-square">
+        <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#1a1816]">
           <Chessboard
             key={`board-${boardKey}-${orientation}`}
             options={{
@@ -897,7 +897,7 @@ export function GameBoard() {
       </div>
 
       {/* Bottom Info (Player) */}
-      <div className="flex items-center justify-between rounded-2xl bg-[#1A1A1A]/80 px-4 py-3 border border-white/5">
+      <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-10 w-10 shrink-0 rounded-full bg-white/10 border border-white/10 flex items-center justify-center overflow-hidden">
             {player?.memoji ? (
@@ -927,6 +927,7 @@ export function GameBoard() {
           </div>
         </div>
       </div>
+     </div>
 
       {/* Draw / End Game Controls */}
       {status === 'in-progress' && (
