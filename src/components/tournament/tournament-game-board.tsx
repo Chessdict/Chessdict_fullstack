@@ -7,6 +7,24 @@ import { useTournamentStore } from "@/stores/tournament-store";
 import { type Socket } from "socket.io-client";
 import { SignalStrength } from "@/components/game/signal-strength";
 
+// Custom chess piece renderer using SVGs from /pieces/
+const PIECE_CODES = ['K', 'Q', 'R', 'B', 'N', 'P'] as const;
+const customPieces: Record<string, () => React.JSX.Element> = {};
+for (const code of PIECE_CODES) {
+  const isPawn = code === 'P';
+  const size = isPawn ? '55%' : '65%';
+  customPieces[`w${code}`] = () => (
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <img src={`/pieces/w${code}.svg`} alt={`w${code}`} style={{ width: size, height: size }} />
+    </div>
+  );
+  customPieces[`b${code}`] = () => (
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <img src={`/pieces/b${code}.svg`} alt={`b${code}`} style={{ width: size, height: size }} />
+    </div>
+  );
+}
+
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
@@ -402,6 +420,7 @@ export function TournamentGameBoard({
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: moveSquares,
+              pieces: customPieces,
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string | null }) => {
                 if (!sourceSquare || !targetSquare) return false;

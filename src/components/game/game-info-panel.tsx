@@ -7,6 +7,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { getGameHistory } from "@/app/actions";
+import { getMemojiForAddress } from "@/lib/memoji";
 
 type ChatMessage = {
   sender: string;
@@ -214,6 +215,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     ? (gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`)
     : "Opponent";
   const playerName = player ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : "You";
+  const playerMemoji = player?.memoji || (address ? getMemojiForAddress(address) : "/svgs/memoji/Frame 1000003460.svg");
+  const opponentMemoji = opponent?.memoji || (opponent?.address ? getMemojiForAddress(opponent.address) : "/svgs/memoji/Frame 1000003461.svg");
 
   const pieceIcons: Record<string, string> = {
     p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
@@ -472,13 +475,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
               {moves.length > 0 && (
                 <div className="flex items-center justify-center gap-3 pt-2">
                   {[
-                    { path: "M11 17L6 12L11 7M18 17L13 12L18 7", label: "First", onClick: () => { stopAutoPlay(); setViewMoveIndex(0); } },
-                    { path: "M15 18L9 12L15 6", label: "Prev", onClick: () => {
+                    { icon: "/svgs/icons/double-back.svg", label: "First", onClick: () => { stopAutoPlay(); setViewMoveIndex(0); } },
+                    { icon: "/svgs/icons/back.svg", label: "Prev", onClick: () => {
                       stopAutoPlay();
                       if (viewMoveIndex === null) setViewMoveIndex(moves.length - 2);
                       else if (viewMoveIndex > 0) setViewMoveIndex(viewMoveIndex - 1);
                     }},
-                    { path: isAutoPlaying ? "M6 4h4v16H6zM14 4h4v16h-4z" : "M5 3L19 12L5 21Z", label: "Play", fill: true, onClick: () => {
+                    { icon: "/svgs/icons/play.svg", label: "Play", onClick: () => {
                       if (isAutoPlaying) {
                         stopAutoPlay();
                       } else if (viewMoveIndex !== null) {
@@ -487,13 +490,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                         // Already at live — do nothing
                       }
                     }},
-                    { path: "M9 18L15 12L9 6", label: "Next", onClick: () => {
+                    { icon: "/svgs/icons/forward.svg", label: "Next", onClick: () => {
                       stopAutoPlay();
                       if (viewMoveIndex !== null && viewMoveIndex < moves.length - 1) setViewMoveIndex(viewMoveIndex + 1);
                       else setViewMoveIndex(null);
                     }},
-                    { path: "M13 17L18 12L13 7M6 17L11 12L6 7", label: "Last", onClick: () => { stopAutoPlay(); setViewMoveIndex(null); } },
-                  ].map(({ path, label, fill, onClick }) => (
+                    { icon: "/svgs/icons/double-forward.svg", label: "Last", onClick: () => { stopAutoPlay(); setViewMoveIndex(null); } },
+                  ].map(({ icon, label, onClick }) => (
                     <button
                       key={label}
                       onClick={onClick}
@@ -503,9 +506,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                       )}
                       title={label}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill={fill ? "currentColor" : "none"} stroke={fill ? "none" : "currentColor"} strokeWidth="2.5">
-                        <path d={path} />
-                      </svg>
+                      {label === "Play" && isAutoPlaying ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                          <path d="M6 4h4v16H6zM14 4h4v16h-4z" />
+                        </svg>
+                      ) : (
+                        <img src={icon} alt={label} width={24} height={294} />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -515,43 +522,61 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
           {/* Chat Section */}
           {isGameActive && activeSubTab === "moves" && (
-            <div className="flex flex-col gap-2 border-t border-white/10 pt-4">
-              <div>
+            <div className="flex flex-col gap-3 border-t border-white/10 pt-4">
+              <div className="px-1">
                 <p className="text-xs font-bold uppercase tracking-wider text-white/60">New Game</p>
                 <p className="text-[11px] text-white/40 mt-0.5">
                   {opponentName} VS {playerName} (You)
                 </p>
               </div>
-              <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-3 max-h-[140px] min-h-[80px] overflow-y-auto elegant-scrollbar">
-                {chatMessages.length === 0 ? (
-                  <p className="text-center text-[11px] text-white/20 py-2">No messages yet</p>
-                ) : (
-                  chatMessages.map((msg, i) => {
-                    const isMe = msg.sender === address;
-                    const senderName = isMe ? playerName : opponentName;
-                    return (
-                      <div key={i} className="flex flex-col gap-0.5 items-start">
-                        <span className="text-[10px] text-white/30">{senderName}</span>
-                        <div className="rounded-2xl rounded-bl-md px-3 py-1.5 text-sm max-w-[80%] break-words bg-white/10 text-white/90">
-                          {msg.text}
+              <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                <div className="flex max-h-[150px] min-h-[96px] flex-col gap-3 overflow-y-auto elegant-scrollbar">
+                  {chatMessages.length === 0 ? (
+                    <p className="py-6 text-center text-[11px] text-white/20">No messages yet</p>
+                  ) : (
+                    chatMessages.map((msg, i) => {
+                      const isMe = msg.sender === address;
+                      const senderMemoji = isMe ? playerMemoji : opponentMemoji;
+                      return (
+                        <div key={i} className="flex">
+                          <div className="flex max-w-[85%] items-center gap-2 rounded-tl-[18px] rounded-tr-[18px] rounded-bl-[18px] rounded-br-[1px] bg-white/[0.08] p-1.5 pr-3.5">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/8">
+                              <img src={senderMemoji} alt="" className="h-[30px] w-[30px] rounded-full object-contain" />
+                            </div>
+                            <span className="text-sm font-medium leading-snug text-white">{msg.text}</span>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })
-                )}
-                <div ref={chatEndRef} />
-              </div>
-              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] backdrop-blur-sm px-4 py-2.5">
-                <input
-                  type="text"
-                  placeholder="Send message..."
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
-                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/20"
-                  disabled={!isGameActive || gameMode === "computer"}
-                />
-
+                      );
+                    })
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+                <div className="mt-4 rounded-[28px] border border-white/18 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="text"
+                      placeholder="Send message..."
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
+                      className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/28"
+                      disabled={!isGameActive || gameMode === "computer"}
+                    />
+                    <button
+                      type="button"
+                      onClick={sendChatMessage}
+                      disabled={!isGameActive || gameMode === "computer" || !chatInput.trim()}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#757575] transition hover:scale-[1.02] disabled:opacity-50"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="7.5" />
+                        <path d="M9 14c.7.7 1.6 1 3 1s2.3-.3 3-1" />
+                        <circle cx="9.2" cy="10" r="0.8" fill="currentColor" stroke="none" />
+                        <circle cx="14.8" cy="10" r="0.8" fill="currentColor" stroke="none" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
