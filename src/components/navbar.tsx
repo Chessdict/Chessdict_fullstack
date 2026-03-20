@@ -32,7 +32,7 @@ export function Navbar() {
   return (
     <header className="w-full">
       {/* Desktop Navbar */}
-      <div className="pointer-events-none relative z-[2000] justify-center px-4 py-6 hidden md:flex">
+      <div className="pointer-events-none fixed inset-x-0 top-6 z-[2000] justify-center px-4 hidden md:flex">
         <motion.nav
           className="pointer-events-auto nav-glass relative flex h-[86px] w-full max-w-6xl items-center justify-between rounded-full px-8"
           initial={{ opacity: 0, y: -20 }}
