@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { ConnectWallet } from "./connect-wallet";
 import { Menu } from "lucide-react";
@@ -29,12 +30,14 @@ const navItems = [
 export function Navbar() {
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  const pathname = usePathname();
+
   return (
     <header className="w-full">
       {/* Desktop Navbar */}
-      <div className="pointer-events-none relative z-[2000] justify-center px-4 py-6 hidden md:flex">
+      <div className={`${pathname === '/' ? 'fixed inset-x-0 top-6' : 'relative py-6'} pointer-events-none z-2000 justify-center px-4 hidden md:flex`}>
         <motion.nav
-          className="pointer-events-auto nav-glass relative flex h-[86px] w-full max-w-6xl items-center justify-between rounded-full px-8"
+          className="pointer-events-auto nav-glass relative flex h-21.5 w-full max-w-6xl items-center justify-between rounded-full px-8"
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
@@ -70,7 +73,7 @@ export function Navbar() {
             />
           </Link>
 
-          <div className="relative bg-white/5 py-[15px] px-[30px] rounded-full flex items-start gap-8 text-sm font-medium text-white/70">
+          <div className="relative bg-white/5 py-3.75 px-7.5 rounded-full flex items-start gap-8 text-sm font-medium text-white/70">
             {navItems.map((item) => (
               <Link key={item.label} href={item.href} className="transition hover:text-white">
                 {item.label}
@@ -85,7 +88,7 @@ export function Navbar() {
       {/* Mobile Navbar */}
       <div className="pointer-events-none relative z-30 flex justify-center py-4 md:hidden">
         <motion.nav
-          className="pointer-events-auto nav-glass relative flex h-[50px] w-full items-center justify-between rounded-full"
+          className="pointer-events-auto nav-glass relative flex h-12.5 w-full items-center justify-between rounded-full"
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
