@@ -6,16 +6,19 @@ import { GlassButton } from "./glass-button";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { User, LogOut, ChevronDown } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { User, LogOut, ChevronDown, X } from "lucide-react";
 
 export function ConnectWallet() {
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const { disconnect } = useDisconnect();
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const buttonRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, right: 0 });
+  const [isMobile, setIsMobile] = useState(false);
 
   const updatePosition = useCallback(() => {
     if (!buttonRef.current) return;
@@ -27,6 +30,14 @@ export function ConnectWallet() {
   }, []);
 
   useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen || isMobile) return;
     function handleClickOutside(e: MouseEvent) {
       const target = e.target as Node;
       if (
@@ -38,7 +49,7 @@ export function ConnectWallet() {
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [isOpen, isMobile]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -51,8 +62,31 @@ export function ConnectWallet() {
     };
   }, [isOpen, updatePosition]);
 
+  // Lock body scroll when mobile bottom sheet is open
+  useEffect(() => {
+    if (isOpen && isMobile) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isOpen, isMobile]);
+
   if (isConnected && address) {
     const shortenedAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
+
+    const handleProfile = () => {
+      setIsOpen(false);
+      router.push("/profile");
+    };
+
+    const handleDisconnect = () => {
+      setIsOpen(false);
+      disconnect();
+    };
+
     return (
       <div ref={buttonRef}>
         <GlassButton onClick={() => setIsOpen(!isOpen)} className="text-xs sm:text-sm">
@@ -65,31 +99,74 @@ export function ConnectWallet() {
         </GlassButton>
 
         {isOpen && createPortal(
-          <div
-            ref={dropdownRef}
-            style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right }}
-            className="w-48 overflow-hidden rounded-xl border border-white/10 bg-black/90 backdrop-blur-xl shadow-2xl z-[9999]"
-          >
-            <Link
-              href="/profile"
-              onClick={() => setIsOpen(false)}
-              className="flex items-center gap-3 px-4 py-3 text-sm text-white/80 transition hover:bg-white/10 hover:text-white"
+          isMobile ? (
+            /* Mobile: bottom sheet */
+            <div className="fixed inset-0 z-9999">
+              <div
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onMouseDown={() => setIsOpen(false)}
+              />
+              <div
+                ref={dropdownRef}
+                className="absolute bottom-0 left-0 right-0 rounded-t-2xl border-t border-white/10 bg-[#1a1a1a] pb-[env(safe-area-inset-bottom)] animate-in slide-in-from-bottom duration-200"
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {/* Handle bar */}
+                <div className="flex justify-center pt-3 pb-1">
+                  <div className="h-1 w-10 rounded-full bg-white/20" />
+                </div>
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                  <p className="text-sm font-medium text-white/60 font-mono">{shortenedAddress}</p>
+                  <button
+                    onClick={() => setIsOpen(false)}
+                    className="rounded-full p-1.5 text-white/40 hover:bg-white/10 hover:text-white transition"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <button
+                  onClick={handleProfile}
+                  className="flex w-full items-center gap-3 px-4 py-4 text-base text-white/80 transition active:bg-white/10"
+                >
+                  <User className="h-5 w-5" />
+                  Profile
+                </button>
+                <div className="border-t border-white/10" />
+                <button
+                  onClick={handleDisconnect}
+                  className="flex w-full items-center gap-3 px-4 py-4 text-base text-red-400 transition active:bg-white/10"
+                >
+                  <LogOut className="h-5 w-5" />
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Desktop: positioned dropdown */
+            <div
+              ref={dropdownRef}
+              style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right }}
+              className="w-48 overflow-hidden rounded-xl border border-white/10 bg-black/90 backdrop-blur-xl shadow-2xl z-9999"
             >
-              <User className="h-4 w-4" />
-              Profile
-            </Link>
-            <div className="border-t border-white/10" />
-            <button
-              onClick={() => {
-                disconnect();
-                setIsOpen(false);
-              }}
-              className="flex w-full items-center gap-3 px-4 py-3 text-sm text-red-400 transition hover:bg-white/10 hover:text-red-300"
-            >
-              <LogOut className="h-4 w-4" />
-              Disconnect
-            </button>
-          </div>,
+              <Link
+                href="/profile"
+                onClick={() => setIsOpen(false)}
+                className="flex items-center gap-3 px-4 py-3 text-sm text-white/80 transition hover:bg-white/10 hover:text-white"
+              >
+                <User className="h-4 w-4" />
+                Profile
+              </Link>
+              <div className="border-t border-white/10" />
+              <button
+                onClick={handleDisconnect}
+                className="flex w-full items-center gap-3 px-4 py-3 text-sm text-red-400 transition hover:bg-white/10 hover:text-red-300"
+              >
+                <LogOut className="h-4 w-4" />
+                Disconnect
+              </button>
+            </div>
+          ),
           document.body
         )}
       </div>

@@ -46,6 +46,14 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
+@theme {
+  --color-brand-primary-10: #cccccc;
+  --color-brand-primary-100: #662312;
+  --color-brand-primary-200: #ab3c00;
+  --color-brand-primary-300: #ff5e5e;
+  --color-brand-primary-400: #1d1d1d;
+}
+
 .hero-stage {
   position: relative;
   width: clamp(320px, 65vw, 720px);
