@@ -5,15 +5,21 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ConnectWallet } from "./connect-wallet";
 import { Menu } from "lucide-react";
+import { useState } from "react";
 import {
   Sheet,
   SheetClose,
   SheetContent,
+  SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
 
 const navItems = [
   { href: "/play", label: "Play" },
+  { href: "/play", label: "Tournaments" },
+  { href: "/", label: "Creator program" },
+  { href: "/", label: "Blog" },
+  { href: "/", label: "Whitepaper" },
   // { href: "#leaderboard", label: "Leaderboard" },
   // { href: "#community", label: "Community" },
   // { href: "#blog", label: "Blog" },
@@ -21,6 +27,8 @@ const navItems = [
 ];
 
 export function Navbar() {
+  const [sheetOpen, setSheetOpen] = useState(false);
+
   return (
     <header className="w-full">
       {/* Desktop Navbar */}
@@ -62,9 +70,9 @@ export function Navbar() {
             />
           </Link>
 
-          <div className="relative flex items-start gap-8 text-sm font-medium text-white/70">
+          <div className="relative bg-white/5 py-[15px] px-[30px] rounded-full flex items-start gap-8 text-sm font-medium text-white/70">
             {navItems.map((item) => (
-              <Link key={item.href} href={item.href} className="transition hover:text-white">
+              <Link key={item.label} href={item.href} className="transition hover:text-white">
                 {item.label}
               </Link>
             ))}
@@ -83,7 +91,8 @@ export function Navbar() {
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
         >
           <div className="z-20 w-full">
-            <Sheet>
+            <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+              <SheetTitle></SheetTitle>
               <SheetTrigger asChild>
                 <button className="w-full flex justify-between items-center gap-2 pr-5">
                   <Link href="/">
@@ -101,23 +110,22 @@ export function Navbar() {
               </SheetTrigger>
               <SheetContent>
                 <div className="w-full px-4 py-20 space-y-4">
-                  <div className="w-full relative flex items-start gap-8 text-sm font-medium text-white/70">
+                  <div className="w-full relative flex flex-col items-start gap-4 text-sm font-medium text-white/70">
                     {navItems.map((item) => (
-                      <SheetClose asChild key={item.href}>
+                      <SheetClose asChild key={item.label}>
                         <Link
+                          key={item.label}
                           href={item.href}
-                          className="w-full transition hover:text-white text-center border py-4 rounded-lg hover:border-gray-500 duration-300"
+                          className="w-full transition hover:text-white text-center py-4 rounded-lg duration-300"
                         >
                           {item.label}
                         </Link>
                       </SheetClose>
                     ))}
                   </div>
-                  <SheetClose asChild>
-                    <div className="border flex justify-center rounded-lg">
-                      <ConnectWallet />
-                    </div>
-                  </SheetClose>
+                  <div className="border flex justify-center rounded-lg">
+                    <ConnectWallet />
+                  </div>
                 </div>
               </SheetContent>
             </Sheet>
