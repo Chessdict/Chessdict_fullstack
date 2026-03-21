@@ -179,7 +179,6 @@ const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: stri
       onChange={(e) => setTimeControl(e.target.value)}
       className="w-full appearance-none rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-white outline-none transition hover:bg-white/10 focus:border-white/20"
     >
-      <option value="3" className="bg-[#0A0A0A]">3 min (Fast game)</option>
       <option value="10" className="bg-[#0A0A0A]">10 min (Fast game)</option>
       <option value="30" className="bg-[#0A0A0A]">30 min (Standard)</option>
       <option value="60" className="bg-[#0A0A0A]">60 min (Long)</option>
