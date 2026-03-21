@@ -1,8 +1,7 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useState, useCallback } from "react";
-import Image from "next/image";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { GlassBg } from "../glass-bg";
 import { MEMOJI_LIST } from "@/lib/memoji";
 
@@ -15,11 +14,21 @@ interface OpponentSearchModalProps {
 
 export function OpponentSearchModal({ isOpen, onClose, onMemojiSelected }: OpponentSearchModalProps) {
     const [currentIndex, setCurrentIndex] = useState(0);
+    const preloaded = useRef(false);
+
+    // Preload all memoji images so cycling is instant
+    useEffect(() => {
+        if (preloaded.current) return;
+        preloaded.current = true;
+        MEMOJI_LIST.forEach((src) => {
+            const img = new window.Image();
+            img.src = src;
+        });
+    }, []);
 
     // Cycle through memojis while searching
     useEffect(() => {
         if (!isOpen) return;
-        // Start at a random position
         setCurrentIndex(Math.floor(Math.random() * MEMOJI_LIST.length));
 
         const interval = setInterval(() => {
@@ -92,25 +101,20 @@ export function OpponentSearchModal({ isOpen, onClose, onMemojiSelected }: Oppon
 
                                 {/* Cycling memoji avatar */}
                                 <div className="relative">
-                                    <div className="h-24 w-24 rounded-full bg-linear-to-br from-blue-500/20 to-purple-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-blue-500/10 overflow-hidden">
-                                        <AnimatePresence mode="wait">
-                                            <motion.div
-                                                key={currentIndex}
-                                                initial={{ opacity: 0, scale: 0.8 }}
-                                                animate={{ opacity: 1, scale: 1 }}
-                                                exit={{ opacity: 0, scale: 0.8 }}
-                                                transition={{ duration: 0.2 }}
-                                                className="h-20 w-20"
-                                            >
-                                                <Image
-                                                    src={MEMOJI_LIST[currentIndex]}
-                                                    alt="Searching..."
-                                                    width={80}
-                                                    height={80}
-                                                    className="h-full w-full object-contain"
-                                                />
-                                            </motion.div>
-                                        </AnimatePresence>
+                                    <div className="relative h-24 w-24 rounded-full bg-linear-to-br from-blue-500/20 to-purple-500/20 border border-white/10 shadow-xl shadow-blue-500/10 overflow-hidden">
+                                        {/* Render all memojis stacked, only show current */}
+                                        {MEMOJI_LIST.map((src, i) => (
+                                            <img
+                                                key={src}
+                                                src={src}
+                                                alt=""
+                                                width={80}
+                                                height={80}
+                                                className={`absolute inset-0 m-auto h-20 w-20 object-contain transition-opacity duration-150 ${
+                                                    i === currentIndex ? "opacity-100" : "opacity-0"
+                                                }`}
+                                            />
+                                        ))}
                                         <div className="absolute inset-0 rounded-full border-4 border-white/5" />
                                         <div className="absolute inset-0 rounded-full border-4 border-t-white animate-spin" />
                                     </div>
