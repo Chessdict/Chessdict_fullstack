@@ -415,7 +415,7 @@ app.prepare().then(async () => {
       where: { id: tournamentId },
       include: {
         participants: {
-          include: { user: { select: { id: true, walletAddress: true } } },
+          include: { user: { select: { id: true, walletAddress: true, rating: true } } },
         },
       },
     });
@@ -463,6 +463,7 @@ app.prepare().then(async () => {
         participantDbId: p.id,
         userId: p.userId,
         walletAddress: p.user.walletAddress,
+        rating: p.user.rating ?? 1200,
         points: 0,
         wins: 0,
         draws: 0,
@@ -634,6 +635,8 @@ app.prepare().then(async () => {
             gameId: game.id,
             color: "white",
             opponentAddress: blackPlayer.walletAddress,
+            playerRating: whitePlayer.rating ?? 1200,
+            opponentRating: blackPlayer.rating ?? 1200,
             round: state.currentRound,
             totalRounds: state.totalRounds,
             timeControl: state.timeControl,
@@ -645,6 +648,8 @@ app.prepare().then(async () => {
             gameId: game.id,
             color: "black",
             opponentAddress: whitePlayer.walletAddress,
+            playerRating: blackPlayer.rating ?? 1200,
+            opponentRating: whitePlayer.rating ?? 1200,
             round: state.currentRound,
             totalRounds: state.totalRounds,
             timeControl: state.timeControl,
@@ -1862,6 +1867,8 @@ app.prepare().then(async () => {
                   gameId,
                   color: isWhite ? "white" : "black",
                   opponentAddress: opponentParticipant?.walletAddress ?? "",
+                  playerRating: player.rating ?? 1200,
+                  opponentRating: opponentParticipant?.rating ?? 1200,
                   round: state.currentRound,
                   totalRounds: state.totalRounds,
                   timeControl: state.timeControl,

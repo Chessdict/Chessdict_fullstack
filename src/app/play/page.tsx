@@ -19,7 +19,16 @@ import { getMemojiForAddress } from "@/lib/memoji";
 export default function PlayPage() {
   const router = useRouter();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer, setOnChainGameId } = useGameStore();
+  const {
+    gameMode,
+    setGameMode,
+    setStatus,
+    setRoomId,
+    setPlayerColor,
+    setOpponent,
+    setPlayer,
+    setOnChainGameId,
+  } = useGameStore();
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);

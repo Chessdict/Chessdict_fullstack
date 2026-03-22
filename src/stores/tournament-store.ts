@@ -36,6 +36,8 @@ type TournamentState = {
   gameId: string | null;
   playerColor: "white" | "black" | null;
   opponentAddress: string | null;
+  playerRating: number | null;
+  opponentRating: number | null;
 
   // Standings
   standings: Standing[];
@@ -70,6 +72,8 @@ type TournamentState = {
     gameId: string,
     color: "white" | "black",
     opponentAddress: string,
+    playerRating?: number | null,
+    opponentRating?: number | null,
   ) => void;
   clearCurrentGame: () => void;
   setStandings: (standings: Standing[]) => void;
@@ -106,6 +110,8 @@ const initialState = {
   gameId: null as string | null,
   playerColor: null as "white" | "black" | null,
   opponentAddress: null as string | null,
+  playerRating: null as number | null,
+  opponentRating: null as number | null,
   standings: [] as Standing[],
   participants: [] as TournamentParticipantInfo[],
   roundEndTime: null as number | null,
@@ -133,11 +139,13 @@ export const useTournamentStore = create<TournamentState>((set) => ({
       whiteTime: tc * 60,
       blackTime: tc * 60,
     }),
-  setCurrentGame: (gameId, color, opponentAddress) =>
+  setCurrentGame: (gameId, color, opponentAddress, playerRating = null, opponentRating = null) =>
     set((state) => ({
       gameId,
       playerColor: color,
       opponentAddress,
+      playerRating,
+      opponentRating,
       gameResult: null,
       whiteTime: state.timeControl * 60,
       blackTime: state.timeControl * 60,
@@ -147,6 +155,8 @@ export const useTournamentStore = create<TournamentState>((set) => ({
       gameId: null,
       playerColor: null,
       opponentAddress: null,
+      playerRating: null,
+      opponentRating: null,
     }),
   setStandings: (standings) => set({ standings }),
   setParticipants: (participants) => set({ participants }),
