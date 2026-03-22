@@ -13,6 +13,7 @@ import { DrawOfferModal } from "./draw-offer-modal";
 import { GlassBg } from "../glass-bg";
 import { useChessSounds } from "@/hooks/useChessSounds";
 import { SignalStrength } from "./signal-strength";
+import { X } from "lucide-react";
 import { getMemojiForAddress } from "@/lib/memoji";
 import Image from "next/image";
 
@@ -101,6 +102,8 @@ export function GameBoard() {
   const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
   const [prizeClaimed, setPrizeClaimed] = useState(false);
+  const [settlementFailed, setSettlementFailed] = useState(false);
+  const [modalDismissed, setModalDismissed] = useState(false);
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
@@ -375,11 +378,15 @@ export function GameBoard() {
       setOpponentConnected(false);
     };
 
-    const handleGameOver = ({ winner, reason, ratings }: { winner: "white" | "black" | "draw" | "opponent"; reason: any; ratings?: Record<string, number> }) => {
-      console.log("[CLIENT] gameOver event received:", { winner, reason, ratings });
+    const handleGameOver = ({ winner, reason, ratings, settlementFailed: settFailed }: { winner: "white" | "black" | "draw" | "opponent"; reason: any; ratings?: Record<string, number>; settlementFailed?: boolean }) => {
+      console.log("[CLIENT] gameOver event received:", { winner, reason, ratings, settlementFailed: settFailed });
       setGameOver(winner, reason);
       setStatus("finished");
+      setModalDismissed(false);
       playGameOver();
+      if (settFailed) {
+        setSettlementFailed(true);
+      }
       if (ratings && address) {
         const newRating = ratings[address];
         const oldRating = player?.rating;
@@ -824,10 +831,16 @@ export function GameBoard() {
             </div>
           )}
 
-          {gameOver && (
+          {gameOver && !modalDismissed && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
               <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
-                <GlassBg className="p-5 sm:p-8 text-center" height="auto">
+                <GlassBg className="p-5 sm:p-8 text-center relative" height="auto">
+                  <button
+                    onClick={() => setModalDismissed(true)}
+                    className="absolute top-3 right-3 rounded-full p-1.5 text-white/40 transition hover:bg-white/10 hover:text-white"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
                   <div className="flex flex-col items-center gap-4 sm:gap-6">
                     <div className="relative">
                       <div className={`h-16 w-16 sm:h-20 sm:w-20 rounded-full flex items-center justify-center border border-white/10 shadow-xl ${gameOver.winner === 'draw' ? 'bg-linear-to-br from-yellow-500/20 to-orange-500/20 shadow-yellow-500/10' : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'bg-linear-to-br from-green-500/20 to-blue-500/20 shadow-green-500/10' : 'bg-linear-to-br from-red-500/20 to-orange-500/20 shadow-red-500/10'}`}>
@@ -862,23 +875,32 @@ export function GameBoard() {
 
                     {/* Claim Prize button for staked games */}
                     {onChainGameId !== null && (gameOver.winner === playerColor || gameOver.winner === 'opponent' || gameOver.winner === 'draw') && (
-                      <button
-                        onClick={async () => {
-                          if (prizeClaimed || isClaimLoading) return;
-                          await claimPrizeSingle(BigInt(onChainGameId.toString()));
-                          setPrizeClaimed(true);
-                        }}
-                        disabled={prizeClaimed || isClaimLoading}
-                        className={`w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 ${prizeClaimed ? 'opacity-60 cursor-not-allowed' : ''}`}
-                      >
-                        <div className={`absolute inset-0 ${prizeClaimed ? 'bg-gray-600' : 'bg-linear-to-r from-amber-500 to-yellow-500 opacity-90 group-hover:opacity-100'} transition-opacity`} />
-                        <span className="relative text-sm font-bold text-white flex items-center justify-center gap-2">
-                          {isClaimLoading && (
-                            <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          )}
-                          {prizeClaimed ? 'Prize Claimed' : isClaimLoading ? 'Claiming...' : 'Claim Prize'}
-                        </span>
-                      </button>
+                      settlementFailed ? (
+                        <div className="w-full rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-center">
+                          <p className="text-sm font-semibold text-red-400">Settlement failed</p>
+                          <p className="text-xs text-red-400/70 mt-1">
+                            Prize cannot be claimed right now. The server was unable to settle the game on-chain. Your funds are safe — please contact support to resolve this.
+                          </p>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            if (prizeClaimed || isClaimLoading) return;
+                            await claimPrizeSingle(BigInt(onChainGameId.toString()));
+                            setPrizeClaimed(true);
+                          }}
+                          disabled={prizeClaimed || isClaimLoading}
+                          className={`w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 ${prizeClaimed ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        >
+                          <div className={`absolute inset-0 ${prizeClaimed ? 'bg-gray-600' : 'bg-linear-to-r from-amber-500 to-yellow-500 opacity-90 group-hover:opacity-100'} transition-opacity`} />
+                          <span className="relative text-sm font-bold text-white flex items-center justify-center gap-2">
+                            {isClaimLoading && (
+                              <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            )}
+                            {prizeClaimed ? 'Prize Claimed' : isClaimLoading ? 'Claiming...' : 'Claim Prize'}
+                          </span>
+                        </button>
+                      )
                     )}
 
                     <button

@@ -65,7 +65,7 @@ if (REDEEMER_PRIVATE_KEY) {
 async function settleStakedGame(onChainGameId, winnerAddress, isDraw) {
   if (!chessdictContract) {
     console.warn("[SETTLE] No contract instance — skipping settlement");
-    return;
+    return false;
   }
   try {
     const gameIdBn = BigInt(onChainGameId);
@@ -75,8 +75,10 @@ async function settleStakedGame(onChainGameId, winnerAddress, isDraw) {
     const tx = await chessdictContract.setWinnerSingle(gameIdBn, winner, isDraw);
     const receipt = await tx.wait();
     console.log(`[SETTLE] setWinnerSingle confirmed in tx ${receipt.hash}`);
+    return true;
   } catch (e) {
     console.error(`[SETTLE] setWinnerSingle failed for game ${onChainGameId}:`, e.message);
+    return false;
   }
 }
 
@@ -243,24 +245,27 @@ app.prepare().then(async () => {
         markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
-        const payload = { winner: winnerColor, reason: 'timeout', ratings: newRatings };
-        io.to(roomId).emit('gameOver', payload);
-
         // Direct emit for reliability
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
         const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+
+        // Settle staked game on-chain before emitting gameOver
+        let settlementFailed = false;
+        if (game.onChainGameId) {
+          const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
+          const settled = await settleStakedGame(game.onChainGameId, winnerWallet, false);
+          if (!settled) settlementFailed = true;
+        }
+
+        const payload = { winner: winnerColor, reason: 'timeout', ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
+        io.to(roomId).emit('gameOver', payload);
+
         const wSid = userSocketMap.get(whitePlayer?.walletAddress);
         const bSid = userSocketMap.get(blackPlayer?.walletAddress);
         if (wSid) io.to(wSid).emit('gameOver', payload);
         if (bSid) io.to(bSid).emit('gameOver', payload);
 
         console.log(`[TIMER] gameOver emitted for timeout in room ${roomId}`);
-
-        // Settle staked game on-chain (fire-and-forget)
-        if (game.onChainGameId) {
-          const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
-          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => { });
-        }
       } catch (error) {
         console.error('[TIMER] Error processing server timeout:', error);
       } finally {
@@ -1537,23 +1542,26 @@ app.prepare().then(async () => {
         markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
-        const gameOverPayload = { winner: "draw", reason: "draw", ratings: newRatings };
-        io.to(roomId).emit("gameOver", gameOverPayload);
-
         // Also emit directly to both player sockets for reliability
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
         const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+
+        // Settle staked game on-chain before emitting gameOver
+        let settlementFailed = false;
+        if (game.onChainGameId) {
+          const settled = await settleStakedGame(game.onChainGameId, null, true);
+          if (!settled) settlementFailed = true;
+        }
+
+        const gameOverPayload = { winner: "draw", reason: "draw", ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
+        io.to(roomId).emit("gameOver", gameOverPayload);
+
         const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
         const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
         if (whiteSocketId) io.to(whiteSocketId).emit("gameOver", gameOverPayload);
         if (blackSocketId) io.to(blackSocketId).emit("gameOver", gameOverPayload);
 
         console.log(`[SERVER] Game ${roomId} ended in draw by agreement`);
-
-        // Settle staked game on-chain (fire-and-forget)
-        if (game.onChainGameId) {
-          settleStakedGame(game.onChainGameId, null, true).catch(() => { });
-        }
       } catch (error) {
         console.error("Error processing draw acceptance:", error);
       }
@@ -1656,7 +1664,15 @@ app.prepare().then(async () => {
         const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
         console.log(`[SERVER] Direct socket IDs - White: ${whiteSocketId}, Black: ${blackSocketId}`);
 
-        const gameOverPayload = { winner: winnerColor, reason: "resignation", ratings: newRatings };
+        // Settle staked game on-chain before emitting gameOver
+        let settlementFailed = false;
+        if (game.onChainGameId) {
+          const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
+          const settled = await settleStakedGame(game.onChainGameId, winnerWallet, false);
+          if (!settled) settlementFailed = true;
+        }
+
+        const gameOverPayload = { winner: winnerColor, reason: "resignation", ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
 
         // Emit to room (backup)
         io.to(roomId).emit("gameOver", gameOverPayload);
@@ -1670,12 +1686,6 @@ app.prepare().then(async () => {
         }
 
         console.log(`[SERVER] gameOver event emitted successfully`);
-
-        // Settle staked game on-chain (fire-and-forget)
-        if (game.onChainGameId) {
-          const winnerWallet = winnerColor === 'white' ? whitePlayer?.walletAddress : blackPlayer?.walletAddress;
-          settleStakedGame(game.onChainGameId, winnerWallet, false).catch(() => { });
-        }
       } catch (error) {
         console.error("Error processing resignation:", error);
         socket.emit("resignError", { error: "Server error processing resignation" });
@@ -1727,13 +1737,21 @@ app.prepare().then(async () => {
         markGameCompleted(roomId, 10).catch(() => { });
         setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
 
-        // Emit gameOver to both players
-        const gameOverPayload = { winner, reason, ratings: newRatings };
-        io.to(roomId).emit("gameOver", gameOverPayload);
-
         // Also emit directly to both player sockets for reliability
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
         const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+
+        // Settle staked game on-chain before emitting gameOver
+        let settlementFailed = false;
+        if (game.onChainGameId) {
+          const winnerWallet = winner === 'white' ? whitePlayer?.walletAddress : winner === 'black' ? blackPlayer?.walletAddress : null;
+          const settled = await settleStakedGame(game.onChainGameId, winnerWallet, isDraw);
+          if (!settled) settlementFailed = true;
+        }
+
+        // Emit gameOver to both players
+        const gameOverPayload = { winner, reason, ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
+        io.to(roomId).emit("gameOver", gameOverPayload);
 
         const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
         const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
@@ -1746,12 +1764,6 @@ app.prepare().then(async () => {
         }
 
         console.log(`[SERVER] gameOver event emitted for game completion`);
-
-        // Settle staked game on-chain (fire-and-forget)
-        if (game.onChainGameId) {
-          const winnerWallet = winner === 'white' ? whitePlayer?.walletAddress : winner === 'black' ? blackPlayer?.walletAddress : null;
-          settleStakedGame(game.onChainGameId, winnerWallet, isDraw).catch(() => { });
-        }
       } catch (error) {
         console.error("Error processing game completion:", error);
       }

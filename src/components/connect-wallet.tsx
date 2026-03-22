@@ -7,7 +7,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User, LogOut, ChevronDown, X } from "lucide-react";
+import { User, LogOut, ChevronDown, X, Wallet } from "lucide-react";
+import { useTokenBalance, useTokenDecimals, useTokenSymbol } from "@/hooks/useChessdict";
+import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
+import { formatUnits } from "viem";
 
 export function ConnectWallet() {
   const { address, isConnected } = useAccount();
@@ -19,6 +22,15 @@ export function ConnectWallet() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, right: 0 });
   const [isMobile, setIsMobile] = useState(false);
+
+  const tokenAddress = DEFAULT_STAKE_TOKEN as `0x${string}`;
+  const { data: balanceRaw } = useTokenBalance(tokenAddress, address);
+  const { data: decimals } = useTokenDecimals(tokenAddress);
+  const { data: symbol } = useTokenSymbol(tokenAddress);
+
+  const formattedBalance = balanceRaw !== undefined && decimals !== undefined
+    ? parseFloat(formatUnits(balanceRaw as bigint, decimals as number)).toFixed(2)
+    : null;
 
   const updatePosition = useCallback(() => {
     if (!buttonRef.current) return;
@@ -125,6 +137,21 @@ export function ConnectWallet() {
                     <X className="h-4 w-4" />
                   </button>
                 </div>
+                {/* Balance */}
+                {formattedBalance !== null && (
+                  <>
+                    <div className="flex items-center justify-between gap-3 px-4 py-4">
+                      <span className="flex items-center gap-2 text-base text-white/50 shrink-0">
+                        <Wallet className="h-5 w-5" />
+                        Balance
+                      </span>
+                      <span className="text-base font-mono text-white whitespace-nowrap">
+                        {formattedBalance} {(symbol as string) ?? ""}
+                      </span>
+                    </div>
+                    <div className="border-t border-white/10" />
+                  </>
+                )}
                 <button
                   onClick={handleProfile}
                   className="flex w-full items-center gap-3 px-4 py-4 text-base text-white/80 transition active:bg-white/10"
@@ -147,8 +174,22 @@ export function ConnectWallet() {
             <div
               ref={dropdownRef}
               style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right }}
-              className="w-48 overflow-hidden rounded-xl border border-white/10 bg-black/90 backdrop-blur-xl shadow-2xl z-9999"
+              className="w-52 overflow-hidden rounded-xl border border-white/10 bg-black/90 backdrop-blur-xl shadow-2xl z-9999"
             >
+              {formattedBalance !== null && (
+                <>
+                  <div className="flex items-center justify-between gap-3 px-4 py-3">
+                    <span className="flex items-center gap-2 text-sm text-white/50 shrink-0">
+                      <Wallet className="h-4 w-4" />
+                      Balance
+                    </span>
+                    <span className="text-sm font-mono text-white whitespace-nowrap">
+                      {formattedBalance} {(symbol as string) ?? ""}
+                    </span>
+                  </div>
+                  <div className="border-t border-white/10" />
+                </>
+              )}
               <Link
                 href="/profile"
                 onClick={() => setIsOpen(false)}

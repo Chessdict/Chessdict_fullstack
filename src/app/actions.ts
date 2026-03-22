@@ -312,3 +312,76 @@ export async function getGameHistory(
     return { success: false, error: "Failed to fetch game history" };
   }
 }
+
+export async function getStakedGameHistory(
+  walletAddress: string,
+  page = 1,
+  pageSize = 20,
+) {
+  if (!walletAddress)
+    return { success: false, error: "Wallet address is required" };
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { walletAddress },
+      select: { id: true },
+    });
+
+    if (!user) return { success: true, games: [], totalPages: 0 };
+
+    const where = {
+      status: { in: ["COMPLETED" as const, "DRAW" as const] },
+      onChainGameId: { not: null },
+      OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+    };
+
+    const [games, totalCount] = await Promise.all([
+      prisma.game.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          whitePlayer: {
+            select: { id: true, walletAddress: true, rating: true },
+          },
+          blackPlayer: {
+            select: { id: true, walletAddress: true, rating: true },
+          },
+          winner: { select: { id: true, walletAddress: true } },
+        },
+      }),
+      prisma.game.count({ where }),
+    ]);
+
+    const mapped = games.map((g) => {
+      const isWhite = g.whitePlayerId === user.id;
+      const opponentPlayer = isWhite ? g.blackPlayer : g.whitePlayer;
+      const result = !g.winnerId
+        ? ("draw" as const)
+        : g.winnerId === user.id
+          ? ("win" as const)
+          : ("loss" as const);
+
+      return {
+        id: g.id,
+        onChainGameId: g.onChainGameId!,
+        stakeToken: g.stakeToken ?? "",
+        wagerAmount: g.wagerAmount ?? 0,
+        result,
+        playedAs: isWhite ? ("white" as const) : ("black" as const),
+        opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
+        date: g.updatedAt.toISOString(),
+      };
+    });
+
+    return {
+      success: true,
+      games: mapped,
+      totalPages: Math.ceil(totalCount / pageSize),
+    };
+  } catch (error) {
+    console.error("Error fetching staked game history:", error);
+    return { success: false, error: "Failed to fetch staked game history" };
+  }
+}
