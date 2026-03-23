@@ -168,6 +168,9 @@ app.prepare().then(async () => {
   const stakeCreationFailureDelays = new Map(); // roomId -> timeout handle (grace period before notifying joiner)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
   // ─── Server-Authoritative Game Timers ───
+  const DEFAULT_QUEUE_TIME_CONTROL = 3;
+  const MAX_STAKED_TIME_CONTROL = 3;
+  const SUPPORTED_QUEUE_TIME_CONTROLS = new Set([1, 2, 3, 10]);
   const DEFAULT_GAME_TIME = 600; // 10 minutes in seconds
   const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
   const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
@@ -176,6 +179,35 @@ app.prepare().then(async () => {
   const userActiveGames = new Map(); // walletAddress -> { roomId, color, opponentWallet, opponentRating, playerRating }
   const gameDisconnectTimers = new Map(); // walletAddress -> { roomId, timer, deadline }
   const gameStateStore = new Map(); // roomId -> { fen, moves[] }
+
+  function normalizeQueueTimeControl(timeControl) {
+    const numericValue = Number.parseInt(String(timeControl ?? ""), 10);
+    if (!Number.isFinite(numericValue)) return DEFAULT_QUEUE_TIME_CONTROL;
+    return SUPPORTED_QUEUE_TIME_CONTROLS.has(numericValue)
+      ? numericValue
+      : DEFAULT_QUEUE_TIME_CONTROL;
+  }
+
+  function normalizeStakedTimeControl(timeControl) {
+    return Math.min(normalizeQueueTimeControl(timeControl), MAX_STAKED_TIME_CONTROL);
+  }
+
+  function getTimeControlSeconds(timeControl) {
+    return normalizeQueueTimeControl(timeControl) * 60;
+  }
+
+  function getActiveGameInitialTimeSeconds(activeGame) {
+    if (!activeGame?.timeControl) return DEFAULT_GAME_TIME;
+    return getTimeControlSeconds(activeGame.timeControl);
+  }
+
+  function getTimerSnapshot(timer) {
+    return {
+      whiteTime: Math.round(timer.whiteTime),
+      blackTime: Math.round(timer.blackTime),
+      initialTime: timer.initialTime,
+    };
+  }
 
   function clearStakeCreationFailureDelay(roomId) {
     const delay = stakeCreationFailureDelays.get(roomId);
@@ -268,6 +300,7 @@ app.prepare().then(async () => {
     if (existing?.timeoutHandle) clearTimeout(existing.timeoutHandle);
 
     const timerState = {
+      initialTime: timeInSeconds,
       whiteTime: timeInSeconds,
       blackTime: timeInSeconds,
       turn: 'w',
@@ -296,7 +329,7 @@ app.prepare().then(async () => {
     console.log(`[TIMER] Server timeout in room ${roomId}: ${loserColor} ran out of time`);
 
     // Emit timeSync so both clients see 0
-    io.to(roomId).emit('timeSync', { whiteTime: Math.round(timer.whiteTime), blackTime: Math.round(timer.blackTime) });
+    io.to(roomId).emit('timeSync', getTimerSnapshot(timer));
 
     (async () => {
       try {
@@ -367,7 +400,7 @@ app.prepare().then(async () => {
     }
 
     timer.timeoutHandle = setTimeout(() => handleServerTimeout(roomId), nextPlayerTime * 1000);
-    return { whiteTime: Math.round(timer.whiteTime), blackTime: Math.round(timer.blackTime) };
+    return getTimerSnapshot(timer);
   }
 
   // ─── Tournament Management ───
@@ -1223,6 +1256,9 @@ app.prepare().then(async () => {
     if (!whiteUser || !blackUser) return;
 
     const isStaked = !!stakeInfo;
+    const matchedTimeControl = isStaked
+      ? normalizeStakedTimeControl(stakeInfo?.timeControl ?? p1.timeControl ?? p2.timeControl)
+      : normalizeQueueTimeControl(stakeInfo?.timeControl ?? p1.timeControl ?? p2.timeControl);
     const gameData = {
       whitePlayerId: whiteUser.id,
       blackPlayerId: blackUser.id,
@@ -1239,6 +1275,7 @@ app.prepare().then(async () => {
 
     const matchPayload = {
       roomId,
+      timeControl: matchedTimeControl,
       staked: isStaked,
       stakeToken: stakeInfo?.token ?? null,
       stakeAmount: stakeInfo?.stakeAmount ?? null,
@@ -1268,9 +1305,9 @@ app.prepare().then(async () => {
     if (s2) { s2.join(roomId); activeGames.set(s2.id, roomId); }
 
     // Track active game for reconnection (in-memory + Redis)
-    userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
-    userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-    const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] };
+    userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating, timeControl: matchedTimeControl });
+    userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating, timeControl: matchedTimeControl });
+    const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [], timeControl: matchedTimeControl };
     gameStateStore.set(roomId, initialState);
     setUserActiveGame(p1.userId, userActiveGames.get(p1.userId)).catch(() => { });
     setUserActiveGame(p2.userId, userActiveGames.get(p2.userId)).catch(() => { });
@@ -1278,7 +1315,7 @@ app.prepare().then(async () => {
 
     if (!isStaked) {
       // Non-staked: start timer immediately
-      initGameTimer(roomId, DEFAULT_GAME_TIME);
+      initGameTimer(roomId, getTimeControlSeconds(matchedTimeControl));
     }
     // Staked: no timeout yet — 120s countdown starts when Player 1 emits stakeCreated
 
@@ -1310,7 +1347,8 @@ app.prepare().then(async () => {
         const gs = gameStateStore.get(activeGame.roomId);
         const timer = gameTimers.get(activeGame.roomId);
         getGameStakeState(activeGame.roomId).then((stakeState) => {
-          let whiteTime = DEFAULT_GAME_TIME, blackTime = DEFAULT_GAME_TIME;
+          const initialTime = getActiveGameInitialTimeSeconds(activeGame);
+          let whiteTime = initialTime, blackTime = initialTime;
           if (timer) {
             const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
             whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
@@ -1332,6 +1370,7 @@ app.prepare().then(async () => {
             chatMessages: gs?.chatMessages || [],
             whiteTime: Math.round(whiteTime),
             blackTime: Math.round(blackTime),
+            timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
             onChainGameId: stakeState.onChainGameId,
             stakeToken: stakeState.stakeToken,
             stakeAmount: stakeState.stakeAmount,
@@ -1347,7 +1386,14 @@ app.prepare().then(async () => {
       const uid = data?.userId || userId;
       if (!uid) return;
 
-      const joined = matchmaking.joinQueue(socket.id, { ...data, userId: uid });
+      const normalizedData = {
+        ...data,
+        userId: uid,
+        timeControl: data?.staked
+          ? normalizeStakedTimeControl(data?.timeControl)
+          : normalizeQueueTimeControl(data?.timeControl),
+      };
+      const joined = matchmaking.joinQueue(socket.id, normalizedData);
       if (joined) {
         console.log(`Player ${uid} joined ${data?.staked ? 'staked' : 'free'} queue`);
       }
@@ -1396,6 +1442,7 @@ app.prepare().then(async () => {
               onChainGameId: String(onChainGameId),
               stakeToken: game.stakeToken,
               stakeAmount: game.wagerAmount ? String(game.wagerAmount) : null,
+              timeControl: userActiveGames.get(blackPlayer.walletAddress)?.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL,
             });
           }
         }
@@ -1426,10 +1473,19 @@ app.prepare().then(async () => {
 
         // Transition WAITING → IN_PROGRESS
         await prisma.game.update({ where: { id: roomId }, data: { status: "IN_PROGRESS" } });
-        initGameTimer(roomId, DEFAULT_GAME_TIME);
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const matchedTimeControl =
+          normalizeQueueTimeControl(
+            userActiveGames.get(whitePlayer?.walletAddress)?.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL,
+          );
+        initGameTimer(roomId, getTimeControlSeconds(matchedTimeControl));
 
         // Notify both players the game is ready (include onChainGameId so clients can store it)
-        io.to(roomId).emit("gameReady", { roomId, onChainGameId: game.onChainGameId });
+        io.to(roomId).emit("gameReady", {
+          roomId,
+          onChainGameId: game.onChainGameId,
+          timeControl: matchedTimeControl,
+        });
         console.log(`[STAKE] Player2 confirmed stake — game ${roomId} is now IN_PROGRESS`);
       } catch (e) {
         console.error("[STAKE] stakeConfirmed error:", e);
@@ -1497,7 +1553,7 @@ app.prepare().then(async () => {
         const elapsed = (now - timer.lastMoveTimestamp) / 1000;
         const whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
         const blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
-        socket.emit('timeSync', { whiteTime: Math.round(whiteTime), blackTime: Math.round(blackTime) });
+        socket.emit('timeSync', { whiteTime: Math.round(whiteTime), blackTime: Math.round(blackTime), initialTime: timer.initialTime });
       }
     });
 
@@ -1512,7 +1568,8 @@ app.prepare().then(async () => {
       const gs = gameStateStore.get(activeGame.roomId);
       const timer = gameTimers.get(activeGame.roomId);
 
-      let whiteTime = DEFAULT_GAME_TIME, blackTime = DEFAULT_GAME_TIME;
+      const initialTime = getActiveGameInitialTimeSeconds(activeGame);
+      let whiteTime = initialTime, blackTime = initialTime;
       if (timer) {
         const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
         whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
@@ -1536,6 +1593,7 @@ app.prepare().then(async () => {
         chatMessages: gs?.chatMessages || [],
         whiteTime: Math.round(whiteTime),
         blackTime: Math.round(blackTime),
+        timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
         onChainGameId: stakeState.onChainGameId,
         stakeToken: stakeState.stakeToken,
         stakeAmount: stakeState.stakeAmount,
@@ -1567,10 +1625,19 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on("sendChallenge", ({ toUserId, fromUserId }) => {
+    socket.on("sendChallenge", ({ toUserId, fromUserId, stakeEnabled, stakeToken, stakeAmount, timeControl }) => {
       const targetSocketId = userSocketMap.get(toUserId);
+      const normalizedTimeControl = stakeEnabled
+        ? normalizeStakedTimeControl(timeControl)
+        : normalizeQueueTimeControl(timeControl);
       if (targetSocketId) {
-        io.to(targetSocketId).emit("challengeReceived", { from: fromUserId });
+        io.to(targetSocketId).emit("challengeReceived", {
+          from: fromUserId,
+          stakeEnabled: !!stakeEnabled,
+          stakeToken: stakeToken ?? null,
+          stakeAmount: stakeAmount ?? null,
+          timeControl: normalizedTimeControl,
+        });
         console.log(`Challenge sent from ${fromUserId} to ${toUserId}`);
       } else {
         socket.emit("challengeError", { error: "User is offline", toUserId });
@@ -1887,13 +1954,16 @@ app.prepare().then(async () => {
       console.log(`[SERVER] Client gameTimeout for room ${roomId} (loser=${loser}) - server handles this now`);
     });
 
-    socket.on("acceptChallenge", async ({ opponentId, userId: myId }) => {
+    socket.on("acceptChallenge", async ({ opponentId, userId: myId, stakeEnabled, timeControl }) => {
       const targetSocketId = userSocketMap.get(opponentId);
 
       if (targetSocketId) {
         try {
           const whiteUser = await prisma.user.findUnique({ where: { walletAddress: opponentId } });
           const blackUser = await prisma.user.findUnique({ where: { walletAddress: myId } });
+          const challengeTimeControl = stakeEnabled
+            ? normalizeStakedTimeControl(timeControl)
+            : normalizeQueueTimeControl(timeControl ?? DEFAULT_GAME_TIME / 60);
 
           if (whiteUser && blackUser) {
             const game = await prisma.game.create({
@@ -1915,14 +1985,14 @@ app.prepare().then(async () => {
               activeGames.set(s1.id, roomId);
               activeGames.set(s2.id, roomId);
 
-              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
-              initGameTimer(roomId, DEFAULT_GAME_TIME);
+              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating, timeControl: challengeTimeControl });
+              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating, timeControl: challengeTimeControl });
+              initGameTimer(roomId, getTimeControlSeconds(challengeTimeControl));
 
               // Track active game for reconnection (in-memory + Redis)
-              userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating });
-              userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating });
-              const challengeInitState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [] };
+              userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating, timeControl: challengeTimeControl });
+              userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating, timeControl: challengeTimeControl });
+              const challengeInitState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [], timeControl: challengeTimeControl };
               gameStateStore.set(roomId, challengeInitState);
               setUserActiveGame(opponentId, userActiveGames.get(opponentId)).catch(() => { });
               setUserActiveGame(myId, userActiveGames.get(myId)).catch(() => { });

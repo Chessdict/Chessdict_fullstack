@@ -11,6 +11,12 @@ import { toast } from "sonner";
 import { GameInfoPanel } from "./game-info-panel";
 import { TournamentPanel } from "../tournament/tournament-panel";
 import {
+  clampStakedTimeControlMinutes,
+  DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
+  getTimeControlOptions,
+  MAX_STAKED_TIME_CONTROL_MINUTES,
+} from "@/lib/time-control";
+import {
   useChessdict,
   useTokenSymbol,
   useTokenDecimals,
@@ -173,18 +179,27 @@ function StakePanel({
   );
 }
 
-const TIME_OPTIONS = [
-  { value: "1", label: "1 min", category: "Bullet" },
-  { value: "2", label: "2 min", category: "Bullet" },
-  { value: "3", label: "3 min", category: "Blitz" },
-  { value: "10", label: "10 min", category: "Rapid" },
-];
+const SelectGameDuration = ({
+  timeControl,
+  setTimeControl,
+  stakedOnly = false,
+}: {
+  timeControl: string;
+  setTimeControl: (value: string) => void;
+  stakedOnly?: boolean;
+}) => {
+  const options = getTimeControlOptions(stakedOnly ? MAX_STAKED_TIME_CONTROL_MINUTES : undefined);
 
-const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: string; setTimeControl: (value: string) => void }) => (
+  return (
   <div className="flex flex-col gap-2">
     <label className="text-sm font-medium text-white/60">Time Control</label>
-    <div className="grid grid-cols-4 gap-2">
-      {TIME_OPTIONS.map((opt) => (
+    {stakedOnly && (
+      <p className="text-[11px] text-yellow-300/70">
+        Staked games are capped at 3 minutes for now.
+      </p>
+    )}
+    <div className={cn("grid gap-2", options.length === 3 ? "grid-cols-3" : "grid-cols-4")}>
+      {options.map((opt) => (
         <button
           key={opt.value}
           onClick={() => setTimeControl(opt.value)}
@@ -199,18 +214,19 @@ const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: stri
           <span className={cn(
             "text-[10px]",
             timeControl === opt.value ? "text-black/50" : "text-white/30"
-          )}>{opt.category}</span>
+          )}>{opt.badgeLabel}</span>
         </button>
       ))}
     </div>
   </div>
-)
+  );
+}
 
 export function GameOptions({ onStartGame, socket, userId, isSocketConnected = false }: GameOptionsProps) {
   // All hooks must be called before any early returns
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
-  const [timeControl, setTimeControl] = useState("3");
+  const [timeControl, setTimeControl] = useState(String(DEFAULT_QUEUE_TIME_CONTROL_MINUTES));
   const { gameMode, setGameMode, status, setStakeToken } = useGameStore();
   const [selectedOpponent, setSelectedOpponent] = useState<Opponent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -260,6 +276,14 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
       socket.off("statusUpdate");
     };
   }, [socket, searchResults, recentOpponents]);
+
+  useEffect(() => {
+    if (!stakeEnabled) return;
+    const cappedTimeControl = String(clampStakedTimeControlMinutes(timeControl));
+    if (cappedTimeControl !== timeControl) {
+      setTimeControl(cappedTimeControl);
+    }
+  }, [stakeEnabled, timeControl]);
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
@@ -434,7 +458,11 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
 
         {gameMode === "online" && activeTab === "new-game" && (
           <div className="flex flex-col gap-6">
-            <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
+            <SelectGameDuration
+              timeControl={timeControl}
+              setTimeControl={setTimeControl}
+              stakedOnly={stakeEnabled}
+            />
 
             <StakePanel
               stakeEnabled={stakeEnabled}
@@ -481,8 +509,8 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                     staked: true,
                     token: selectedToken,
                     stakeAmount,
-                    timeControl: parseInt(timeControl),
-                  }, parseInt(timeControl));
+                    timeControl: clampStakedTimeControlMinutes(timeControl),
+                  }, clampStakedTimeControlMinutes(timeControl));
                   return;
                 }
                 onStartGame(undefined, parseInt(timeControl));
@@ -593,7 +621,11 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             </div>
 
             <div className="w-full">
-              <SelectGameDuration timeControl={timeControl} setTimeControl={setTimeControl} />
+              <SelectGameDuration
+                timeControl={timeControl}
+                setTimeControl={setTimeControl}
+                stakedOnly={stakeEnabled}
+              />
             </div>
 
             <StakePanel
@@ -628,6 +660,9 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                   stakeEnabled,
                   stakeToken: selectedToken,
                   stakeAmount,
+                  timeControl: stakeEnabled
+                    ? clampStakedTimeControlMinutes(timeControl)
+                    : parseInt(timeControl, 10),
                 });
                 toast.success(`Challenge sent to ${selectedOpponent.walletAddress.slice(0, 8)}...`);
               }}

@@ -22,7 +22,17 @@ describe('Free queue FIFO matching', () => {
     expect(p1.userId).toBe('alice');
     expect(p2.socketId).toBe('s2');
     expect(p2.userId).toBe('bob');
+    expect(p1.timeControl).toBe(3);
+    expect(p2.timeControl).toBe(3);
     expect(stakeInfo).toBeNull();
+  });
+
+  it('does not match free players with different time controls', () => {
+    mm.joinQueue('s1', { userId: 'alice', timeControl: 1 });
+    mm.joinQueue('s2', { userId: 'bob', timeControl: 3 });
+
+    expect(onMatch).not.toHaveBeenCalled();
+    expect(mm._getFreeQueueLength()).toBe(2);
   });
 
   it('single player — no match', () => {
@@ -133,6 +143,14 @@ describe('Staked queue isolation', () => {
   it('same token, amounts too far apart (>10%) → no match', () => {
     mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'USDC', stakeAmount: '10' });
     mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '5' });
+
+    expect(onMatch).not.toHaveBeenCalled();
+    expect(mm._getStakedQueue().get('usdc').length).toBe(2);
+  });
+
+  it('same token and amount but different time control do not match', () => {
+    mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'USDC', stakeAmount: '10', timeControl: 1 });
+    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '10', timeControl: 3 });
 
     expect(onMatch).not.toHaveBeenCalled();
     expect(mm._getStakedQueue().get('usdc').length).toBe(2);

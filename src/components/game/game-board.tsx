@@ -75,6 +75,7 @@ export function GameBoard() {
     setOpponentConnected,
     // Timer state
     initialTime,
+    setInitialTime,
     whiteTime,
     blackTime,
     setWhiteTime,
@@ -584,14 +585,28 @@ export function GameBoard() {
       setOpponentPing(data.ping);
     };
 
-    const handleTimeSync = (data: { whiteTime: number; blackTime: number }) => {
-      const { initialTime, whiteTime: curWhite, blackTime: curBlack } = useGameStore.getState();
-      const newWhite = Math.min(data.whiteTime, initialTime);
-      const newBlack = Math.min(data.blackTime, initialTime);
-      // Only accept times that don't increase — time can only go down during a game.
-      // The server may echo stale full-time values after each move.
-      if (newWhite <= curWhite) setWhiteTime(newWhite);
-      if (newBlack <= curBlack) setBlackTime(newBlack);
+    const handleTimeSync = (data: { whiteTime: number; blackTime: number; initialTime?: number }) => {
+      const {
+        initialTime: currentInitialTime,
+        whiteTime: curWhite,
+        blackTime: curBlack,
+      } = useGameStore.getState();
+      const syncedInitialTime =
+        typeof data.initialTime === "number" && data.initialTime > 0
+          ? data.initialTime
+          : Math.max(currentInitialTime, data.whiteTime, data.blackTime);
+      const newWhite = Math.min(data.whiteTime, syncedInitialTime);
+      const newBlack = Math.min(data.blackTime, syncedInitialTime);
+
+      if (syncedInitialTime !== currentInitialTime) {
+        setInitialTime(syncedInitialTime);
+      }
+      if (syncedInitialTime > currentInitialTime || newWhite <= curWhite) {
+        setWhiteTime(newWhite);
+      }
+      if (syncedInitialTime > currentInitialTime || newBlack <= curBlack) {
+        setBlackTime(newBlack);
+      }
     };
 
     const handleOpponentDisconnecting = (data: { deadline: number }) => {
@@ -645,7 +660,7 @@ export function GameBoard() {
       socket.off('opponentDisconnecting', handleOpponentDisconnecting);
       socket.off('opponentReconnected', handleOpponentReconnected);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed, setInitialTime]);
 
   const handlePostGamePlayAgain = useCallback(() => {
     if (socket && roomId) {
@@ -654,11 +669,11 @@ export function GameBoard() {
     resetStore();
     const isStakedMatch = !!stakeToken || !!stakeAmountRaw || onChainGameId !== null;
     if (gameMode === "online" && !isStakedMatch) {
-      router.push("/play?autoQueue=online");
+      router.push(`/play?autoQueue=online&timeControl=${Math.max(1, Math.round(initialTime / 60))}`);
       return;
     }
     router.push("/play");
-  }, [gameMode, onChainGameId, resetStore, roomId, router, socket, stakeAmountRaw, stakeToken]);
+  }, [gameMode, initialTime, onChainGameId, resetStore, roomId, router, socket, stakeAmountRaw, stakeToken]);
 
   // Flash the king square red when in check and player tries an invalid action
   const flashKingCheck = useCallback(() => {

@@ -4,14 +4,19 @@ import { GlassBg } from "../glass-bg";
 import { GlassButton } from "../glass-button";
 import Image from "next/image";
 import { formatName } from "@/lib/utils";
+import { getTimeControlDisplay, normalizeTimeControlMinutes } from "@/lib/time-control";
 
 interface ChallengeModalProps {
     from: string;
+    stakeEnabled?: boolean;
+    timeControl?: number;
     onAccept: () => void;
     onDecline: () => void;
 }
 
-export function ChallengeModal({ from, onAccept, onDecline }: ChallengeModalProps) {
+export function ChallengeModal({ from, stakeEnabled, timeControl, onAccept, onDecline }: ChallengeModalProps) {
+    const timeControlDisplay = getTimeControlDisplay(normalizeTimeControlMinutes(timeControl));
+
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
             <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
@@ -29,6 +34,14 @@ export function ChallengeModal({ from, onAccept, onDecline }: ChallengeModalProp
                             <p className="text-xs sm:text-sm text-white/60">
                                 {formatName(from)} wants to play a match
                             </p>
+                            <p className="mt-2 text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
+                                {timeControlDisplay}
+                            </p>
+                            {stakeEnabled ? (
+                                <p className="text-[10px] font-medium uppercase tracking-widest text-yellow-300/80">
+                                    Staked challenge
+                                </p>
+                            ) : null}
                         </div>
 
                         <div className="flex w-full gap-3 mt-2 sm:mt-4">
