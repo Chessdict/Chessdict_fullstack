@@ -108,7 +108,7 @@ type GameState = {
   reset: () => void;
 };
 
-const DEFAULT_TIME = 600; // 10 minutes in seconds
+const DEFAULT_TIME = 180; // 3 minutes in seconds (Blitz)
 
 const initialState = {
   status: "waiting" as GameStatus,

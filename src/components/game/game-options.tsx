@@ -27,10 +27,11 @@ export interface StakeInfo {
   staked: true;
   token: string;
   stakeAmount: string;
+  timeControl?: number;
 }
 
 interface GameOptionsProps {
-  onStartGame: (stakeInfo?: StakeInfo) => void;
+  onStartGame: (stakeInfo?: StakeInfo, timeControl?: number) => void;
   socket: any;
   userId?: string;
   isSocketConnected?: boolean;
@@ -172,21 +173,35 @@ function StakePanel({
   );
 }
 
+const TIME_OPTIONS = [
+  { value: "1", label: "1 min", category: "Bullet" },
+  { value: "2", label: "2 min", category: "Bullet" },
+  { value: "3", label: "3 min", category: "Blitz" },
+  { value: "10", label: "10 min", category: "Rapid" },
+];
+
 const SelectGameDuration = ({ timeControl, setTimeControl }: { timeControl: string; setTimeControl: (value: string) => void }) => (
-  <div className="relative">
-    <select
-      value={timeControl}
-      onChange={(e) => setTimeControl(e.target.value)}
-      className="w-full appearance-none rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-white outline-none transition hover:bg-white/10 focus:border-white/20"
-    >
-      <option value="10" className="bg-[#0A0A0A]">10 min (Fast game)</option>
-      <option value="30" className="bg-[#0A0A0A]">30 min (Standard)</option>
-      <option value="60" className="bg-[#0A0A0A]">60 min (Long)</option>
-    </select>
-    <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/40">
-      <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M1.41 0.589996L6 5.17L10.59 0.589996L12 2L6 8L0 2L1.41 0.589996Z" fill="currentColor" />
-      </svg>
+  <div className="flex flex-col gap-2">
+    <label className="text-sm font-medium text-white/60">Time Control</label>
+    <div className="grid grid-cols-4 gap-2">
+      {TIME_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => setTimeControl(opt.value)}
+          className={cn(
+            "flex flex-col items-center gap-0.5 rounded-xl border px-2 py-3 text-center transition-all",
+            timeControl === opt.value
+              ? "border-white bg-white text-black"
+              : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+          )}
+        >
+          <span className="text-sm font-semibold">{opt.label}</span>
+          <span className={cn(
+            "text-[10px]",
+            timeControl === opt.value ? "text-black/50" : "text-white/30"
+          )}>{opt.category}</span>
+        </button>
+      ))}
     </div>
   </div>
 )
@@ -195,7 +210,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   // All hooks must be called before any early returns
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
-  const [timeControl, setTimeControl] = useState("10");
+  const [timeControl, setTimeControl] = useState("3");
   const { gameMode, setGameMode, status, setStakeToken } = useGameStore();
   const [selectedOpponent, setSelectedOpponent] = useState<Opponent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -466,10 +481,11 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                     staked: true,
                     token: selectedToken,
                     stakeAmount,
-                  });
+                    timeControl: parseInt(timeControl),
+                  }, parseInt(timeControl));
                   return;
                 }
-                onStartGame();
+                onStartGame(undefined, parseInt(timeControl));
               }}
               className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-4 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
