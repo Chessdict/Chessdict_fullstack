@@ -201,6 +201,29 @@ export function useChessSounds() {
     });
   }, [getCtx, playAsset]);
 
+  // Low time warning — urgent ticking/beep
+  const playLowTime = useCallback(() => {
+    const ctx = getCtx();
+    const t = ctx.currentTime;
+
+    // Two short urgent beeps
+    [0, 0.15].forEach((offset) => {
+      const osc = ctx.createOscillator();
+      osc.type = "square";
+      osc.frequency.value = 880;
+
+      const gain = ctx.createGain();
+      const start = t + offset;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.15, start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.1);
+
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.1);
+    });
+  }, [getCtx]);
+
   // Play the right sound based on a move result
   const playMoveSound = useCallback((move: { san: string; captured?: string; flags?: string }) => {
     const isPromotion = move.flags?.includes("p") || move.san.includes("=");
@@ -218,5 +241,5 @@ export function useChessSounds() {
     }
   }, [playMove, playCapture, playCheck, playPromotion]);
 
-  return { playMove, playCapture, playCheck, playPromotion, playGameOver, playMoveSound };
+  return { playMove, playCapture, playCheck, playPromotion, playGameOver, playLowTime, playMoveSound };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Chess, Move } from "chess.js";
 import { Chessboard } from "react-chessboard";
@@ -41,6 +41,12 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// Check if time is critically low (30s for 1-min games, 60s for others)
+function isLowTime(seconds: number, initialTime: number): boolean {
+  const threshold = initialTime <= 60 ? 30 : 60;
+  return seconds <= threshold && seconds > 0;
+}
+
 // Map piece codes to unicode symbols
 const pieceSymbols: Record<string, { w: string; b: string }> = {
   p: { w: "\u2659", b: "\u265F" },
@@ -68,6 +74,7 @@ export function GameBoard() {
     clearMoves,
     setOpponentConnected,
     // Timer state
+    initialTime,
     whiteTime,
     blackTime,
     setWhiteTime,
@@ -112,7 +119,7 @@ export function GameBoard() {
   const router = useRouter();
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
-  const { playMoveSound, playGameOver } = useChessSounds();
+  const { playMoveSound, playGameOver, playLowTime } = useChessSounds();
   const { claimPrizeSingle, isLoading: isClaimLoading } = useChessdict();
 
 
@@ -363,14 +370,10 @@ export function GameBoard() {
     return () => clearInterval(interval);
   }, [status, gameOver, game, fen, decrementWhiteTime, decrementBlackTime]);
 
-  // Handle timeout (time runs out) - only for local/computer games
-  // For multiplayer, the server handles timeouts authoritatively
+  // Handle timeout (time runs out)
   useEffect(() => {
     if (status !== "in-progress") return;
     if (gameOver) return;
-
-    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-    if (isMultiplayer) return; // Server handles timeout for multiplayer
 
     const currentTurnForTimer = game.turn();
     const timeoutPlayer = currentTurnForTimer === 'w' ? whiteTime : blackTime;
@@ -378,10 +381,41 @@ export function GameBoard() {
     if (timeoutPlayer <= 0) {
       const winner = currentTurnForTimer === 'w' ? 'black' : 'white';
       console.log(`[CLIENT] Timeout! ${winner} wins`);
+
+      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
+      if (isMultiplayer && socket && roomId) {
+        socket.emit("gameComplete", { roomId, winner, reason: "timeout" });
+      }
+
       setGameOver(winner, "timeout");
       setStatus("finished");
+      playGameOver();
     }
-  }, [whiteTime, blackTime, status, gameOver, game, gameMode, setGameOver, setStatus]);
+  }, [whiteTime, blackTime, status, gameOver, game, gameMode, socket, roomId, setGameOver, setStatus, playGameOver]);
+
+  // Low time warning sound
+  const lowTimeAlertedRef = useRef<{ white: boolean; black: boolean }>({ white: false, black: false });
+  useEffect(() => {
+    if (status !== "in-progress" || gameOver) return;
+
+    const { initialTime } = useGameStore.getState();
+    // 30s threshold for 1-min games, 60s for everything else
+    const threshold = initialTime <= 60 ? 30 : 60;
+    const myColor = playerColor || 'white';
+
+    // Only alert for the player's own time
+    const myTime = myColor === 'white' ? whiteTime : blackTime;
+    const key = myColor as 'white' | 'black';
+
+    if (myTime <= threshold && myTime > 0 && !lowTimeAlertedRef.current[key]) {
+      lowTimeAlertedRef.current[key] = true;
+      playLowTime();
+    }
+    // Reset alert if time goes back above threshold (e.g. reconnect)
+    if (myTime > threshold) {
+      lowTimeAlertedRef.current[key] = false;
+    }
+  }, [whiteTime, blackTime, status, gameOver, playerColor, playLowTime]);
 
   // Bot Logic
   useEffect(() => {
@@ -551,14 +585,13 @@ export function GameBoard() {
     };
 
     const handleTimeSync = (data: { whiteTime: number; blackTime: number }) => {
-      const { initialTime, whiteTime: currentWhite, blackTime: currentBlack } = useGameStore.getState();
-      // Clamp server times to the client's selected time control
+      const { initialTime, whiteTime: curWhite, blackTime: curBlack } = useGameStore.getState();
       const newWhite = Math.min(data.whiteTime, initialTime);
       const newBlack = Math.min(data.blackTime, initialTime);
-      // Only accept if server is sending a value <= current time (time only goes down)
-      // This prevents resets after moves when the server echoes stale full-time values
-      if (newWhite <= currentWhite) setWhiteTime(newWhite);
-      if (newBlack <= currentBlack) setBlackTime(newBlack);
+      // Only accept times that don't increase — time can only go down during a game.
+      // The server may echo stale full-time values after each move.
+      if (newWhite <= curWhite) setWhiteTime(newWhite);
+      if (newBlack <= curBlack) setBlackTime(newBlack);
     };
 
     const handleOpponentDisconnecting = (data: { deadline: number }) => {
@@ -935,14 +968,20 @@ export function GameBoard() {
           {gameMode !== 'computer' && (
             <SignalStrength ping={opponentPing} isConnected={!!socket?.connected} variant="opponent" />
           )}
-          <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 bg-white ${(playerColor === 'white' ? blackTime : whiteTime) <= 30 ? 'animate-pulse' : ''}`}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-black/60">
-              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-            </svg>
-            <span className="text-sm font-mono tabular-nums font-semibold text-black">
-              {formatTime(playerColor === 'white' ? blackTime : whiteTime)}
-            </span>
-          </div>
+          {(() => {
+            const opponentTime = playerColor === 'white' ? blackTime : whiteTime;
+            const low = isLowTime(opponentTime, initialTime);
+            return (
+              <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={low ? "text-white/80" : "text-black/60"}>
+                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span className={`text-sm font-mono tabular-nums font-semibold ${low ? 'text-white' : 'text-black'}`}>
+                  {formatTime(opponentTime)}
+                </span>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -1140,14 +1179,20 @@ export function GameBoard() {
           {gameMode !== 'computer' && (
             <SignalStrength ping={ping} isConnected={!!socket?.connected} />
           )}
-          <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 bg-white ${(playerColor === 'white' ? whiteTime : blackTime) <= 30 ? 'animate-pulse' : ''}`}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-black/60">
-              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-            </svg>
-            <span className="text-sm font-mono tabular-nums font-semibold text-black">
-              {formatTime(playerColor === 'white' ? whiteTime : blackTime)}
-            </span>
-          </div>
+          {(() => {
+            const myTime = playerColor === 'white' ? whiteTime : blackTime;
+            const low = isLowTime(myTime, initialTime);
+            return (
+              <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={low ? "text-white/80" : "text-black/60"}>
+                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span className={`text-sm font-mono tabular-nums font-semibold ${low ? 'text-white' : 'text-black'}`}>
+                  {formatTime(myTime)}
+                </span>
+              </div>
+            );
+          })()}
         </div>
       </div>
      </div>

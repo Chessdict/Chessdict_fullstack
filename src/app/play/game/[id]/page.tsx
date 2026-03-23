@@ -86,8 +86,11 @@ export default function GamePage({
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
       if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
-      setWhiteTime(data.whiteTime);
-      setBlackTime(data.blackTime);
+      const { initialTime, whiteTime: curWhite, blackTime: curBlack } = useGameStore.getState();
+      const newWhite = Math.min(data.whiteTime, initialTime);
+      const newBlack = Math.min(data.blackTime, initialTime);
+      if (newWhite <= curWhite) setWhiteTime(newWhite);
+      if (newBlack <= curBlack) setBlackTime(newBlack);
       setRejoinData(data.fen, data.moves);
       if (data.chatMessages?.length) {
         setRejoinChatMessages(data.chatMessages);

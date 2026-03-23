@@ -57,11 +57,14 @@ export default function PlayPage() {
   const searchMemojiRef = useRef<string | null>(null);
   const selectedTimeRef = useRef<number>(3); // minutes, default blitz
   const hasHandledAutoActionRef = useRef(false);
+  const setInitialTime = useGameStore((s) => s.setInitialTime);
 
   const enterMatchedGame = useCallback((match: PendingMatch, options?: { onChainGameId?: bigint | null }) => {
     if (!address) return;
 
     clearMatchState();
+    // Re-apply selected time after clearMatchState resets timers
+    setInitialTime(selectedTimeRef.current * 60);
     if (options?.onChainGameId !== undefined) {
       setOnChainGameId(options.onChainGameId);
     }
@@ -83,7 +86,7 @@ export default function PlayPage() {
     setStatus("in-progress");
     setPendingMatch(null);
     router.push(`/play/game/${match.roomId}`);
-  }, [address, clearMatchState, gameMode, router, setGameMode, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus]);
+  }, [address, clearMatchState, gameMode, router, setGameMode, setInitialTime, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus]);
 
   useEffect(() => {
     if (isConnected && address) {
@@ -131,15 +134,6 @@ export default function PlayPage() {
       console.log("GAME READY EVENT:", data);
       setPendingMatch(prev => {
         if (!prev || prev.roomId !== data.roomId) return prev;
-        // Auto-enter match for the creator (white) who was waiting
-        setInitialTime(selectedTimeRef.current * 60);
-        setRoomId(prev.roomId);
-        setPlayerColor(prev.color);
-        setOpponent({ address: prev.opponent, rating: prev.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(prev.opponent) });
-        setPlayer({ address: address!, rating: prev.playerRating, memoji: getMemojiForAddress(address!) });
-        if (!gameMode) setGameMode("online");
-        setStatus("in-progress");
-        router.push(`/play/game/${prev.roomId}`);
         enterMatchedGame(prev, {
           onChainGameId: data.onChainGameId ? BigInt(data.onChainGameId) : null,
         });
@@ -181,8 +175,11 @@ export default function PlayPage() {
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
       if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
-      setWhiteTime(data.whiteTime);
-      setBlackTime(data.blackTime);
+      const { initialTime, whiteTime: curWhite, blackTime: curBlack } = useGameStore.getState();
+      const newWhite = Math.min(data.whiteTime, initialTime);
+      const newBlack = Math.min(data.blackTime, initialTime);
+      if (newWhite <= curWhite) setWhiteTime(newWhite);
+      if (newBlack <= curBlack) setBlackTime(newBlack);
       setRejoinData(data.fen, data.moves);
       if (data.chatMessages?.length) {
         setRejoinChatMessages(data.chatMessages);
@@ -204,8 +201,6 @@ export default function PlayPage() {
       socket.off('gameRejoined');
     };
   }, [socket, status, roomId, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, enterMatchedGame, clearMatchState]);
-
-  const setInitialTime = useGameStore((s) => s.setInitialTime);
 
   const handleStartGame = (stakeInfo?: StakeInfo, timeControl?: number) => {
     if (!isConnected) {
@@ -279,15 +274,6 @@ export default function PlayPage() {
                 color: pendingMatch.color,
                 opponent: pendingMatch.opponent
               });
-              setInitialTime(selectedTimeRef.current * 60);
-              setRoomId(pendingMatch.roomId);
-              setPlayerColor(pendingMatch.color);
-              setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(pendingMatch.opponent) });
-              setPlayer({ address: address!, rating: pendingMatch.playerRating, memoji: getMemojiForAddress(address!) });
-              if (!gameMode) setGameMode("online");
-              setStatus("in-progress");
-              setPendingMatch(null);
-              router.push(`/play/game/${pendingMatch.roomId}`);
               enterMatchedGame(pendingMatch);
             }}
             onDecline={() => {
