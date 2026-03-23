@@ -122,12 +122,7 @@ export default function PlayPage() {
       setIsSearchOpen(false);
       toast.success(`Match found! You are ${data.color}`);
 
-      if (data.staked) {
-        setPendingMatch(data);
-        return;
-      }
-
-      enterMatchedGame(data);
+      setPendingMatch(data);
     });
 
     // Staked game: both players confirmed — game is ready
@@ -256,6 +251,7 @@ export default function PlayPage() {
             opponent={pendingMatch.opponent}
             color={pendingMatch.color}
             memoji={searchMemojiRef.current}
+            autoEnter={!pendingMatch.staked}
             staked={pendingMatch.staked}
             stakeToken={pendingMatch.stakeToken}
             stakeAmount={pendingMatch.stakeAmount}
