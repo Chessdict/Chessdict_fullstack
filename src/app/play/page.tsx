@@ -39,6 +39,7 @@ export default function PlayPage() {
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
   const searchMemojiRef = useRef<string | null>(null);
+  const selectedTimeRef = useRef<number>(3); // minutes, default blitz
 
   useEffect(() => {
     if (isConnected && address) {
@@ -80,6 +81,7 @@ export default function PlayPage() {
           setOnChainGameId(BigInt(data.onChainGameId));
         }
         // Auto-enter match for the creator (white) who was waiting
+        setInitialTime(selectedTimeRef.current * 60);
         setRoomId(prev.roomId);
         setPlayerColor(prev.color);
         setOpponent({ address: prev.opponent, rating: prev.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(prev.opponent) });
@@ -143,11 +145,17 @@ export default function PlayPage() {
     };
   }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId]);
 
-  const handleStartGame = (stakeInfo?: StakeInfo) => {
+  const setInitialTime = useGameStore((s) => s.setInitialTime);
+
+  const handleStartGame = (stakeInfo?: StakeInfo, timeControl?: number) => {
     if (!isConnected) {
       toast.error("Please connect your wallet to play!");
       return;
     }
+
+    const timeMinutes = timeControl ?? 3;
+    selectedTimeRef.current = timeMinutes;
+    setInitialTime(timeMinutes * 60);
 
     if (gameMode === 'online') {
       if (!isSocketConnected) {
@@ -161,9 +169,10 @@ export default function PlayPage() {
           staked: true,
           token: stakeInfo.token,
           stakeAmount: stakeInfo.stakeAmount,
+          timeControl: timeMinutes,
         });
       } else {
-        socket?.emit("joinQueue", { userId: address });
+        socket?.emit("joinQueue", { userId: address, timeControl: timeMinutes });
       }
     } else if (gameMode === 'computer') {
       setPlayerColor("white");
@@ -208,6 +217,7 @@ export default function PlayPage() {
                 color: pendingMatch.color,
                 opponent: pendingMatch.opponent
               });
+              setInitialTime(selectedTimeRef.current * 60);
               setRoomId(pendingMatch.roomId);
               setPlayerColor(pendingMatch.color);
               setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(pendingMatch.opponent) });

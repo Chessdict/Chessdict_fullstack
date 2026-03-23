@@ -420,8 +420,14 @@ export function GameBoard() {
     };
 
     const handleTimeSync = (data: { whiteTime: number; blackTime: number }) => {
-      setWhiteTime(data.whiteTime);
-      setBlackTime(data.blackTime);
+      const { initialTime, whiteTime: currentWhite, blackTime: currentBlack } = useGameStore.getState();
+      // Clamp server times to the client's selected time control
+      const newWhite = Math.min(data.whiteTime, initialTime);
+      const newBlack = Math.min(data.blackTime, initialTime);
+      // Only accept if server is sending a value <= current time (time only goes down)
+      // This prevents resets after moves when the server echoes stale full-time values
+      if (newWhite <= currentWhite) setWhiteTime(newWhite);
+      if (newBlack <= currentBlack) setBlackTime(newBlack);
     };
 
     const handleOpponentDisconnecting = (data: { deadline: number }) => {
