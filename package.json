@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "NODE_ENV=production node server.mjs",
     "lint": "next lint",
-    "postinstall": "prisma generate",
+    "postinstall": "prisma generate && node scripts/patch-react-chessboard-drop-animation.mjs",
     "seed": "tsx prisma/seed.ts",
     "db:migrate": "prisma migrate dev",
     "db:migrate:create": "prisma migrate dev --create-only",

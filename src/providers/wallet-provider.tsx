@@ -4,16 +4,21 @@ import "@rainbow-me/rainbowkit/styles.css";
 import { getDefaultConfig, RainbowKitProvider } from "@rainbow-me/rainbowkit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider } from "wagmi";
-import { mainnet, sepolia, polygon, optimism, arbitrum, base, baseSepolia } from "wagmi/chains";
 import { ReactNode, useState } from "react";
 import { networkConfig } from "@/lib/network-config";
 
+const walletConnectProjectId =
+  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "4e8929e0682855581f1430d41829e205";
+
 const config = getDefaultConfig({
   appName: "Chessdict",
-  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "4e8929e0682855581f1430d41829e205", // Fallback to hardcoded demo ID if env fails
-  // Primary chain comes from env: mainnet = Base, testnet = Base Sepolia
-  chains: [networkConfig.chain, base, baseSepolia, mainnet, sepolia, polygon, optimism, arbitrum],
-  ssr: true,
+  appDescription: "Play chess matches and optional staked games on Base.",
+  appUrl: "https://chessdict.com",
+  appIcon: "https://chessdict.com/logo.svg",
+  projectId: walletConnectProjectId,
+  // WalletConnect is more reliable when we advertise only the chain this app actually uses.
+  chains: [networkConfig.chain],
+  ssr: false,
 });
 
 export function WalletProvider({ children }: { children: ReactNode }) {
@@ -37,4 +42,3 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     </WagmiProvider>
   );
 }
-

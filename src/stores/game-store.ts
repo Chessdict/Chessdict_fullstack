@@ -102,6 +102,9 @@ type GameState = {
   // Opponent disconnect countdown
   opponentDisconnectDeadline: number | null;
   setOpponentDisconnectDeadline: (deadline: number | null) => void;
+  gameResultModalDismissed: boolean;
+  setGameResultModalDismissed: (dismissed: boolean) => void;
+  clearMatchState: () => void;
   reset: () => void;
 };
 
@@ -131,6 +134,7 @@ const initialState = {
   rejoinMoves: [] as MoveRecord[],
   rejoinChatMessages: [] as { sender: string; text: string; timestamp: number }[],
   opponentDisconnectDeadline: null,
+  gameResultModalDismissed: false,
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -172,6 +176,31 @@ export const useGameStore = create<GameState>((set) => ({
   setRejoinChatMessages: (messages) => set({ rejoinChatMessages: messages }),
   clearRejoinChatMessages: () => set({ rejoinChatMessages: [] }),
   setOpponentDisconnectDeadline: (deadline) => set({ opponentDisconnectDeadline: deadline }),
+  setGameResultModalDismissed: (dismissed) => set({ gameResultModalDismissed: dismissed }),
+  clearMatchState: () =>
+    set((state) => ({
+      status: "waiting",
+      stakeAmount: 0,
+      onChainGameId: null,
+      stakeToken: null,
+      stakeAmountRaw: null,
+      opponent: undefined,
+      roomId: undefined,
+      playerColor: undefined,
+      moves: [],
+      viewMoveIndex: null,
+      isOpponentConnected: false,
+      drawOfferReceived: false,
+      drawOfferSent: false,
+      whiteTime: state.initialTime,
+      blackTime: state.initialTime,
+      gameOver: null,
+      rejoinFen: null,
+      rejoinMoves: [],
+      rejoinChatMessages: [],
+      opponentDisconnectDeadline: null,
+      gameResultModalDismissed: false,
+    })),
   reset: () =>
     set({
       ...initialState,
@@ -192,5 +221,6 @@ export const useGameStore = create<GameState>((set) => ({
       rejoinMoves: [],
       rejoinChatMessages: [],
       opponentDisconnectDeadline: null,
+      gameResultModalDismissed: false,
     }),
 }));

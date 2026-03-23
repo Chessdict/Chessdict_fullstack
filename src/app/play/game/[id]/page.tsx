@@ -33,6 +33,10 @@ export default function GamePage({
     setOpponent,
     setPlayer,
     setGameMode,
+    setOnChainGameId,
+    setStakeToken,
+    setStakeAmountRaw,
+    clearMatchState,
   } = useGameStore();
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
@@ -68,7 +72,16 @@ export default function GamePage({
       chatMessages?: { sender: string; text: string; timestamp: number }[];
       whiteTime: number;
       blackTime: number;
+      onChainGameId?: string | null;
+      stakeToken?: string | null;
+      stakeAmount?: string | null;
     }) => {
+      if (roomId !== data.roomId || status !== "in-progress") {
+        clearMatchState();
+      }
+      setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
+      setStakeToken(data.stakeToken ?? null);
+      setStakeAmountRaw(data.stakeAmount ?? null);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
@@ -87,7 +100,7 @@ export default function GamePage({
     return () => {
       socket.off("gameRejoined", handleGameRejoined);
     };
-  }, [socket, gameId, address, gameMode, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setStatus]);
+  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus]);
 
   // Effect 2: Emit rejoinGame on initial page load AND on every socket reconnection
   // This ensures we always get fresh game state + chat even after tab close/reopen

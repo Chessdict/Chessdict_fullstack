@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type RefObject } from "react";
+import { useRouter } from "next/navigation";
 import { useGameStore } from "@/stores/game-store";
 import { cn } from "@/lib/utils";
 import { useSocket } from "@/hooks/useSocket";
@@ -8,6 +9,7 @@ import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { getGameHistory } from "@/app/actions";
 import { getMemojiForAddress } from "@/lib/memoji";
+import { toast } from "sonner";
 
 type ChatMessage = {
   sender: string;
@@ -29,6 +31,7 @@ interface GameInfoPanelProps {
 }
 
 export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
+  const router = useRouter();
   const {
     status,
     gameMode,
@@ -40,6 +43,9 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     roomId,
     setStatus,
     reset,
+    stakeToken,
+    stakeAmountRaw,
+    gameResultModalDismissed,
     drawOfferSent,
     setDrawOfferSent,
     viewMoveIndex,
@@ -62,7 +68,10 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   // Chat state
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const desktopChatContainerRef = useRef<HTMLDivElement>(null);
+  const mobileChatContainerRef = useRef<HTMLDivElement>(null);
 
   const movesEndRef = useRef<HTMLDivElement>(null);
   const movesContainerRef = useRef<HTMLDivElement>(null);
@@ -135,20 +144,46 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     return () => { cancelled = true; };
   }, [activeTab, address]);
 
+  const isWaitingForOpponent = status === "matched" || (status === "in-progress" && !opponent);
+  const isGameActive = status === "in-progress";
+  const isGameFinished = status === "finished";
+  const canReviewGame = isGameActive || isGameFinished;
+  const canPlayAgain = gameMode === "online" && !stakeToken && !stakeAmountRaw;
+
   // Chat socket listener
   useEffect(() => {
     if (!socket || !roomId) return;
     const handleChatMessage = (msg: ChatMessage) => {
       setChatMessages((prev) => [...prev, msg]);
+      if (msg.sender !== address && !isMobileChatOpen) {
+        setUnreadChatCount((prev) => prev + 1);
+      }
     };
     socket.on("chatMessage", handleChatMessage);
     return () => { socket.off("chatMessage", handleChatMessage); };
-  }, [socket, roomId]);
+  }, [socket, roomId, address, isMobileChatOpen]);
 
-  // Auto-scroll chat
+  // Auto-scroll chat inside chat containers only
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+    [desktopChatContainerRef.current, mobileChatContainerRef.current].forEach((container) => {
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+  }, [chatMessages, isMobileChatOpen]);
+
+  useEffect(() => {
+    if (isMobileChatOpen) {
+      setUnreadChatCount(0);
+    }
+  }, [isMobileChatOpen]);
+
+  useEffect(() => {
+    if (!isGameActive) {
+      setIsMobileChatOpen(false);
+      setUnreadChatCount(0);
+    }
+  }, [isGameActive]);
 
   // Load chat messages from rejoin data (reconnection via store)
   useEffect(() => {
@@ -181,11 +216,44 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     setChatInput("");
   }, [socket, roomId, chatInput, address]);
 
+  const handleReviewGame = useCallback(() => {
+    setActiveTab("play");
+    setActiveSubTab("moves");
+    stopAutoPlay();
+    setViewMoveIndex(null);
+  }, [setViewMoveIndex, stopAutoPlay]);
+
+  const handlePlayNewGame = useCallback(() => {
+    stopAutoPlay();
+    if (socket && roomId) {
+      socket.emit("leaveRoom", { roomId });
+    }
+    reset();
+    router.push("/play");
+  }, [reset, roomId, router, socket, stopAutoPlay]);
+
+  const handlePlayAgain = useCallback(() => {
+    if (!canPlayAgain) {
+      handlePlayNewGame();
+      return;
+    }
+
+    stopAutoPlay();
+    if (socket && roomId) {
+      socket.emit("leaveRoom", { roomId });
+    }
+    reset();
+    toast.success("Finding a new match...");
+    router.push("/play?autoQueue=online");
+  }, [canPlayAgain, handlePlayNewGame, reset, roomId, router, socket, stopAutoPlay]);
+
   // Clear chat only when switching to a genuinely different game
   const prevRoomIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (roomId && prevRoomIdRef.current && roomId !== prevRoomIdRef.current) {
       setChatMessages([]);
+      setUnreadChatCount(0);
+      setIsMobileChatOpen(false);
     }
     prevRoomIdRef.current = roomId;
   }, [roomId]);
@@ -208,9 +276,6 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     });
   }
 
-  const isWaitingForOpponent = status === "matched" || (status === "in-progress" && !opponent);
-  const isGameActive = status === "in-progress";
-
   const opponentName = opponent
     ? (gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`)
     : "Opponent";
@@ -221,6 +286,32 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const pieceIcons: Record<string, string> = {
     p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
   };
+
+  const renderChatThread = (containerRef: RefObject<HTMLDivElement | null>, maxHeightClass: string) => (
+    <div
+      ref={containerRef}
+      className={cn("flex min-h-[96px] flex-col gap-3 overflow-y-auto elegant-scrollbar", maxHeightClass)}
+    >
+      {chatMessages.length === 0 ? (
+        <p className="py-6 text-center text-[11px] text-white/20">No messages yet</p>
+      ) : (
+        chatMessages.map((msg, i) => {
+          const isMe = msg.sender === address;
+          const senderMemoji = isMe ? playerMemoji : opponentMemoji;
+          return (
+            <div key={`${msg.timestamp}-${i}`} className="flex">
+              <div className="flex max-w-[85%] items-center gap-2 rounded-tl-[18px] rounded-tr-[18px] rounded-bl-[18px] rounded-br-[1px] bg-white/[0.08] p-1.5 pr-3.5">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/8">
+                  <img src={senderMemoji} alt="" className="h-[30px] w-[30px] rounded-full object-contain" />
+                </div>
+                <span className="text-sm font-medium leading-snug text-white">{msg.text}</span>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
 
   return (
     <div className="flex flex-col rounded-[24px] border border-white/10 bg-[#1A1A1A]/90 backdrop-blur-xl overflow-hidden">
@@ -327,7 +418,38 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           </div>
 
           {/* Opening Name */}
-          {isGameActive && activeSubTab === "moves" && (
+          {isGameFinished && gameResultModalDismissed && (
+            <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Game Complete</h3>
+                <p className="mt-1 text-xs text-white/45">
+                  Review the game, queue another match, or return to the lobby.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                <button
+                  onClick={handlePlayAgain}
+                  className="rounded-xl border border-emerald-300/30 bg-emerald-300/18 px-4 py-3 text-sm font-semibold text-emerald-50 backdrop-blur-md transition hover:bg-emerald-300/24"
+                >
+                  Play Again
+                </button>
+                <button
+                  onClick={handleReviewGame}
+                  className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-medium text-emerald-50/95 backdrop-blur-md transition hover:bg-emerald-300/16"
+                >
+                  Review Game
+                </button>
+                <button
+                  onClick={handlePlayNewGame}
+                  className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-medium text-emerald-50/80 backdrop-blur-md transition hover:bg-emerald-300/16 hover:text-emerald-50"
+                >
+                  New Game
+                </button>
+              </div>
+            </div>
+          )}
+
+          {canReviewGame && activeSubTab === "moves" && (
             <p className="text-xs font-medium text-white">{opponentName}&apos;s Opening</p>
           )}
 
@@ -348,7 +470,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           )}
 
           {/* Players Info */}
-          {activeSubTab === "info" && isGameActive && opponent && (
+          {activeSubTab === "info" && canReviewGame && opponent && (
             <div className="flex flex-col gap-3">
               <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Players</h3>
 
@@ -402,7 +524,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           )}
 
           {/* Move History */}
-          {activeSubTab === "moves" && isGameActive && (
+          {activeSubTab === "moves" && canReviewGame && (
             <div className="flex flex-col gap-3">
               <div ref={movesContainerRef} className="max-h-[260px] overflow-y-auto elegant-scrollbar">
                 {movePairs.length === 0 ? (
@@ -529,28 +651,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   {opponentName} VS {playerName} (You)
                 </p>
               </div>
-              <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-                <div className="flex max-h-[150px] min-h-[96px] flex-col gap-3 overflow-y-auto elegant-scrollbar">
-                  {chatMessages.length === 0 ? (
-                    <p className="py-6 text-center text-[11px] text-white/20">No messages yet</p>
-                  ) : (
-                    chatMessages.map((msg, i) => {
-                      const isMe = msg.sender === address;
-                      const senderMemoji = isMe ? playerMemoji : opponentMemoji;
-                      return (
-                        <div key={i} className="flex">
-                          <div className="flex max-w-[85%] items-center gap-2 rounded-tl-[18px] rounded-tr-[18px] rounded-bl-[18px] rounded-br-[1px] bg-white/[0.08] p-1.5 pr-3.5">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/8">
-                              <img src={senderMemoji} alt="" className="h-[30px] w-[30px] rounded-full object-contain" />
-                            </div>
-                            <span className="text-sm font-medium leading-snug text-white">{msg.text}</span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                  <div ref={chatEndRef} />
-                </div>
+              <div className="hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.025))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] sm:block">
+                {renderChatThread(desktopChatContainerRef, "max-h-[150px]")}
                 <div className="mt-4 rounded-[28px] border border-white/18 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]">
                   <div className="flex items-center gap-3">
                     <input
@@ -578,8 +680,86 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   </div>
                 </div>
               </div>
+              <div className="sm:hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsMobileChatOpen(true)}
+                  className="flex w-full items-center justify-between rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3 text-left"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-white">Chat</p>
+                    <p className="text-xs text-white/40">
+                      {chatMessages.length === 0 ? "No messages yet" : `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {unreadChatCount > 0 ? (
+                      <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                        {unreadChatCount}
+                      </span>
+                    ) : null}
+                    <span className="text-sm text-white/50">Open</span>
+                  </div>
+                </button>
+              </div>
             </div>
           )}
+        </div>
+      )}
+
+      {isGameActive && activeTab === "play" && activeSubTab === "moves" && isMobileChatOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setIsMobileChatOpen(false)}
+            aria-label="Close chat"
+          />
+          <div className="relative z-10 flex max-h-[72vh] w-full flex-col rounded-t-[28px] border border-white/10 bg-[#111111] px-4 pb-4 pt-3 shadow-[0_-20px_60px_rgba(0,0,0,0.45)]">
+            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/15" />
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-white">Chat</p>
+                <p className="text-xs text-white/40">{opponentName} vs {playerName}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileChatOpen(false)}
+                className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/70"
+              >
+                Close
+              </button>
+            </div>
+            <div className="rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.025))] p-4">
+              {renderChatThread(mobileChatContainerRef, "max-h-[40vh]")}
+            </div>
+            <div className="mt-3 rounded-[24px] border border-white/18 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]">
+              <div className="flex items-center gap-3">
+                <input
+                  type="text"
+                  placeholder="Send message..."
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
+                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/28"
+                  disabled={!isGameActive || gameMode === "computer"}
+                />
+                <button
+                  type="button"
+                  onClick={sendChatMessage}
+                  disabled={!isGameActive || gameMode === "computer" || !chatInput.trim()}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#757575] transition hover:scale-[1.02] disabled:opacity-50"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="7.5" />
+                    <path d="M9 14c.7.7 1.6 1 3 1s2.3-.3 3-1" />
+                    <circle cx="9.2" cy="10" r="0.8" fill="currentColor" stroke="none" />
+                    <circle cx="14.8" cy="10" r="0.8" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

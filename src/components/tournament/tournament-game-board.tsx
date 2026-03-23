@@ -3,27 +3,21 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
+import { getAutomaticDrawReason } from "@/lib/game-result-display";
+import { PromotionChooser } from "@/components/chess/promotion-chooser";
+import { MaterialBalanceStrip } from "@/components/chess/material-balance-strip";
+import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
 import { useTournamentStore } from "@/stores/tournament-store";
+import {
+  getPromotionSelection,
+  type PromotionPiece,
+  type PromotionSelection,
+} from "@/lib/chess-promotion";
+import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
+import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { type Socket } from "socket.io-client";
+import { customPieces } from "@/components/chess/custom-pieces";
 import { SignalStrength } from "@/components/game/signal-strength";
-
-// Custom chess piece renderer using SVGs from /pieces/
-const PIECE_CODES = ['K', 'Q', 'R', 'B', 'N', 'P'] as const;
-const customPieces: Record<string, () => React.JSX.Element> = {};
-for (const code of PIECE_CODES) {
-  const isPawn = code === 'P';
-  const size = isPawn ? '68%' : '75%';
-  customPieces[`w${code}`] = () => (
-    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={`/pieces/w${code}.svg`} alt={`w${code}`} style={{ width: size, height: size }} />
-    </div>
-  );
-  customPieces[`b${code}`] = () => (
-    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={`/pieces/b${code}.svg`} alt={`b${code}`} style={{ width: size, height: size }} />
-    </div>
-  );
-}
 
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -36,6 +30,9 @@ interface TournamentGameBoardProps {
   myAddress: string;
 }
 
+type SelectionMode = "move" | "premove" | null;
+const MOVE_ANIMATION_DURATION_MS = 200;
+
 export function TournamentGameBoard({
   socket,
   myAddress,
@@ -45,6 +42,8 @@ export function TournamentGameBoard({
     gameId,
     playerColor,
     opponentAddress,
+    playerRating,
+    opponentRating,
     timeControl,
     whiteTime,
     blackTime,
@@ -58,24 +57,44 @@ export function TournamentGameBoard({
 
   const game = useMemo(() => new Chess(), []);
   const [fen, setFen] = useState(game.fen());
+  const playerTurnCode = playerColor ? (playerColor === "black" ? "b" : "w") : null;
+  const chessboardId = useMemo(() => `tournament-board-${gameId ?? "active"}`, [gameId]);
   const [moveSquares, setMoveSquares] = useState<
     Record<string, React.CSSProperties>
   >({});
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>(null);
+  const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
+  const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
+
+  const syncState = useCallback(() => {
+    setFen(game.fen());
+  }, [game]);
+
+  const clearSelection = useCallback(() => {
+    setMoveSquares({});
+    setSourceSquare(null);
+    setSelectionMode(null);
+  }, []);
 
   // Reset game when gameId changes
   useEffect(() => {
     game.reset();
     setFen(game.fen());
-    setMoveSquares({});
-    setSourceSquare(null);
+    clearSelection();
+    setQueuedPremove(null);
+    setPromotionSelection(null);
     setShowResignConfirm(false);
-  }, [gameId, game]);
+  }, [gameId, game, clearSelection]);
 
-  const syncState = useCallback(() => {
-    setFen(game.fen());
-  }, [game]);
+  useEffect(() => {
+    if (gameResult) {
+      clearSelection();
+      setQueuedPremove(null);
+      setPromotionSelection(null);
+    }
+  }, [gameResult, clearSelection]);
 
   const safeMove = useCallback(
     (move: any) => {
@@ -83,8 +102,7 @@ export function TournamentGameBoard({
         const result = game.move(move);
         if (result) {
           syncState();
-          setMoveSquares({});
-          setSourceSquare(null);
+          clearSelection();
           return result;
         }
       } catch {
@@ -92,8 +110,70 @@ export function TournamentGameBoard({
       }
       return null;
     },
-    [game, syncState],
+    [clearSelection, game, syncState],
   );
+
+  const playPlayerMove = useCallback((move: Premove) => {
+    const result = safeMove(move);
+    if (!result) return null;
+
+    if (socket && gameId) {
+      socket.emit("tournament:move", { gameId, move });
+    }
+
+    return result;
+  }, [gameId, safeMove, socket]);
+
+  const queuePremove = useCallback((move: Premove) => {
+    setQueuedPremove((current) =>
+      current && current.from === move.from && current.to === move.to ? null : move,
+    );
+    clearSelection();
+  }, [clearSelection]);
+
+  const clearQueuedPremove = useCallback(() => {
+    setQueuedPremove(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const requestPromotion = useCallback((from: string, to: string) => {
+    const selection = getPromotionSelection(game, from, to);
+    if (!selection) return false;
+
+    setPromotionSelection(selection);
+    clearSelection();
+    return true;
+  }, [clearSelection, game]);
+
+  const cancelPromotionSelection = useCallback(() => {
+    setPromotionSelection(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const handlePromotionSelect = useCallback((promotion: PromotionPiece) => {
+    if (!promotionSelection) return;
+
+    playPlayerMove({
+      from: promotionSelection.from,
+      to: promotionSelection.to,
+      promotion,
+    });
+    setPromotionSelection(null);
+  }, [playPlayerMove, promotionSelection]);
+
+  const premoveSquares = useMemo<Record<string, React.CSSProperties>>(() => {
+    if (!queuedPremove) return {};
+
+    return {
+      [queuedPremove.from]: {
+        background: "rgba(59, 130, 246, 0.35)",
+      },
+      [queuedPremove.to]: {
+        background: "radial-gradient(circle, rgba(59,130,246,0.35) 28%, transparent 30%)",
+        borderRadius: "50%",
+      },
+    };
+  }, [queuedPremove]);
 
   // Timer countdown
   useEffect(() => {
@@ -162,6 +242,15 @@ export function TournamentGameBoard({
     };
   }, [socket, gameId, safeMove]);
 
+  useEffect(() => {
+    if (!queuedPremove || gameResult || game.isGameOver() || !playerTurnCode) return;
+    if (game.turn() !== playerTurnCode) return;
+
+    const pendingMove = queuedPremove;
+    setQueuedPremove(null);
+    playPlayerMove(pendingMove);
+  }, [fen, game, gameResult, playPlayerMove, playerTurnCode, queuedPremove]);
+
   // Listen for force end
   useEffect(() => {
     if (!socket || !gameId) return;
@@ -189,8 +278,8 @@ export function TournamentGameBoard({
       const loser = game.turn();
       winner = loser === "w" ? "black" : "white";
       reason = "checkmate";
-    } else if (game.isStalemate()) {
-      reason = "stalemate";
+    } else {
+      reason = getAutomaticDrawReason(game) ?? "draw";
     }
 
     setGameResult(winner, reason);
@@ -216,13 +305,12 @@ export function TournamentGameBoard({
   ]);
 
   // Move options highlighting
-  const getMoveOptions = (square: string) => {
+  const getMoveOptions = useCallback((square: string) => {
+    if (!playerTurnCode) return false;
+
     const turn = game.turn();
     const piece = game.get(square as any);
-    if (!piece || piece.color !== turn) return false;
-
-    const myTurnCode = playerColor === "black" ? "b" : "w";
-    if (piece.color !== myTurnCode) return false;
+    if (!piece || piece.color !== turn || piece.color !== playerTurnCode) return false;
 
     const moves = game.moves({ square: square as any, verbose: true });
     if (moves.length === 0) {
@@ -244,74 +332,116 @@ export function TournamentGameBoard({
     newSquares[square] = { background: "rgba(255, 255, 0, 0.4)" };
     setMoveSquares(newSquares);
     return true;
-  };
+  }, [game, playerTurnCode]);
+
+  const getPremoveOptions = useCallback((square: string) => {
+    if (!playerTurnCode || game.turn() === playerTurnCode) return false;
+
+    const piece = game.get(square as any);
+    if (!piece || piece.color !== playerTurnCode) return false;
+
+    const targets = getPremoveTargets(game, square);
+    if (targets.length === 0) {
+      setMoveSquares({});
+      return false;
+    }
+
+    const newSquares: Record<string, React.CSSProperties> = {};
+    targets.forEach((target) => {
+      const targetPiece = game.get(target as any);
+      newSquares[target] = {
+        background:
+          targetPiece
+            ? "radial-gradient(circle, rgba(59,130,246,0.22) 72%, transparent 74%)"
+            : "radial-gradient(circle, rgba(59,130,246,0.32) 24%, transparent 26%)",
+        borderRadius: "50%",
+      };
+    });
+    newSquares[square] = { background: "rgba(59, 130, 246, 0.24)" };
+    setMoveSquares(newSquares);
+    return true;
+  }, [game, playerTurnCode]);
+
+  const tryQueuePremove = useCallback((source: string, target: string) => {
+    if (!playerTurnCode || game.turn() === playerTurnCode) return false;
+
+    const piece = game.get(source as any);
+    if (!piece || piece.color !== playerTurnCode) return false;
+    if (!canSetPremove(game, source, target)) return false;
+
+    queuePremove({ from: source, to: target, promotion: "q" });
+    return true;
+  }, [game, playerTurnCode, queuePremove]);
 
   const onSquareClick = ({ square }: { square: string }) => {
-    if (gameResult) return;
+    if (gameResult || !playerTurnCode || promotionSelection) return;
+
+    const isPlayersTurn = game.turn() === playerTurnCode;
 
     if (sourceSquare) {
       if (sourceSquare === square) {
-        setSourceSquare(null);
-        setMoveSquares({});
+        clearSelection();
         return;
       }
 
-      const moveData = { from: sourceSquare, to: square, promotion: "q" };
-      try {
-        const testResult = game.move(moveData);
-        if (testResult) {
-          game.undo();
-          const result = safeMove(moveData);
-          if (result && socket && gameId) {
-            socket.emit("tournament:move", { gameId, move: moveData });
+      if (selectionMode === "move" && isPlayersTurn) {
+        const move = game
+          .moves({ square: sourceSquare as any, verbose: true })
+          .find((candidate: any) => candidate.to === square);
+
+        if (move) {
+          if (move.promotion && requestPromotion(sourceSquare, square)) {
+            return;
           }
+          playPlayerMove({ from: sourceSquare, to: square, promotion: "q" });
           return;
         }
-      } catch {
-        // not valid
       }
 
-      // Try selecting a different piece
-      const piece = game.get(square as any);
-      const myTurnCode = playerColor === "black" ? "b" : "w";
-      if (piece && piece.color === myTurnCode) {
-        setSourceSquare(square);
-        getMoveOptions(square);
+      if (selectionMode === "premove" && !isPlayersTurn && tryQueuePremove(sourceSquare, square)) {
         return;
       }
 
-      setSourceSquare(null);
-      setMoveSquares({});
+      const piece = game.get(square as any);
+      if (piece && piece.color === playerTurnCode) {
+        const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
+        if (selected) {
+          setSourceSquare(square);
+          setSelectionMode(isPlayersTurn ? "move" : "premove");
+        }
+        return;
+      }
+
+      clearSelection();
       return;
     }
 
-    if (getMoveOptions(square)) {
+    const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
+    if (selected) {
       setSourceSquare(square);
+      setSelectionMode(isPlayersTurn ? "move" : "premove");
     } else {
-      setSourceSquare(null);
-      setMoveSquares({});
+      clearSelection();
     }
   };
 
   const onDrop = useCallback(
     (source: string, target: string) => {
-      if (gameResult) return false;
+      if (gameResult || promotionSelection) return false;
       if (game.isGameOver()) return false;
+      if (!playerTurnCode) return false;
 
-      const turn = game.turn();
-      const myTurnCode = playerColor === "black" ? "b" : "w";
-      if (turn !== myTurnCode) return false;
-
-      const moveData = { from: source, to: target, promotion: "q" };
-      const result = safeMove(moveData);
-
-      if (result && socket && gameId) {
-        socket.emit("tournament:move", { gameId, move: moveData });
-        return true;
+      if (game.turn() !== playerTurnCode) {
+        tryQueuePremove(source, target);
+        return false;
       }
-      return false;
+
+      if (requestPromotion(source, target)) return false;
+
+      const result = playPlayerMove({ from: source, to: target, promotion: "q" });
+      return !!result;
     },
-    [game, playerColor, socket, gameId, safeMove, gameResult],
+    [game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, requestPromotion, tryQueuePremove],
   );
 
   const handleResign = () => {
@@ -326,7 +456,21 @@ export function TournamentGameBoard({
   const orientation: "white" | "black" =
     playerColor === "black" ? "black" : "white";
   const currentTurn = game.turn();
-  const isMyTurn = currentTurn === (playerColor === "black" ? "b" : "w");
+  const isMyTurn = !!playerTurnCode && currentTurn === playerTurnCode;
+  const materialBalance = useMemo(() => getMaterialBalance(fen), [fen]);
+  const playerMaterialDisplay = useMemo(() => {
+    if (!playerColor) return null;
+
+    return getSideMaterialDisplay(materialBalance, playerColor);
+  }, [materialBalance, playerColor]);
+  const opponentMaterialDisplay = useMemo(() => {
+    if (!playerColor) return null;
+
+    return getSideMaterialDisplay(
+      materialBalance,
+      playerColor === "white" ? "black" : "white",
+    );
+  }, [materialBalance, playerColor]);
 
   // Opponent disconnect countdown
   const opponentDeadline = opponentAddress
@@ -360,14 +504,23 @@ export function TournamentGameBoard({
             </div>
           </div>
           <div>
-            <div className="text-sm font-bold text-white tracking-tight">
-              {opponentAddress
-                ? `${opponentAddress.slice(0, 6)}...${opponentAddress.slice(-4)}`
-                : "Waiting..."}
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="truncate text-sm font-bold tracking-tight text-white">
+                {opponentAddress
+                  ? `${opponentAddress.slice(0, 6)}...${opponentAddress.slice(-4)}`
+                  : "Waiting..."}
+              </div>
+              <PlayerRatingBadge rating={opponentRating} />
             </div>
             <div className="text-[10px] uppercase font-bold tracking-widest text-white/30">
               {!isMyTurn && !gameResult ? "Thinking..." : "Waiting"}
             </div>
+            {opponentMaterialDisplay ? (
+              <MaterialBalanceStrip
+                advantage={opponentMaterialDisplay.advantage}
+                capturedPieces={opponentMaterialDisplay.capturedPieces}
+              />
+            ) : null}
           </div>
         </div>
         <div
@@ -413,13 +566,16 @@ export function TournamentGameBoard({
           <Chessboard
             key={`tboard-${gameId}-${orientation}`}
             options={{
+              id: chessboardId,
               position: fen,
               boardOrientation: orientation,
-              allowDragging: !gameResult,
+              showAnimations: true,
+              animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              allowDragging: !gameResult && !promotionSelection,
               boardStyle: { borderRadius: "4px" },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
-              squareStyles: moveSquares,
+              squareStyles: { ...premoveSquares, ...moveSquares },
               pieces: customPieces,
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string | null }) => {
@@ -428,6 +584,15 @@ export function TournamentGameBoard({
               },
             }}
           />
+          {promotionSelection ? (
+            <PromotionChooser
+              targetSquare={promotionSelection.to}
+              color={promotionSelection.color}
+              orientation={orientation}
+              onSelect={handlePromotionSelect}
+              onCancel={cancelPromotionSelection}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -440,14 +605,34 @@ export function TournamentGameBoard({
             </div>
           </div>
           <div>
-            <div className="text-sm font-bold text-white tracking-tight">
-              {myAddress
-                ? `${myAddress.slice(0, 6)}...${myAddress.slice(-4)}`
-                : "You"}
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="truncate text-sm font-bold tracking-tight text-white">
+                {myAddress
+                  ? `${myAddress.slice(0, 6)}...${myAddress.slice(-4)}`
+                  : "You"}
+              </div>
+              <PlayerRatingBadge rating={playerRating} />
             </div>
-            <div className="text-[10px] uppercase font-bold tracking-widest text-blue-400/60">
-              {isMyTurn && !gameResult ? "Your turn" : "Waiting"}
+            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-blue-400/60">
+              <span>
+                {isMyTurn && !gameResult ? "Your turn" : queuedPremove && !gameResult ? "Premove set" : "Waiting"}
+              </span>
+              {queuedPremove && !gameResult ? (
+                <button
+                  type="button"
+                  onClick={clearQueuedPremove}
+                  className="rounded-sm text-[10px] tracking-normal text-blue-300/80 transition hover:text-blue-200"
+                >
+                  Cancel premove
+                </button>
+              ) : null}
             </div>
+            {playerMaterialDisplay ? (
+              <MaterialBalanceStrip
+                advantage={playerMaterialDisplay.advantage}
+                capturedPieces={playerMaterialDisplay.capturedPieces}
+              />
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">

@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma/
+COPY scripts ./scripts/
 
 RUN npm install
 
@@ -32,4 +33,4 @@ COPY --from=builder /app ./
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "npx prisma migrate deploy && PORT=8080 node server.mjs"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node server.mjs"]
