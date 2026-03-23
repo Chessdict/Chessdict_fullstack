@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { Chess, Move } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useGameStore } from "@/stores/game-store";
@@ -14,6 +15,16 @@ import { GlassBg } from "../glass-bg";
 import { useChessSounds } from "@/hooks/useChessSounds";
 import { MaterialBalanceStrip } from "@/components/chess/material-balance-strip";
 import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
+import {
+  formatGameReason,
+  getAutomaticDrawReason,
+} from "@/lib/game-result-display";
+import { PromotionChooser } from "@/components/chess/promotion-chooser";
+import {
+  getPromotionSelection,
+  type PromotionPiece,
+  type PromotionSelection,
+} from "@/lib/chess-promotion";
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { SignalStrength } from "./signal-strength";
@@ -66,6 +77,8 @@ export function GameBoard() {
     resetTimers,
     gameOver,
     setGameOver,
+    gameResultModalDismissed,
+    setGameResultModalDismissed,
     drawOfferReceived,
     drawOfferSent,
     setDrawOfferReceived,
@@ -79,6 +92,8 @@ export function GameBoard() {
     setOpponentDisconnectDeadline,
     // On-chain state
     onChainGameId,
+    stakeToken,
+    stakeAmountRaw,
     reset: resetStore,
     // Move navigation
     viewMoveIndex,
@@ -93,8 +108,8 @@ export function GameBoard() {
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
   const [prizeClaimed, setPrizeClaimed] = useState(false);
   const [settlementFailed, setSettlementFailed] = useState(false);
-  const [modalDismissed, setModalDismissed] = useState(false);
 
+  const router = useRouter();
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
   const { playMoveSound, playGameOver } = useChessSounds();
@@ -118,6 +133,7 @@ export function GameBoard() {
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(null);
   const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
+  const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   // State for last move highlighting (persists between moves)
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
 
@@ -220,6 +236,36 @@ export function GameBoard() {
     clearSelection();
   }, [clearSelection]);
 
+  const clearQueuedPremove = useCallback(() => {
+    setQueuedPremove(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const requestPromotion = useCallback((from: string, to: string) => {
+    const selection = getPromotionSelection(game, from, to);
+    if (!selection) return false;
+
+    setPromotionSelection(selection);
+    clearSelection();
+    return true;
+  }, [clearSelection, game]);
+
+  const cancelPromotionSelection = useCallback(() => {
+    setPromotionSelection(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const handlePromotionSelect = useCallback((promotion: PromotionPiece) => {
+    if (!promotionSelection) return;
+
+    playPlayerMove({
+      from: promotionSelection.from,
+      to: promotionSelection.to,
+      promotion,
+    });
+    setPromotionSelection(null);
+  }, [playPlayerMove, promotionSelection]);
+
   const premoveSquares = useMemo<Record<string, React.CSSProperties>>(() => {
     if (!queuedPremove) return {};
 
@@ -240,13 +286,20 @@ export function GameBoard() {
       game.reset();
       syncState();
       setLastMove(null);
+      setCheckFlash({});
+      setRatingChange(null);
+      setDisconnectCountdown(null);
+      setPrizeClaimed(false);
+      setSettlementFailed(false);
+      setGameResultModalDismissed(false);
       clearMoves();
       resetTimers();
       clearSelection();
       setQueuedPremove(null);
+      setPromotionSelection(null);
       setLastMoveSquares({});
     }
-  }, [status, game, syncState, clearMoves, resetTimers, clearSelection]);
+  }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed]);
 
   // Load rejoined game state (after browser refresh reconnection)
   useEffect(() => {
@@ -258,6 +311,7 @@ export function GameBoard() {
         rejoinMoves.forEach(m => addMove(m));
         clearSelection();
         setQueuedPremove(null);
+        setPromotionSelection(null);
         clearRejoinData();
         console.log("[CLIENT] Rejoined game state loaded, FEN:", rejoinFen);
       } catch (e) {
@@ -271,6 +325,7 @@ export function GameBoard() {
     if (status !== "in-progress" || gameOver) {
       clearSelection();
       setQueuedPremove(null);
+      setPromotionSelection(null);
     }
   }, [status, gameOver, clearSelection]);
 
@@ -451,7 +506,7 @@ export function GameBoard() {
       console.log("[CLIENT] gameOver event received:", { winner, reason, ratings, settlementFailed: settFailed });
       setGameOver(winner, reason);
       setStatus("finished");
-      setModalDismissed(false);
+      setGameResultModalDismissed(false);
       playGameOver();
       if (settFailed) {
         setSettlementFailed(true);
@@ -551,7 +606,20 @@ export function GameBoard() {
       socket.off('opponentDisconnecting', handleOpponentDisconnecting);
       socket.off('opponentReconnected', handleOpponentReconnected);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed]);
+
+  const handlePostGamePlayAgain = useCallback(() => {
+    if (socket && roomId) {
+      socket.emit("leaveRoom", { roomId });
+    }
+    resetStore();
+    const isStakedMatch = !!stakeToken || !!stakeAmountRaw || onChainGameId !== null;
+    if (gameMode === "online" && !isStakedMatch) {
+      router.push("/play?autoQueue=online");
+      return;
+    }
+    router.push("/play");
+  }, [gameMode, onChainGameId, resetStore, roomId, router, socket, stakeAmountRaw, stakeToken]);
 
   // Flash the king square red when in check and player tries an invalid action
   const flashKingCheck = useCallback(() => {
@@ -667,7 +735,7 @@ export function GameBoard() {
 
   // Handle square clicks for click-to-move and highlighting
   const onSquareClick = ({ square }: { square: string }) => {
-    if (status !== "in-progress" || !playerTurnCode) return;
+    if (status !== "in-progress" || !playerTurnCode || promotionSelection) return;
 
     const isPlayersTurn = game.turn() === playerTurnCode;
 
@@ -683,6 +751,9 @@ export function GameBoard() {
           .find((candidate: any) => candidate.to === square);
 
         if (move) {
+          if (move.promotion && requestPromotion(sourceSquare, square)) {
+            return;
+          }
           playPlayerMove({ from: sourceSquare, to: square, promotion: "q" });
           return;
         }
@@ -720,7 +791,7 @@ export function GameBoard() {
 
   // Primary Move Handler for Chessboard (Drag and Drop)
   const onDrop = useCallback((source: string, target: string) => {
-    if (status !== "in-progress") return false;
+    if (status !== "in-progress" || promotionSelection) return false;
     if (game.isGameOver()) return false;
     if (!playerTurnCode) return false;
 
@@ -729,9 +800,11 @@ export function GameBoard() {
       return false;
     }
 
+    if (requestPromotion(source, target)) return false;
+
     const result = playPlayerMove({ from: source, to: target, promotion: "q" });
     return !!result;
-  }, [game, playerTurnCode, playPlayerMove, status, tryQueuePremove]);
+  }, [game, playerTurnCode, playPlayerMove, promotionSelection, requestPromotion, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -762,6 +835,11 @@ export function GameBoard() {
       effectiveColor === "white" ? "black" : "white",
     );
   }, [effectiveColor, materialBalance]);
+  const displayedGameReason = useMemo(() => {
+    if (!gameOver?.reason) return null;
+    if (gameOver.reason !== "draw") return gameOver.reason;
+    return getAutomaticDrawReason(game) ?? gameOver.reason;
+  }, [fen, game, gameOver]);
 
   // Force remount counter when color changes
   const [boardKey, setBoardKey] = useState(0);
@@ -886,7 +964,11 @@ export function GameBoard() {
               boardOrientation: orientation,
               showAnimations: true,
               animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
-              allowDragging: status === 'in-progress' && !!effectiveColor && !isViewingHistory,
+              allowDragging:
+                status === 'in-progress' &&
+                !!effectiveColor &&
+                !isViewingHistory &&
+                !promotionSelection,
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
@@ -900,6 +982,16 @@ export function GameBoard() {
             }}
           />
 
+          {promotionSelection ? (
+            <PromotionChooser
+              targetSquare={promotionSelection.to}
+              color={promotionSelection.color}
+              orientation={orientation}
+              onSelect={handlePromotionSelect}
+              onCancel={cancelPromotionSelection}
+            />
+          ) : null}
+
           {status === "waiting" && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 animate-in fade-in duration-500">
               {/* <div className="text-center space-y-4">
@@ -909,12 +1001,12 @@ export function GameBoard() {
             </div>
           )}
 
-          {gameOver && !modalDismissed && (
+          {gameOver && !gameResultModalDismissed && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
               <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
                 <GlassBg className="p-5 sm:p-8 text-center relative" height="auto">
                   <button
-                    onClick={() => setModalDismissed(true)}
+                    onClick={() => setGameResultModalDismissed(true)}
                     className="absolute top-3 right-3 rounded-full p-1.5 text-white/40 transition hover:bg-white/10 hover:text-white"
                   >
                     <X className="h-5 w-5" />
@@ -937,11 +1029,10 @@ export function GameBoard() {
                         {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
                       </h2>
                       <p className="text-xs sm:text-sm text-white/60 capitalize">
-                        {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
-                          gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
-                            gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
-                              gameOver.reason === 'draw' ? 'Draw by Agreement' :
-                                gameOver.reason}
+                        {formatGameReason(
+                          displayedGameReason,
+                          gameOver.winner === playerColor || gameOver.winner === "opponent",
+                        )}
                       </p>
                     </div>
 
@@ -982,7 +1073,7 @@ export function GameBoard() {
                     )}
 
                     <button
-                      onClick={() => window.location.reload()}
+                      onClick={handlePostGamePlayAgain}
                       className="w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 mt-1 sm:mt-2"
                     >
                       <div className="absolute inset-0 bg-linear-to-r from-blue-600 to-purple-600 opacity-90 group-hover:opacity-100 transition-opacity" />
@@ -1011,15 +1102,26 @@ export function GameBoard() {
               <p className="truncate text-sm font-semibold text-white">You(Player)</p>
               <PlayerRatingBadge rating={player?.rating} />
             </div>
-            <p className="text-xs text-white/30">
-              {status === 'in-progress' && isMyTurn
-                ? 'Your move'
-                : status === 'in-progress' && queuedPremove
-                  ? 'Premove set'
-                  : status === 'in-progress'
-                    ? 'Waiting for opponent'
-                    : 'Online'}
-            </p>
+            <div className="flex items-center gap-2 text-xs text-white/30">
+              <p>
+                {status === 'in-progress' && isMyTurn
+                  ? 'Your move'
+                  : status === 'in-progress' && queuedPremove
+                    ? 'Premove set'
+                    : status === 'in-progress'
+                      ? 'Waiting for opponent'
+                      : 'Online'}
+              </p>
+              {status === "in-progress" && queuedPremove ? (
+                <button
+                  type="button"
+                  onClick={clearQueuedPremove}
+                  className="rounded-sm text-[11px] font-medium text-blue-300/80 transition hover:text-blue-200"
+                >
+                  Cancel premove
+                </button>
+              ) : null}
+            </div>
             {playerMaterialDisplay ? (
               <MaterialBalanceStrip
                 advantage={playerMaterialDisplay.advantage}

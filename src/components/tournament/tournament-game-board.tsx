@@ -3,9 +3,16 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
+import { getAutomaticDrawReason } from "@/lib/game-result-display";
+import { PromotionChooser } from "@/components/chess/promotion-chooser";
 import { MaterialBalanceStrip } from "@/components/chess/material-balance-strip";
 import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
 import { useTournamentStore } from "@/stores/tournament-store";
+import {
+  getPromotionSelection,
+  type PromotionPiece,
+  type PromotionSelection,
+} from "@/lib/chess-promotion";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { type Socket } from "socket.io-client";
@@ -58,6 +65,7 @@ export function TournamentGameBoard({
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(null);
   const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
+  const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
 
   const syncState = useCallback(() => {
@@ -76,6 +84,7 @@ export function TournamentGameBoard({
     setFen(game.fen());
     clearSelection();
     setQueuedPremove(null);
+    setPromotionSelection(null);
     setShowResignConfirm(false);
   }, [gameId, game, clearSelection]);
 
@@ -83,6 +92,7 @@ export function TournamentGameBoard({
     if (gameResult) {
       clearSelection();
       setQueuedPremove(null);
+      setPromotionSelection(null);
     }
   }, [gameResult, clearSelection]);
 
@@ -120,6 +130,36 @@ export function TournamentGameBoard({
     );
     clearSelection();
   }, [clearSelection]);
+
+  const clearQueuedPremove = useCallback(() => {
+    setQueuedPremove(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const requestPromotion = useCallback((from: string, to: string) => {
+    const selection = getPromotionSelection(game, from, to);
+    if (!selection) return false;
+
+    setPromotionSelection(selection);
+    clearSelection();
+    return true;
+  }, [clearSelection, game]);
+
+  const cancelPromotionSelection = useCallback(() => {
+    setPromotionSelection(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const handlePromotionSelect = useCallback((promotion: PromotionPiece) => {
+    if (!promotionSelection) return;
+
+    playPlayerMove({
+      from: promotionSelection.from,
+      to: promotionSelection.to,
+      promotion,
+    });
+    setPromotionSelection(null);
+  }, [playPlayerMove, promotionSelection]);
 
   const premoveSquares = useMemo<Record<string, React.CSSProperties>>(() => {
     if (!queuedPremove) return {};
@@ -238,8 +278,8 @@ export function TournamentGameBoard({
       const loser = game.turn();
       winner = loser === "w" ? "black" : "white";
       reason = "checkmate";
-    } else if (game.isStalemate()) {
-      reason = "stalemate";
+    } else {
+      reason = getAutomaticDrawReason(game) ?? "draw";
     }
 
     setGameResult(winner, reason);
@@ -334,7 +374,7 @@ export function TournamentGameBoard({
   }, [game, playerTurnCode, queuePremove]);
 
   const onSquareClick = ({ square }: { square: string }) => {
-    if (gameResult || !playerTurnCode) return;
+    if (gameResult || !playerTurnCode || promotionSelection) return;
 
     const isPlayersTurn = game.turn() === playerTurnCode;
 
@@ -350,6 +390,9 @@ export function TournamentGameBoard({
           .find((candidate: any) => candidate.to === square);
 
         if (move) {
+          if (move.promotion && requestPromotion(sourceSquare, square)) {
+            return;
+          }
           playPlayerMove({ from: sourceSquare, to: square, promotion: "q" });
           return;
         }
@@ -384,7 +427,7 @@ export function TournamentGameBoard({
 
   const onDrop = useCallback(
     (source: string, target: string) => {
-      if (gameResult) return false;
+      if (gameResult || promotionSelection) return false;
       if (game.isGameOver()) return false;
       if (!playerTurnCode) return false;
 
@@ -393,10 +436,12 @@ export function TournamentGameBoard({
         return false;
       }
 
+      if (requestPromotion(source, target)) return false;
+
       const result = playPlayerMove({ from: source, to: target, promotion: "q" });
       return !!result;
     },
-    [game, gameResult, playPlayerMove, playerTurnCode, tryQueuePremove],
+    [game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, requestPromotion, tryQueuePremove],
   );
 
   const handleResign = () => {
@@ -526,7 +571,7 @@ export function TournamentGameBoard({
               boardOrientation: orientation,
               showAnimations: true,
               animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
-              allowDragging: !gameResult,
+              allowDragging: !gameResult && !promotionSelection,
               boardStyle: { borderRadius: "4px" },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
@@ -539,6 +584,15 @@ export function TournamentGameBoard({
               },
             }}
           />
+          {promotionSelection ? (
+            <PromotionChooser
+              targetSquare={promotionSelection.to}
+              color={promotionSelection.color}
+              orientation={orientation}
+              onSelect={handlePromotionSelect}
+              onCancel={cancelPromotionSelection}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -559,8 +613,19 @@ export function TournamentGameBoard({
               </div>
               <PlayerRatingBadge rating={playerRating} />
             </div>
-            <div className="text-[10px] uppercase font-bold tracking-widest text-blue-400/60">
-              {isMyTurn && !gameResult ? "Your turn" : queuedPremove && !gameResult ? "Premove set" : "Waiting"}
+            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-blue-400/60">
+              <span>
+                {isMyTurn && !gameResult ? "Your turn" : queuedPremove && !gameResult ? "Premove set" : "Waiting"}
+              </span>
+              {queuedPremove && !gameResult ? (
+                <button
+                  type="button"
+                  onClick={clearQueuedPremove}
+                  className="rounded-sm text-[10px] tracking-normal text-blue-300/80 transition hover:text-blue-200"
+                >
+                  Cancel premove
+                </button>
+              ) : null}
             </div>
             {playerMaterialDisplay ? (
               <MaterialBalanceStrip

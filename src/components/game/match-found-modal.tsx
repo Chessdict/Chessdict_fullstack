@@ -22,7 +22,7 @@ interface MatchFoundModalProps {
 }
 
 type CreatorState = "creating" | "waiting" | "failed" | "opponent-left" | "cancelling" | "reclaimed";
-type JoinerState = "waiting-for-creator" | "idle" | "joining" | "confirmed" | "failed";
+type JoinerState = "waiting-for-creator" | "creator-failed" | "idle" | "joining" | "confirmed" | "failed";
 
 export function MatchFoundModal({
     opponent,
@@ -74,9 +74,11 @@ export function MatchFoundModal({
                     socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
                     setCreatorState("waiting");
                 } else {
+                    socket?.emit("stakeCreationFailed", { roomId });
                     setCreatorState("failed");
                 }
             } catch {
+                socket?.emit("stakeCreationFailed", { roomId });
                 setCreatorState("failed");
             }
         })();
@@ -119,8 +121,18 @@ export function MatchFoundModal({
             }
         };
 
+        const handleStakeCreationFailed = (data: { roomId: string }) => {
+            if (data.roomId === roomId) {
+                setJoinerState("creator-failed");
+            }
+        };
+
         socket.on("stakeReady", handleStakeReady);
-        return () => { socket.off("stakeReady", handleStakeReady); };
+        socket.on("stakeCreationFailed", handleStakeCreationFailed);
+        return () => {
+            socket.off("stakeReady", handleStakeReady);
+            socket.off("stakeCreationFailed", handleStakeCreationFailed);
+        };
     }, [isJoiner, socket, roomId]);
 
     const handleRetryCreate = async () => {
@@ -139,9 +151,11 @@ export function MatchFoundModal({
                 socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
                 setCreatorState("waiting");
             } else {
+                socket?.emit("stakeCreationFailed", { roomId });
                 setCreatorState("failed");
             }
         } catch {
+            socket?.emit("stakeCreationFailed", { roomId });
             setCreatorState("failed");
         }
     };
@@ -259,23 +273,37 @@ export function MatchFoundModal({
                                 <div className="w-full flex flex-col gap-3">
                                     <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3">
                                         <p className="text-xs text-red-400 font-medium">Opponent left the match</p>
-                                        <p className="text-[10px] text-white/50 mt-1">Cancel the on-chain game to reclaim your stake</p>
+                                        <p className="text-[10px] text-white/50 mt-1">
+                                            {onChainGameId
+                                                ? "Cancel the on-chain game to reclaim your stake"
+                                                : "No on-chain game was created. You can leave this match safely."}
+                                        </p>
                                     </div>
-                                    <button
-                                        onClick={handleCancelAndReclaim}
-                                        disabled={isLoading}
-                                        className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95 disabled:opacity-50"
-                                    >
-                                        <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
-                                        <span className="relative text-sm font-bold text-white">
-                                            Cancel Game & Reclaim Stake
-                                        </span>
-                                    </button>
+                                    {onChainGameId ? (
+                                        <button
+                                            onClick={handleCancelAndReclaim}
+                                            disabled={isLoading}
+                                            className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95 disabled:opacity-50"
+                                        >
+                                            <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                            <span className="relative text-sm font-bold text-white">
+                                                Cancel Game & Reclaim Stake
+                                            </span>
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={() => onDecline?.()}
+                                            className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95"
+                                        >
+                                            <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                            <span className="relative text-sm font-bold text-white">Close</span>
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => onDecline?.()}
                                         className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"
                                     >
-                                        Dismiss (reclaim later)
+                                        {onChainGameId ? "Dismiss (reclaim later)" : "Dismiss"}
                                     </button>
                                 </div>
                             )}
@@ -348,6 +376,23 @@ export function MatchFoundModal({
                                     <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest">
                                         Waiting for opponent to create game...
                                     </p>
+                                </div>
+                            )}
+
+                            {joinerState === "creator-failed" && (
+                                <div className="w-full flex flex-col gap-3">
+                                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-left">
+                                        <p className="text-xs text-red-400 font-medium">Opponent failed to create the staked game</p>
+                                        <p className="text-[10px] text-white/50 mt-1">
+                                            You can wait for them to retry, or leave this match now.
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={handleDeclineStake}
+                                        className="w-full rounded-full py-3 text-sm font-medium text-white/80 hover:text-white hover:bg-white/5 transition border border-white/10"
+                                    >
+                                        Leave Match
+                                    </button>
                                 </div>
                             )}
 

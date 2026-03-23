@@ -1,11 +1,12 @@
 import { Chess } from "chess.js";
+import type { PromotionPiece } from "@/lib/chess-promotion";
 
 type ColorCode = "w" | "b";
 
 export type Premove = {
   from: string;
   to: string;
-  promotion: "q";
+  promotion: PromotionPiece;
 };
 
 type SquarePosition = {
