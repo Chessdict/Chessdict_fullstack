@@ -9,12 +9,15 @@ import { networkConfig } from "@/lib/network-config";
 
 const walletConnectProjectId =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "4e8929e0682855581f1430d41829e205";
+const appUrl =
+  process.env.NEXT_PUBLIC_APP_URL ||
+  (typeof window !== "undefined" ? window.location.origin : undefined);
 
 const config = getDefaultConfig({
   appName: "Chessdict",
   appDescription: "Play chess matches and optional staked games on Base.",
-  appUrl: "https://chessdict.com",
-  appIcon: "https://chessdict.com/logo.svg",
+  appUrl,
+  appIcon: appUrl ? `${appUrl}/logo.svg` : undefined,
   projectId: walletConnectProjectId,
   // WalletConnect is more reliable when we advertise only the chain this app actually uses.
   chains: [networkConfig.chain],

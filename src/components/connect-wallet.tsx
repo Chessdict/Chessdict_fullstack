@@ -13,9 +13,9 @@ import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
 import { formatUnits } from "viem";
 
 export function ConnectWallet() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, connector } = useAccount();
   const { openConnectModal } = useConnectModal();
-  const { disconnect } = useDisconnect();
+  const { disconnectAsync, connectors } = useDisconnect();
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const buttonRef = useRef<HTMLDivElement>(null);
@@ -86,6 +86,31 @@ export function ConnectWallet() {
     };
   }, [isOpen, isMobile]);
 
+  const clearWalletPersistence = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    const clearStorage = (storage: Storage) => {
+      const keysToRemove = Object.keys(storage).filter((key) => {
+        return (
+          key === "wagmi.store" ||
+          key === "wagmi.recentConnectorId" ||
+          key === "rk-latest-id" ||
+          key === "rk-recent" ||
+          key === "WALLETCONNECT_DEEPLINK_CHOICE" ||
+          key.startsWith("wc@") ||
+          key.toLowerCase().includes("walletconnect")
+        );
+      });
+
+      for (const key of keysToRemove) {
+        storage.removeItem(key);
+      }
+    };
+
+    clearStorage(window.localStorage);
+    clearStorage(window.sessionStorage);
+  }, []);
+
   if (isConnected && address) {
     const shortenedAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
 
@@ -94,9 +119,31 @@ export function ConnectWallet() {
       router.push("/profile");
     };
 
-    const handleDisconnect = () => {
+    const handleDisconnect = async () => {
       setIsOpen(false);
-      disconnect();
+
+      const activeConnectors = [...connectors];
+      if (connector) {
+        activeConnectors.push(connector);
+      }
+
+      const seen = new Set<string>();
+      const uniqueConnectors = activeConnectors.filter((item) => {
+        if (seen.has(item.uid)) return false;
+        seen.add(item.uid);
+        return true;
+      });
+
+      if (uniqueConnectors.length > 0) {
+        await Promise.allSettled(
+          uniqueConnectors.map((item) => disconnectAsync({ connector: item })),
+        );
+      } else {
+        await disconnectAsync().catch(() => undefined);
+      }
+
+      clearWalletPersistence();
+      router.refresh();
     };
 
     return (
