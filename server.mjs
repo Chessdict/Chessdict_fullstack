@@ -103,27 +103,83 @@ function calculateElo(winnerRating, loserRating, isDraw = false) {
   };
 }
 
+function getRatingFieldForTimeControl(timeControl) {
+  const numericTimeControl = Number.parseInt(String(timeControl ?? ""), 10);
+  const normalizedTimeControl = Number.isFinite(numericTimeControl)
+    ? numericTimeControl
+    : 3;
+
+  if (normalizedTimeControl <= 2) return "bulletRating";
+  if (normalizedTimeControl <= 5) return "blitzRating";
+  return "rapidRating";
+}
+
+function getPlayerRatingForTimeControl(player, timeControl) {
+  if (!player) return 1200;
+
+  const ratingField = getRatingFieldForTimeControl(timeControl);
+  const categoryRating = player[ratingField];
+
+  if (typeof categoryRating === "number" && Number.isFinite(categoryRating)) {
+    return categoryRating;
+  }
+
+  return typeof player.rating === "number" && Number.isFinite(player.rating)
+    ? player.rating
+    : 1200;
+}
+
+function buildRatingUpdate(ratingField, rating) {
+  if (ratingField === "blitzRating") {
+    return {
+      [ratingField]: rating,
+      rating,
+    };
+  }
+
+  return {
+    [ratingField]: rating,
+  };
+}
+
 async function updateRatings(game, isDraw = false) {
   const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
   const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
   if (!whitePlayer || !blackPlayer) return null;
+  const ratingField = getRatingFieldForTimeControl(game.timeControl);
+  const whiteRating = getPlayerRatingForTimeControl(whitePlayer, game.timeControl);
+  const blackRating = getPlayerRatingForTimeControl(blackPlayer, game.timeControl);
 
   if (isDraw) {
-    const { newRatingA, newRatingB } = calculateElo(whitePlayer.rating, blackPlayer.rating, true);
-    await prisma.user.update({ where: { id: whitePlayer.id }, data: { rating: newRatingA } });
-    await prisma.user.update({ where: { id: blackPlayer.id }, data: { rating: newRatingB } });
-    console.log(`[ELO] Draw: ${whitePlayer.walletAddress} ${whitePlayer.rating} -> ${newRatingA}, ${blackPlayer.walletAddress} ${blackPlayer.rating} -> ${newRatingB}`);
+    const { newRatingA, newRatingB } = calculateElo(whiteRating, blackRating, true);
+    await prisma.user.update({
+      where: { id: whitePlayer.id },
+      data: buildRatingUpdate(ratingField, newRatingA),
+    });
+    await prisma.user.update({
+      where: { id: blackPlayer.id },
+      data: buildRatingUpdate(ratingField, newRatingB),
+    });
+    console.log(`[ELO] Draw (${ratingField}): ${whitePlayer.walletAddress} ${whiteRating} -> ${newRatingA}, ${blackPlayer.walletAddress} ${blackRating} -> ${newRatingB}`);
     return { [whitePlayer.walletAddress]: newRatingA, [blackPlayer.walletAddress]: newRatingB };
   }
 
   const winnerId = game.winnerId;
   const winner = winnerId === whitePlayer.id ? whitePlayer : blackPlayer;
   const loser = winnerId === whitePlayer.id ? blackPlayer : whitePlayer;
-  const { newWinnerRating, newLoserRating } = calculateElo(winner.rating, loser.rating);
+  const winnerRating = getPlayerRatingForTimeControl(winner, game.timeControl);
+  const loserRating = getPlayerRatingForTimeControl(loser, game.timeControl);
+  const { newWinnerRating, newLoserRating } = calculateElo(winnerRating, loserRating);
 
-  await prisma.user.update({ where: { id: winner.id }, data: { rating: newWinnerRating } });
-  await prisma.user.update({ where: { id: loser.id }, data: { rating: newLoserRating } });
-  console.log(`[ELO] Win: ${winner.walletAddress} ${winner.rating} -> ${newWinnerRating}, Loss: ${loser.walletAddress} ${loser.rating} -> ${newLoserRating}`);
+  await prisma.user.update({
+    where: { id: winner.id },
+    data: buildRatingUpdate(ratingField, newWinnerRating),
+  });
+  await prisma.user.update({
+    where: { id: loser.id },
+    data: buildRatingUpdate(ratingField, newLoserRating),
+  });
+  console.log(`[ELO] Win (${ratingField}): ${winner.walletAddress} ${winnerRating} -> ${newWinnerRating}, Loss: ${loser.walletAddress} ${loserRating} -> ${newLoserRating}`);
   return { [winner.walletAddress]: newWinnerRating, [loser.walletAddress]: newLoserRating };
 }
 
@@ -1264,6 +1320,7 @@ app.prepare().then(async () => {
       blackPlayerId: blackUser.id,
       fen: "start",
       status: isStaked ? "WAITING" : "IN_PROGRESS",
+      timeControl: matchedTimeControl,
     };
     if (isStaked) {
       gameData.stakeToken = stakeInfo.token;
@@ -1282,20 +1339,23 @@ app.prepare().then(async () => {
       effectiveAmount: stakeInfo?.effectiveAmount ?? null,
     };
 
+    const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl);
+    const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl);
+
     // Emit match found to both players (include ratings + staking info)
     io.to(p1.socketId).emit("matchFound", {
       ...matchPayload,
       color: "white",
       opponent: p2.userId,
-      playerRating: whiteUser.rating,
-      opponentRating: blackUser.rating,
+      playerRating: whitePlayerRating,
+      opponentRating: blackPlayerRating,
     });
     io.to(p2.socketId).emit("matchFound", {
       ...matchPayload,
       color: "black",
       opponent: p1.userId,
-      playerRating: blackUser.rating,
-      opponentRating: whiteUser.rating,
+      playerRating: blackPlayerRating,
+      opponentRating: whitePlayerRating,
     });
 
     // Join rooms
@@ -1305,8 +1365,8 @@ app.prepare().then(async () => {
     if (s2) { s2.join(roomId); activeGames.set(s2.id, roomId); }
 
     // Track active game for reconnection (in-memory + Redis)
-    userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whiteUser.rating, opponentRating: blackUser.rating, timeControl: matchedTimeControl });
-    userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackUser.rating, opponentRating: whiteUser.rating, timeControl: matchedTimeControl });
+    userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: matchedTimeControl });
+    userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: matchedTimeControl });
     const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [], timeControl: matchedTimeControl };
     gameStateStore.set(roomId, initialState);
     setUserActiveGame(p1.userId, userActiveGames.get(p1.userId)).catch(() => { });
@@ -1966,12 +2026,15 @@ app.prepare().then(async () => {
             : normalizeQueueTimeControl(timeControl ?? DEFAULT_GAME_TIME / 60);
 
           if (whiteUser && blackUser) {
+            const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, challengeTimeControl);
+            const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, challengeTimeControl);
             const game = await prisma.game.create({
               data: {
                 whitePlayerId: whiteUser.id,
                 blackPlayerId: blackUser.id,
                 fen: "start",
                 status: "IN_PROGRESS",
+                timeControl: challengeTimeControl,
               },
             });
 
@@ -1985,13 +2048,13 @@ app.prepare().then(async () => {
               activeGames.set(s1.id, roomId);
               activeGames.set(s2.id, roomId);
 
-              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating, timeControl: challengeTimeControl });
-              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating, timeControl: challengeTimeControl });
+              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
+              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
               initGameTimer(roomId, getTimeControlSeconds(challengeTimeControl));
 
               // Track active game for reconnection (in-memory + Redis)
-              userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whiteUser.rating, opponentRating: blackUser.rating, timeControl: challengeTimeControl });
-              userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackUser.rating, opponentRating: whiteUser.rating, timeControl: challengeTimeControl });
+              userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
+              userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
               const challengeInitState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [], timeControl: challengeTimeControl };
               gameStateStore.set(roomId, challengeInitState);
               setUserActiveGame(opponentId, userActiveGames.get(opponentId)).catch(() => { });

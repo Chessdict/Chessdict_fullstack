@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { useGameStore } from "@/stores/game-store";
 import { cn } from "@/lib/utils";
 import { useSocket } from "@/hooks/useSocket";
@@ -24,6 +26,11 @@ type GameHistoryEntry = {
   playedAs: "white" | "black";
   opponentAddress: string;
   opponentRating: number;
+  timeControl: number;
+  isStaked: boolean;
+  onChainGameId: string | null;
+  stakeToken: string | null;
+  wagerAmount: number | null;
   date: string;
 };
 
@@ -153,6 +160,17 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const canPlayAgain = gameMode === "online" && !stakeToken && !stakeAmountRaw;
   const timeControlMinutes = getTimeControlMinutesFromSeconds(initialTime);
   const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
+  const showMobileMoveDock =
+    canReviewGame &&
+    activeTab === "play" &&
+    activeSubTab === "moves" &&
+    moves.length > 0 &&
+    !isMobileChatOpen;
+  const showMobileChatButton =
+    isGameActive &&
+    activeTab === "play" &&
+    activeSubTab === "moves" &&
+    !isMobileChatOpen;
 
   // Chat socket listener
   useEffect(() => {
@@ -188,6 +206,17 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       setUnreadChatCount(0);
     }
   }, [isGameActive]);
+
+  useEffect(() => {
+    if (!isMobileChatOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMobileChatOpen]);
 
   // Load chat messages from rejoin data (reconnection via store)
   useEffect(() => {
@@ -291,6 +320,54 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
   };
 
+  const moveNavigationButtons = [
+    {
+      icon: "/svgs/icons/double-back.svg",
+      label: "First",
+      onClick: () => {
+        stopAutoPlay();
+        setViewMoveIndex(-1);
+      },
+    },
+    {
+      icon: "/svgs/icons/back.svg",
+      label: "Prev",
+      onClick: () => {
+        stopAutoPlay();
+        if (viewMoveIndex === null) setViewMoveIndex(moves.length - 1);
+        else if (viewMoveIndex > -1) setViewMoveIndex(viewMoveIndex - 1);
+      },
+    },
+    {
+      icon: "/svgs/icons/play.svg",
+      label: "Play",
+      onClick: () => {
+        if (isAutoPlaying) {
+          stopAutoPlay();
+        } else if (viewMoveIndex !== null) {
+          setIsAutoPlaying(true);
+        }
+      },
+    },
+    {
+      icon: "/svgs/icons/forward.svg",
+      label: "Next",
+      onClick: () => {
+        stopAutoPlay();
+        if (viewMoveIndex !== null && viewMoveIndex < moves.length - 1) setViewMoveIndex(viewMoveIndex + 1);
+        else setViewMoveIndex(null);
+      },
+    },
+    {
+      icon: "/svgs/icons/double-forward.svg",
+      label: "Last",
+      onClick: () => {
+        stopAutoPlay();
+        setViewMoveIndex(null);
+      },
+    },
+  ] as const;
+
   const renderChatThread = (containerRef: RefObject<HTMLDivElement | null>, maxHeightClass: string) => (
     <div
       ref={containerRef}
@@ -318,9 +395,12 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   );
 
   return (
-    <div className="flex flex-col rounded-[24px] border border-white/10 bg-[#1A1A1A]/90 backdrop-blur-xl overflow-hidden">
+    <div className={cn(
+      "flex flex-col overflow-hidden rounded-[20px] border border-white/10 bg-[#1A1A1A]/90 backdrop-blur-xl sm:rounded-[24px]",
+      showMobileMoveDock || showMobileChatButton ? "pb-24 sm:pb-0" : "",
+    )}>
       {/* Top Tabs */}
-      <div className="flex items-center border-b border-white/10 px-5 pt-3">
+      <div className="flex items-center border-b border-white/10 px-3 pt-2.5 sm:px-5 sm:pt-3">
         {([
           { key: "play", label: "Play" },
           { key: "history", label: "Game History" },
@@ -342,7 +422,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
       {/* ═══ GAME HISTORY TAB ═══ */}
       {activeTab === "history" && (
-        <div className="flex flex-col gap-3 px-5 py-4">
+        <div className="flex flex-col gap-3 px-3 py-3.5 sm:px-5 sm:py-4">
           <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Recent Games</h3>
           {historyLoading ? (
             <div className="flex items-center justify-center py-10">
@@ -373,6 +453,15 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                     )}>
                       {g.result === "win" ? "W" : g.result === "loss" ? "L" : "D"}
                     </div>
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                      <Image
+                        src={getMemojiForAddress(g.opponentAddress)}
+                        alt="Opponent avatar"
+                        width={40}
+                        height={40}
+                        className="h-full w-full object-contain"
+                      />
+                    </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-white truncate">
                         vs {g.opponentAddress.slice(0, 6)}...{g.opponentAddress.slice(-4)}
@@ -380,10 +469,41 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                       <p className="text-[11px] text-white/40">
                         Played as {g.playedAs} &middot; {new Date(g.date).toLocaleDateString()}
                       </p>
+                      <p className="text-[11px] text-white/45">
+                        {getTimeControlDisplay(g.timeControl)}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className={cn(
+                          "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                          g.isStaked
+                            ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+                            : "border-white/10 bg-white/5 text-white/45",
+                        )}>
+                          {g.isStaked ? "Staked" : "Casual"}
+                        </span>
+                        {g.onChainGameId ? (
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-mono text-white/55">
+                            Game #{g.onChainGameId}
+                          </span>
+                        ) : null}
+                        {typeof g.wagerAmount === "number" ? (
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/55">
+                            Stake {g.wagerAmount}
+                          </span>
+                        ) : null}
+                        {g.stakeToken ? (
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-mono text-white/50">
+                            {g.stakeToken.slice(0, 6)}...{g.stakeToken.slice(-4)}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                   <div className="text-right shrink-0 ml-2">
                     <p className="text-xs text-white/50 font-mono">{g.opponentRating}</p>
+                    <p className="mt-1 text-[11px] text-white/35">
+                      {new Date(g.date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                    </p>
                   </div>
                 </div>
               ))}
@@ -394,13 +514,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
       {/* ═══ PLAY TAB ═══ */}
       {activeTab === "play" && (
-        <div className="flex flex-col gap-4 px-5 py-4">
+        <div className="flex flex-col gap-4 px-3 py-3.5 sm:px-5 sm:py-4">
           {/* Sub-tabs: Game moves | Info */}
           <div className="flex rounded-full bg-white/5 p-1">
             <button
               onClick={() => setActiveSubTab("moves")}
               className={cn(
-                "flex-1 rounded-full py-3.5 text-sm font-medium transition-colors",
+                "flex-1 rounded-full py-3 text-sm font-medium transition-colors sm:py-3.5",
                 activeSubTab === "moves"
                   ? "bg-white text-black"
                   : "text-white/80 hover:text-white/100"
@@ -411,7 +531,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
             <button
               onClick={() => setActiveSubTab("info")}
               className={cn(
-                "flex-1 rounded-full py-3.5 text-sm font-medium transition-colors",
+                "flex-1 rounded-full py-3 text-sm font-medium transition-colors sm:py-3.5",
                 activeSubTab === "info"
                   ? "bg-white text-black"
                   : "text-white/80 hover:text-white/100"
@@ -604,30 +724,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
               </div>
               {/* Move Navigation Controls */}
               {moves.length > 0 && (
-                <div className="flex items-center justify-center gap-3 pt-2">
-                  {[
-                    { icon: "/svgs/icons/double-back.svg", label: "First", onClick: () => { stopAutoPlay(); setViewMoveIndex(0); } },
-                    { icon: "/svgs/icons/back.svg", label: "Prev", onClick: () => {
-                      stopAutoPlay();
-                      if (viewMoveIndex === null) setViewMoveIndex(moves.length - 2);
-                      else if (viewMoveIndex > 0) setViewMoveIndex(viewMoveIndex - 1);
-                    }},
-                    { icon: "/svgs/icons/play.svg", label: "Play", onClick: () => {
-                      if (isAutoPlaying) {
-                        stopAutoPlay();
-                      } else if (viewMoveIndex !== null) {
-                        setIsAutoPlaying(true); 
-                      } else {
-                        // Already at live — do nothing
-                      }
-                    }},
-                    { icon: "/svgs/icons/forward.svg", label: "Next", onClick: () => {
-                      stopAutoPlay();
-                      if (viewMoveIndex !== null && viewMoveIndex < moves.length - 1) setViewMoveIndex(viewMoveIndex + 1);
-                      else setViewMoveIndex(null);
-                    }},
-                    { icon: "/svgs/icons/double-forward.svg", label: "Last", onClick: () => { stopAutoPlay(); setViewMoveIndex(null); } },
-                  ].map(({ icon, label, onClick }) => (
+                <div className="hidden items-center justify-center gap-3 pt-2 sm:flex">
+                  {moveNavigationButtons.map(({ icon, label, onClick }) => (
                     <button
                       key={label}
                       onClick={onClick}
@@ -689,87 +787,124 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   </div>
                 </div>
               </div>
-              <div className="sm:hidden">
-                <button
-                  type="button"
-                  onClick={() => setIsMobileChatOpen(true)}
-                  className="flex w-full items-center justify-between rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3 text-left"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-white">Chat</p>
-                    <p className="text-xs text-white/40">
-                      {chatMessages.length === 0 ? "No messages yet" : `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}`}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {unreadChatCount > 0 ? (
-                      <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px] font-semibold text-white">
-                        {unreadChatCount}
-                      </span>
-                    ) : null}
-                    <span className="text-sm text-white/50">Open</span>
-                  </div>
-                </button>
-              </div>
             </div>
           )}
         </div>
       )}
 
-      {isGameActive && activeTab === "play" && activeSubTab === "moves" && isMobileChatOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:hidden">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setIsMobileChatOpen(false)}
-            aria-label="Close chat"
-          />
-          <div className="relative z-10 flex max-h-[72vh] w-full flex-col rounded-t-[28px] border border-white/10 bg-[#111111] px-4 pb-4 pt-3 shadow-[0_-20px_60px_rgba(0,0,0,0.45)]">
-            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/15" />
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-white">Chat</p>
-                <p className="text-xs text-white/40">{opponentName} vs {playerName}</p>
+      {typeof document !== "undefined" && createPortal(
+        <>
+          {showMobileMoveDock && (
+            <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 sm:hidden" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)" }}>
+              <div className="mx-auto flex max-w-md items-center justify-center gap-2 rounded-[26px] border border-white/10 bg-[#111111]/92 px-3 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+                {moveNavigationButtons.map(({ icon, label, onClick }) => (
+                  <button
+                    key={label}
+                    onClick={onClick}
+                    className={cn(
+                      "flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white",
+                      label === "Play" && isAutoPlaying && "border-blue-500/30 bg-blue-500/20 text-blue-400",
+                    )}
+                    title={label}
+                  >
+                    {label === "Play" && isAutoPlaying ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                        <path d="M6 4h4v16H6zM14 4h4v16h-4z" />
+                      </svg>
+                    ) : (
+                      <img src={icon} alt={label} width={24} height={24} />
+                    )}
+                  </button>
+                ))}
               </div>
+            </div>
+          )}
+
+          {showMobileChatButton && (
+            <div
+              className="fixed right-3 z-40 sm:hidden"
+              style={{
+                bottom: showMobileMoveDock
+                  ? "calc(env(safe-area-inset-bottom, 0px) + 5.5rem)"
+                  : "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+              }}
+            >
               <button
                 type="button"
-                onClick={() => setIsMobileChatOpen(false)}
-                className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/70"
+                onClick={() => setIsMobileChatOpen(true)}
+                className="flex items-center gap-2 rounded-full border border-white/10 bg-[#111111]/92 px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-xl"
               >
-                Close
+                <span className="text-sm font-semibold text-white">Chat</span>
+                {unreadChatCount > 0 ? (
+                  <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                    {unreadChatCount}
+                  </span>
+                ) : (
+                  <span className="text-xs text-white/40">
+                    {chatMessages.length}
+                  </span>
+                )}
               </button>
             </div>
-            <div className="rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.025))] p-4">
-              {renderChatThread(mobileChatContainerRef, "max-h-[40vh]")}
-            </div>
-            <div className="mt-3 rounded-[24px] border border-white/18 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]">
-              <div className="flex items-center gap-3">
-                <input
-                  type="text"
-                  placeholder="Send message..."
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
-                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/28"
-                  disabled={!isGameActive || gameMode === "computer"}
-                />
-                <button
-                  type="button"
-                  onClick={sendChatMessage}
-                  disabled={!isGameActive || gameMode === "computer" || !chatInput.trim()}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#757575] transition hover:scale-[1.02] disabled:opacity-50"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="7.5" />
-                    <path d="M9 14c.7.7 1.6 1 3 1s2.3-.3 3-1" />
-                    <circle cx="9.2" cy="10" r="0.8" fill="currentColor" stroke="none" />
-                    <circle cx="14.8" cy="10" r="0.8" fill="currentColor" stroke="none" />
-                  </svg>
-                </button>
+          )}
+
+          {isGameActive && activeTab === "play" && activeSubTab === "moves" && isMobileChatOpen && (
+            <div className="fixed inset-0 z-50 flex items-end sm:hidden">
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/60"
+                onClick={() => setIsMobileChatOpen(false)}
+                aria-label="Close chat"
+              />
+              <div className="relative z-10 flex max-h-[72vh] w-full flex-col rounded-t-[28px] border border-white/10 bg-[#111111] px-4 pb-4 pt-3 shadow-[0_-20px_60px_rgba(0,0,0,0.45)]">
+                <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/15" />
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Chat</p>
+                    <p className="text-xs text-white/40">{opponentName} vs {playerName}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileChatOpen(false)}
+                    className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/70"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.025))] p-4">
+                  {renderChatThread(mobileChatContainerRef, "max-h-[32vh]")}
+                </div>
+                <div className="mt-3 rounded-[24px] border border-white/18 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] px-4 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="text"
+                      placeholder="Send message..."
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
+                      className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/28"
+                      disabled={!isGameActive || gameMode === "computer"}
+                    />
+                    <button
+                      type="button"
+                      onClick={sendChatMessage}
+                      disabled={!isGameActive || gameMode === "computer" || !chatInput.trim()}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#757575] transition hover:scale-[1.02] disabled:opacity-50"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="7.5" />
+                        <path d="M9 14c.7.7 1.6 1 3 1s2.3-.3 3-1" />
+                        <circle cx="9.2" cy="10" r="0.8" fill="currentColor" stroke="none" />
+                        <circle cx="14.8" cy="10" r="0.8" fill="currentColor" stroke="none" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          )}
+        </>,
+        document.body,
       )}
 
       {/* Resign Confirmation Modal */}

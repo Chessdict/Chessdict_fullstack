@@ -11,6 +11,9 @@ model User {
   id            Int       @id @default(autoincrement())
   walletAddress String    @unique
   rating        Int       @default(1200)
+  bulletRating  Int       @default(1200)
+  blitzRating   Int       @default(1200)
+  rapidRating   Int       @default(1200)
   accounts      Account[]
   sessions      Session[]
 
@@ -73,6 +76,7 @@ model Game {
   status        GameStatus @default(WAITING)
   fen           String
   pgn           String?
+  timeControl   Int        @default(3)
   
   wagerAmount   Float?
   onChainGameId String?   // contract gameId (string for bigint compat)

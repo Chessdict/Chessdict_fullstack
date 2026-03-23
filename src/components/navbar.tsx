@@ -5,8 +5,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { ConnectWallet } from "./connect-wallet";
-import { Menu } from "lucide-react";
+import { Menu, User } from "lucide-react";
 import { useState } from "react";
+import { useAccount } from "wagmi";
 import {
   Sheet,
   SheetClose,
@@ -29,6 +30,7 @@ const navItems = [
 
 export function Navbar() {
   const [sheetOpen, setSheetOpen] = useState(false);
+  const { isConnected } = useAccount();
 
   const pathname = usePathname();
 
@@ -88,26 +90,36 @@ export function Navbar() {
       {/* Mobile Navbar */}
       <div className="pointer-events-none relative z-30 flex justify-center py-4 md:hidden">
         <motion.nav
-          className="pointer-events-auto nav-glass relative flex h-12.5 w-full items-center justify-between rounded-full"
+          className="pointer-events-auto nav-glass relative flex h-12.5 w-full items-center justify-between rounded-full px-2"
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] as const }}
         >
-          <div className="z-20 w-full">
+          <Link href="/" className="shrink-0">
+            <Image
+              alt="Chessdict logo"
+              className="relative h-20 w-auto sm:h-22"
+              height={248}
+              priority
+              src="/logo.svg"
+              width={200}
+            />
+          </Link>
+
+          <div className="z-20 flex items-center gap-2">
+            {isConnected ? (
+              <Link
+                href="/profile"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/80 transition hover:bg-white/10 hover:text-white"
+                aria-label="Open profile"
+              >
+                <User className="h-4.5 w-4.5" />
+              </Link>
+            ) : null}
             <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
               <SheetTitle></SheetTitle>
               <SheetTrigger asChild>
-                <button className="w-full flex justify-between items-center gap-2 pr-5">
-                  <Link href="/">
-                    <Image
-                      alt="Chessdict logo"
-                      className="relative h-20 w-auto sm:h-22"
-                      height={248}
-                      priority
-                      src="/logo.svg"
-                      width={200}
-                    />
-                  </Link>
+                <button className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10">
                   <Menu />
                 </button>
               </SheetTrigger>
@@ -138,4 +150,3 @@ export function Navbar() {
     </header>
   );
 }
-

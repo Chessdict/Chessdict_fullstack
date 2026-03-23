@@ -27,10 +27,10 @@ import {
 } from "@/lib/chess-promotion";
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
+import { getRatingCategoryForTimeControl } from "@/lib/player-ratings";
 import { SignalStrength } from "./signal-strength";
 import { customPieces } from "@/components/chess/custom-pieces";
 import { X } from "lucide-react";
-import { getMemojiForAddress } from "@/lib/memoji";
 import Image from "next/image";
 
 
@@ -59,6 +59,7 @@ const pieceSymbols: Record<string, { w: string; b: string }> = {
 
 type SelectionMode = "move" | "premove" | null;
 const MOVE_ANIMATION_DURATION_MS = 200;
+const INITIAL_BOARD_FEN = new Chess().fen();
 
 export function GameBoard() {
   const {
@@ -866,6 +867,7 @@ export function GameBoard() {
   const isViewingHistory = viewMoveIndex !== null;
   const displayFen = useMemo(() => {
     if (viewMoveIndex === null) return fen;
+    if (viewMoveIndex < 0) return INITIAL_BOARD_FEN;
     const temp = new Chess();
     for (let i = 0; i <= viewMoveIndex && i < storeMoves.length; i++) {
       temp.move(storeMoves[i].san);
@@ -945,12 +947,15 @@ export function GameBoard() {
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
   const isMyTurn = !!playerTurnCode && currentTurn === playerTurnCode;
+  const ratingCategoryLabel = getRatingCategoryForTimeControl(
+    Math.max(1, Math.round(initialTime / 60)),
+  );
 
   return (
-    <div className="mx-auto flex w-full max-w-[clamp(480px,calc(100vh-7rem),1300px)] flex-col gap-2 sm:gap-4">
-     <div className="flex flex-col gap-2 sm:gap-3 rounded-2xl bg-[#1A1A1A]/80 border border-white/5 px-4 py-3 sm:px-5 sm:py-4">
+    <div className="mx-auto flex w-full max-w-[min(100vw,760px)] flex-col gap-1 sm:max-w-[clamp(480px,calc(100vh-7rem),1300px)] sm:gap-4">
+     <div className="flex flex-col gap-1 rounded-[16px] border border-white/5 bg-[#1A1A1A]/80 px-1 py-1 sm:gap-3 sm:rounded-2xl sm:px-5 sm:py-4">
       {/* Top Info (Opponent) */}
-      <div className="flex items-center justify-between px-1">
+      <div className="flex items-center justify-between px-0.5 sm:px-1">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-amber-700/50 to-amber-900/30 border border-white/10 flex items-center justify-center overflow-hidden">
             {opponent?.memoji ? (
@@ -968,8 +973,12 @@ export function GameBoard() {
               </p>
               <PlayerRatingBadge rating={opponent?.rating} />
             </div>
-            <p className="text-xs text-white/30 truncate">
-              {status === 'in-progress' && !isMyTurn ? 'Thinking...' : opponent ? opponent.address.slice(0, 4) + '...' + opponent.address.slice(-4) : ''}
+            <p className="text-[11px] text-white/30 truncate sm:text-xs">
+              {status === 'in-progress' && !isMyTurn
+                ? 'Thinking...'
+                : opponent
+                  ? `Opponent · ${opponent.address.slice(0, 4)}...${opponent.address.slice(-4)}`
+                  : ''}
             </p>
             {opponentMaterialDisplay ? (
               <MaterialBalanceStrip
@@ -1098,7 +1107,7 @@ export function GameBoard() {
 
                     {ratingChange !== null && (
                       <div className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-bold border ${ratingChange > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : ratingChange < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}`}>
-                        Rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
+                        {ratingCategoryLabel} rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
                       </div>
                     )}
 
@@ -1148,7 +1157,7 @@ export function GameBoard() {
       </div>
 
       {/* Bottom Info (Player) */}
-      <div className="flex items-center justify-between px-1">
+      <div className="flex items-center justify-between px-0.5 sm:px-1">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-10 w-10 shrink-0 rounded-full bg-white/10 border border-white/10 flex items-center justify-center overflow-hidden">
             {player?.memoji ? (

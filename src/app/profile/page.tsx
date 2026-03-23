@@ -1,14 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useAccount } from "wagmi";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { getUserProfile, getGameHistory } from "@/app/actions";
 import { Copy, Check, Trophy, Target, Minus, TrendingUp, ChevronLeft, ChevronRight } from "lucide-react";
+import { getMemojiForAddress } from "@/lib/memoji";
+import { getTimeControlDisplay } from "@/lib/time-control";
 
 type Profile = {
     walletAddress: string;
-    rating: number;
+    ratings: {
+        bullet: number;
+        blitz: number;
+        rapid: number;
+    };
     joinedAt: string;
     totalGames: number;
     wins: number;
@@ -23,6 +30,11 @@ type GameRecord = {
     playedAs: "white" | "black";
     opponentAddress: string;
     opponentRating: number;
+    timeControl: number;
+    isStaked: boolean;
+    onChainGameId: string | null;
+    stakeToken: string | null;
+    wagerAmount: number | null;
     date: string;
 };
 
@@ -109,6 +121,7 @@ export default function ProfilePage() {
     }
 
     const resultLabel = { win: "W", loss: "L", draw: "D" };
+    const profileMemoji = getMemojiForAddress(profile.walletAddress);
 
     return (
         <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
@@ -117,27 +130,44 @@ export default function ProfilePage() {
             <div className="container relative mx-auto flex flex-1 flex-col gap-6 px-3 pb-6 sm:px-6 sm:gap-8 max-w-2xl">
                 {/* Wallet Address */}
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6">
-                    <p className="text-xs uppercase tracking-widest text-white/40 mb-3">Wallet Address</p>
-                    <div className="flex items-center gap-3">
-                        <code className="text-lg sm:text-xl font-mono text-white/90 break-all">
-                            {profile.walletAddress}
-                        </code>
-                        <button
-                            onClick={copyAddress}
-                            className="shrink-0 rounded-lg border border-white/10 p-2 text-white/50 transition hover:bg-white/10 hover:text-white"
-                        >
-                            {copied ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
-                        </button>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                        <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
+                            <Image
+                                src={profileMemoji}
+                                alt="Profile memoji"
+                                width={80}
+                                height={80}
+                                className="h-full w-full object-contain"
+                            />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <p className="text-xs uppercase tracking-widest text-white/40 mb-3">Wallet Address</p>
+                            <div className="flex items-center gap-3">
+                                <code className="text-lg sm:text-xl font-mono text-white/90 break-all">
+                                    {profile.walletAddress}
+                                </code>
+                                <button
+                                    onClick={copyAddress}
+                                    className="shrink-0 rounded-lg border border-white/10 p-2 text-white/50 transition hover:bg-white/10 hover:text-white"
+                                >
+                                    {copied ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
+                                </button>
+                            </div>
+                            <p className="mt-3 text-xs text-white/30">
+                                Joined {new Date(profile.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+                            </p>
+                        </div>
                     </div>
-                    <p className="mt-3 text-xs text-white/30">
-                        Joined {new Date(profile.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-                    </p>
                 </div>
 
-                {/* ELO Rating */}
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6 text-center">
-                    <p className="text-xs uppercase tracking-widest text-white/40 mb-2">ELO Rating</p>
-                    <p className="text-5xl font-bold tabular-nums">{profile.rating}</p>
+                {/* Ratings */}
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6">
+                    <p className="text-xs uppercase tracking-widest text-white/40 mb-4 text-center">Ratings</p>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <RatingCard label="Bullet" value={profile.ratings.bullet} accent="text-sky-300" />
+                        <RatingCard label="Blitz" value={profile.ratings.blitz} accent="text-amber-300" />
+                        <RatingCard label="Rapid" value={profile.ratings.rapid} accent="text-emerald-300" />
+                    </div>
                 </div>
 
                 {/* Stats Grid */}
@@ -175,6 +205,15 @@ export default function ProfilePage() {
                                         >
                                             {resultLabel[game.result]}
                                         </span>
+                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                                            <Image
+                                                src={getMemojiForAddress(game.opponentAddress)}
+                                                alt="Opponent avatar"
+                                                width={40}
+                                                height={40}
+                                                className="h-full w-full object-contain"
+                                            />
+                                        </div>
                                         <div>
                                             <p className="text-sm font-mono text-white/80">
                                                 {game.opponentAddress.slice(0, 6)}...{game.opponentAddress.slice(-4)}
@@ -182,11 +221,39 @@ export default function ProfilePage() {
                                             <p className="text-xs text-white/30">
                                                 {game.playedAs === "white" ? "White" : "Black"} &middot; Opp. {game.opponentRating}
                                             </p>
+                                            <p className="text-[11px] text-white/40">
+                                                {getTimeControlDisplay(game.timeControl)}
+                                            </p>
+                                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${game.isStaked ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-white/5 text-white/45"}`}>
+                                                    {game.isStaked ? "Staked" : "Casual"}
+                                                </span>
+                                                {game.onChainGameId ? (
+                                                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-mono text-white/55">
+                                                        Game #{game.onChainGameId}
+                                                    </span>
+                                                ) : null}
+                                                {typeof game.wagerAmount === "number" ? (
+                                                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/55">
+                                                        Stake {game.wagerAmount}
+                                                    </span>
+                                                ) : null}
+                                                {game.stakeToken ? (
+                                                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-mono text-white/50">
+                                                        {game.stakeToken.slice(0, 6)}...{game.stakeToken.slice(-4)}
+                                                    </span>
+                                                ) : null}
+                                            </div>
                                         </div>
                                     </div>
-                                    <p className="text-xs text-white/30">
-                                        {new Date(game.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                                    </p>
+                                    <div className="text-right">
+                                        <p className="text-xs text-white/30">
+                                            {new Date(game.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                        </p>
+                                        <p className="mt-1 text-[11px] text-white/40">
+                                            {new Date(game.date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                                        </p>
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -221,7 +288,7 @@ export default function ProfilePage() {
     );
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string | number }) {
+function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
     return (
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-4 text-center">
             <div className="flex items-center justify-center gap-1.5 text-white/40 mb-1">
@@ -229,6 +296,23 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
                 <p className="text-xs uppercase tracking-widest">{label}</p>
             </div>
             <p className="text-2xl font-bold tabular-nums">{value}</p>
+        </div>
+    );
+}
+
+function RatingCard({
+    label,
+    value,
+    accent,
+}: {
+    label: string;
+    value: number;
+    accent: string;
+}) {
+    return (
+        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 text-center">
+            <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${accent}`}>{label}</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-white">{value}</p>
         </div>
     );
 }

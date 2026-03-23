@@ -3,6 +3,7 @@
 import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { containsProfanity } from "@/lib/utils";
+import { getAllRatings, getPlayerRatingForTimeControl } from "@/lib/player-ratings";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -198,7 +199,15 @@ export async function getUserProfile(walletAddress: string) {
   try {
     const user = await prisma.user.findUnique({
       where: { walletAddress },
-      select: { id: true, walletAddress: true, rating: true, createdAt: true },
+      select: {
+        id: true,
+        walletAddress: true,
+        rating: true,
+        bulletRating: true,
+        blitzRating: true,
+        rapidRating: true,
+        createdAt: true,
+      },
     });
 
     if (!user) return { success: false, error: "User not found" };
@@ -206,7 +215,7 @@ export async function getUserProfile(walletAddress: string) {
     const [totalGames, wins, draws] = await Promise.all([
       prisma.game.count({
         where: {
-          status: "COMPLETED",
+          status: { in: ["COMPLETED", "DRAW"] },
           OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
         },
       }),
@@ -215,7 +224,7 @@ export async function getUserProfile(walletAddress: string) {
       }),
       prisma.game.count({
         where: {
-          status: "COMPLETED",
+          status: { in: ["COMPLETED", "DRAW"] },
           winnerId: null,
           OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
         },
@@ -228,7 +237,7 @@ export async function getUserProfile(walletAddress: string) {
       success: true,
       profile: {
         walletAddress: user.walletAddress,
-        rating: user.rating,
+        ratings: getAllRatings(user),
         joinedAt: user.createdAt.toISOString(),
         totalGames,
         wins,
@@ -260,7 +269,7 @@ export async function getGameHistory(
     if (!user) return { success: true, games: [], totalPages: 0 };
 
     const where = {
-      status: "COMPLETED" as const,
+      status: { in: ["COMPLETED" as const, "DRAW" as const] },
       OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
     };
 
@@ -272,10 +281,24 @@ export async function getGameHistory(
         take: pageSize,
         include: {
           whitePlayer: {
-            select: { id: true, walletAddress: true, rating: true },
+            select: {
+              id: true,
+              walletAddress: true,
+              rating: true,
+              bulletRating: true,
+              blitzRating: true,
+              rapidRating: true,
+            },
           },
           blackPlayer: {
-            select: { id: true, walletAddress: true, rating: true },
+            select: {
+              id: true,
+              walletAddress: true,
+              rating: true,
+              bulletRating: true,
+              blitzRating: true,
+              rapidRating: true,
+            },
           },
           winner: { select: { id: true, walletAddress: true } },
         },
@@ -297,7 +320,12 @@ export async function getGameHistory(
         result,
         playedAs: isWhite ? ("white" as const) : ("black" as const),
         opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
-        opponentRating: opponentPlayer?.rating ?? 1200,
+        opponentRating: getPlayerRatingForTimeControl(opponentPlayer, g.timeControl),
+        timeControl: g.timeControl,
+        isStaked: !!g.onChainGameId,
+        onChainGameId: g.onChainGameId,
+        stakeToken: g.stakeToken ?? null,
+        wagerAmount: g.wagerAmount ?? null,
         date: g.updatedAt.toISOString(),
       };
     });
