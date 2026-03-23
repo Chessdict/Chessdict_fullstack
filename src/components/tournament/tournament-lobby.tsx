@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatGameReason } from "@/lib/game-result-display";
 import { useTournamentStore, type Standing } from "@/stores/tournament-store";
 import { cn } from "@/lib/utils";
 
@@ -353,7 +354,7 @@ export function TournamentLobby({ myAddress }: { myAddress?: string }) {
             </p>
             {gameResult.reason && (
               <p className="text-xs text-white/40 mt-1 capitalize">
-                {gameResult.reason}
+                {formatGameReason(gameResult.reason)}
               </p>
             )}
           </div>

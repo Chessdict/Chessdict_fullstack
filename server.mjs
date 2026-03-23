@@ -165,10 +165,11 @@ app.prepare().then(async () => {
   const userSocketMap = new Map(); // userId -> socketId
   const activeGames = new Map(); // socketId -> roomId
   const stakeTimeouts = new Map(); // roomId -> timeout handle (120s auto-abort for staked WAITING games)
+  const stakeCreationFailureDelays = new Map(); // roomId -> timeout handle (grace period before notifying joiner)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
-
   // ─── Server-Authoritative Game Timers ───
   const DEFAULT_GAME_TIME = 600; // 10 minutes in seconds
+  const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
   const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
 
   // ─── Reconnection / Disconnect Grace Period (regular games) ───
@@ -176,7 +177,57 @@ app.prepare().then(async () => {
   const gameDisconnectTimers = new Map(); // walletAddress -> { roomId, timer, deadline }
   const gameStateStore = new Map(); // roomId -> { fen, moves[] }
 
+  function clearStakeCreationFailureDelay(roomId) {
+    const delay = stakeCreationFailureDelays.get(roomId);
+    if (delay) {
+      clearTimeout(delay);
+      stakeCreationFailureDelays.delete(roomId);
+    }
+  }
+
+  function scheduleStakeCreationFailureDelay(roomId, options = {}) {
+    const {
+      abortGame = false,
+      requireNoOnChainGame = true,
+      logMessage = `[STAKE] Creator failure grace expired for room ${roomId} — notified joiner`,
+    } = options;
+
+    clearStakeCreationFailureDelay(roomId);
+
+    const delay = setTimeout(async () => {
+      stakeCreationFailureDelays.delete(roomId);
+
+      try {
+        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!game || game.status !== "WAITING") return;
+        if (requireNoOnChainGame && game.onChainGameId) return;
+
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+        if (!blackPlayer) return;
+
+        if (abortGame) {
+          await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+        }
+
+        const blackSid = userSocketMap.get(blackPlayer.walletAddress);
+        if (blackSid) {
+          io.to(blackSid).emit("stakeCreationFailed", { roomId });
+        }
+
+        console.log(logMessage);
+        if (abortGame) {
+          cleanupRegularGame(roomId);
+        }
+      } catch (e) {
+        console.error("[STAKE] Delayed stakeCreationFailed error:", e);
+      }
+    }, STAKE_CREATION_FAILURE_GRACE_MS);
+
+    stakeCreationFailureDelays.set(roomId, delay);
+  }
+
   function cleanupRegularGame(roomId) {
+    clearStakeCreationFailureDelay(roomId);
     gameStateStore.delete(roomId);
     deleteGameState(roomId).catch(() => { });
     deleteGameTimer(roomId).catch(() => { });
@@ -193,6 +244,23 @@ app.prepare().then(async () => {
       }
     }
     cleanupGameTimer(roomId);
+  }
+
+  async function getGameStakeState(roomId) {
+    const game = await prisma.game.findUnique({
+      where: { id: roomId },
+      select: {
+        onChainGameId: true,
+        stakeToken: true,
+        wagerAmount: true,
+      },
+    });
+
+    return {
+      onChainGameId: game?.onChainGameId ?? null,
+      stakeToken: game?.stakeToken ?? null,
+      stakeAmount: game?.wagerAmount != null ? String(game.wagerAmount) : null,
+    };
   }
 
   function initGameTimer(roomId, timeInSeconds = DEFAULT_GAME_TIME) {
@@ -415,7 +483,7 @@ app.prepare().then(async () => {
       where: { id: tournamentId },
       include: {
         participants: {
-          include: { user: { select: { id: true, walletAddress: true } } },
+          include: { user: { select: { id: true, walletAddress: true, rating: true } } },
         },
       },
     });
@@ -463,6 +531,7 @@ app.prepare().then(async () => {
         participantDbId: p.id,
         userId: p.userId,
         walletAddress: p.user.walletAddress,
+        rating: p.user.rating ?? 1200,
         points: 0,
         wins: 0,
         draws: 0,
@@ -634,6 +703,8 @@ app.prepare().then(async () => {
             gameId: game.id,
             color: "white",
             opponentAddress: blackPlayer.walletAddress,
+            playerRating: whitePlayer.rating ?? 1200,
+            opponentRating: blackPlayer.rating ?? 1200,
             round: state.currentRound,
             totalRounds: state.totalRounds,
             timeControl: state.timeControl,
@@ -645,6 +716,8 @@ app.prepare().then(async () => {
             gameId: game.id,
             color: "black",
             opponentAddress: whitePlayer.walletAddress,
+            playerRating: blackPlayer.rating ?? 1200,
+            opponentRating: whitePlayer.rating ?? 1200,
             round: state.currentRound,
             totalRounds: state.totalRounds,
             timeControl: state.timeControl,
@@ -1236,31 +1309,37 @@ app.prepare().then(async () => {
       if (activeGame) {
         const gs = gameStateStore.get(activeGame.roomId);
         const timer = gameTimers.get(activeGame.roomId);
+        getGameStakeState(activeGame.roomId).then((stakeState) => {
+          let whiteTime = DEFAULT_GAME_TIME, blackTime = DEFAULT_GAME_TIME;
+          if (timer) {
+            const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
+            whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
+            blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
+          }
 
-        let whiteTime = DEFAULT_GAME_TIME, blackTime = DEFAULT_GAME_TIME;
-        if (timer) {
-          const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
-          whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
-          blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
-        }
+          socket.join(activeGame.roomId);
+          activeGames.set(socket.id, activeGame.roomId);
+          socket.to(activeGame.roomId).emit("opponentReconnected");
 
-        socket.join(activeGame.roomId);
-        activeGames.set(socket.id, activeGame.roomId);
-        socket.to(activeGame.roomId).emit("opponentReconnected");
-
-        socket.emit("gameRejoined", {
-          roomId: activeGame.roomId,
-          color: activeGame.color,
-          opponentAddress: activeGame.opponentWallet,
-          opponentRating: activeGame.opponentRating,
-          playerRating: activeGame.playerRating,
-          fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-          moves: gs?.moves || [],
-          chatMessages: gs?.chatMessages || [],
-          whiteTime: Math.round(whiteTime),
-          blackTime: Math.round(blackTime),
+          socket.emit("gameRejoined", {
+            roomId: activeGame.roomId,
+            color: activeGame.color,
+            opponentAddress: activeGame.opponentWallet,
+            opponentRating: activeGame.opponentRating,
+            playerRating: activeGame.playerRating,
+            fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+            moves: gs?.moves || [],
+            chatMessages: gs?.chatMessages || [],
+            whiteTime: Math.round(whiteTime),
+            blackTime: Math.round(blackTime),
+            onChainGameId: stakeState.onChainGameId,
+            stakeToken: stakeState.stakeToken,
+            stakeAmount: stakeState.stakeAmount,
+          });
+          console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
+        }).catch((e) => {
+          console.error("[RECONNECT] Failed to load game stake state:", e);
         });
-        console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
       }
     }
 
@@ -1284,6 +1363,8 @@ app.prepare().then(async () => {
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
+
+        clearStakeCreationFailureDelay(roomId);
 
         // Store the on-chain game ID
         await prisma.game.update({ where: { id: roomId }, data: { onChainGameId: String(onChainGameId) } });
@@ -1325,11 +1406,19 @@ app.prepare().then(async () => {
       }
     });
 
+    socket.on("stakeCreationFailed", ({ roomId }) => {
+      if (!roomId) return;
+      scheduleStakeCreationFailureDelay(roomId);
+      console.log(`[STAKE] Creator failed to create on-chain game for room ${roomId}; delaying joiner notice for ${STAKE_CREATION_FAILURE_GRACE_MS}ms`);
+    });
+
     // ─── Staked game: Player2 confirmed stake on-chain ───
     socket.on("stakeConfirmed", async ({ roomId }) => {
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
+
+        clearStakeCreationFailureDelay(roomId);
 
         // Clear the 120s timeout
         const timeout = stakeTimeouts.get(roomId);
@@ -1353,15 +1442,34 @@ app.prepare().then(async () => {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
 
+        clearStakeCreationFailureDelay(roomId);
+
         // Clear the 120s timeout
         const timeout = stakeTimeouts.get(roomId);
         if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(roomId); }
+
+        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
+        const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
+        const normalizedUserId = typeof userId === "string" ? userId.toLowerCase() : null;
+        const creatorDeclined =
+          !!normalizedUserId &&
+          !!whitePlayer &&
+          whitePlayer.walletAddress.toLowerCase() === normalizedUserId;
+
+        if (creatorDeclined) {
+          scheduleStakeCreationFailureDelay(roomId, {
+            abortGame: true,
+            requireNoOnChainGame: false,
+            logMessage: `[STAKE] Creator cancelled staked setup for room ${roomId} — notified joiner after grace period`,
+          });
+          console.log(`[STAKE] Creator cancelled staked setup for room ${roomId}; delaying joiner notice for ${STAKE_CREATION_FAILURE_GRACE_MS}ms`);
+          return;
+        }
 
         // Abort the game
         await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
 
         // Notify Player1 (white) so they can cancel on-chain and reclaim stake
-        const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
         if (whitePlayer) {
           const whiteSid = userSocketMap.get(whitePlayer.walletAddress);
           if (whiteSid) {
@@ -1394,7 +1502,7 @@ app.prepare().then(async () => {
     });
 
     // Explicit rejoin for URL-based game reconnection (/play/game/[id])
-    socket.on("rejoinGame", ({ roomId: requestedRoomId }) => {
+    socket.on("rejoinGame", async ({ roomId: requestedRoomId }) => {
       const activeGame = userActiveGames.get(userId);
       if (!activeGame || activeGame.roomId !== requestedRoomId) {
         socket.emit("rejoinError", { error: "No active game found for this room" });
@@ -1411,6 +1519,8 @@ app.prepare().then(async () => {
         blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
       }
 
+      const stakeState = await getGameStakeState(activeGame.roomId);
+
       socket.join(activeGame.roomId);
       activeGames.set(socket.id, activeGame.roomId);
       socket.to(activeGame.roomId).emit("opponentReconnected");
@@ -1426,6 +1536,9 @@ app.prepare().then(async () => {
         chatMessages: gs?.chatMessages || [],
         whiteTime: Math.round(whiteTime),
         blackTime: Math.round(blackTime),
+        onChainGameId: stakeState.onChainGameId,
+        stakeToken: stakeState.stakeToken,
+        stakeAmount: stakeState.stakeAmount,
       });
       console.log(`[REJOIN] Player ${userId} explicitly rejoined game ${activeGame.roomId}`);
     });
@@ -1862,6 +1975,8 @@ app.prepare().then(async () => {
                   gameId,
                   color: isWhite ? "white" : "black",
                   opponentAddress: opponentParticipant?.walletAddress ?? "",
+                  playerRating: player.rating ?? 1200,
+                  opponentRating: opponentParticipant?.rating ?? 1200,
                   round: state.currentRound,
                   totalRounds: state.totalRounds,
                   timeControl: state.timeControl,

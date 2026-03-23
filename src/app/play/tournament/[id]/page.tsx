@@ -124,7 +124,13 @@ export default function TournamentPlayPage({
       setPhase("playing");
       setRoundInfo(data.round, data.totalRounds);
       setTimeControl(data.timeControl);
-      setCurrentGame(data.gameId, data.color, data.opponentAddress);
+      setCurrentGame(
+        data.gameId,
+        data.color,
+        data.opponentAddress,
+        data.playerRating,
+        data.opponentRating,
+      );
       // Server already joins sockets to game rooms — no need to emit joinRoom
     };
 

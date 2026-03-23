@@ -2,8 +2,17 @@
 
 import { useCallback, useRef } from "react";
 
+const SOUND_PATHS = {
+  move: "/sounds/move.mp3",
+  capture: "/sounds/capture.mp3",
+  check: "/sounds/check.mp3",
+  promotion: "/sounds/promotion.mp3",
+  gameOver: "/sounds/game-over.mp3",
+} as const;
+
 export function useChessSounds() {
   const ctxRef = useRef<AudioContext | null>(null);
+  const audioCacheRef = useRef(new Map<string, HTMLAudioElement | null>());
 
   const getCtx = useCallback(() => {
     if (!ctxRef.current) {
@@ -15,8 +24,34 @@ export function useChessSounds() {
     return ctxRef.current;
   }, []);
 
+  const playAsset = useCallback((src: string) => {
+    if (typeof Audio === "undefined") return false;
+
+    const cached = audioCacheRef.current.get(src);
+    if (cached === null) return false;
+
+    const audio = cached ?? new Audio(src);
+    audio.preload = "auto";
+    audio.currentTime = 0;
+
+    const playPromise = audio.play();
+    if (!cached) {
+      audioCacheRef.current.set(src, audio);
+    }
+
+    if (!playPromise) return true;
+
+    playPromise.catch(() => {
+      audioCacheRef.current.set(src, null);
+    });
+
+    return true;
+  }, []);
+
   // Smooth move sound — soft wooden tap
   const playMove = useCallback(() => {
+    if (playAsset(SOUND_PATHS.move)) return;
+
     const ctx = getCtx();
     const t = ctx.currentTime;
 
@@ -44,10 +79,12 @@ export function useChessSounds() {
     source.connect(bandpass).connect(gain).connect(ctx.destination);
     source.start(t);
     source.stop(t + duration);
-  }, [getCtx]);
+  }, [getCtx, playAsset]);
 
   // Capture sound — heavier thud with low-end punch
   const playCapture = useCallback(() => {
+    if (playAsset(SOUND_PATHS.capture)) return;
+
     const ctx = getCtx();
     const t = ctx.currentTime;
 
@@ -88,10 +125,12 @@ export function useChessSounds() {
     source.connect(lp).connect(noiseGain).connect(ctx.destination);
     source.start(t);
     source.stop(t + duration);
-  }, [getCtx]);
+  }, [getCtx, playAsset]);
 
   // Check sound — bright alert tone
   const playCheck = useCallback(() => {
+    if (playAsset(SOUND_PATHS.check)) return;
+
     const ctx = getCtx();
     const t = ctx.currentTime;
 
@@ -111,10 +150,12 @@ export function useChessSounds() {
     osc.connect(gain).connect(ctx.destination);
     osc.start(t);
     osc.stop(t + 0.2);
-  }, [getCtx]);
+  }, [getCtx, playAsset]);
 
   // Promotion sound — ascending chime
   const playPromotion = useCallback(() => {
+    if (playAsset(SOUND_PATHS.promotion)) return;
+
     const ctx = getCtx();
     const t = ctx.currentTime;
 
@@ -134,10 +175,12 @@ export function useChessSounds() {
       osc.start(start);
       osc.stop(start + 0.25);
     });
-  }, [getCtx]);
+  }, [getCtx, playAsset]);
 
   // Game over sound — resolution chord
   const playGameOver = useCallback(() => {
+    if (playAsset(SOUND_PATHS.gameOver)) return;
+
     const ctx = getCtx();
     const t = ctx.currentTime;
 
@@ -156,7 +199,7 @@ export function useChessSounds() {
       osc.start(t);
       osc.stop(t + 0.6);
     });
-  }, [getCtx]);
+  }, [getCtx, playAsset]);
 
   // Play the right sound based on a move result
   const playMoveSound = useCallback((move: { san: string; captured?: string; flags?: string }) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { GameBoard } from "../../components/game/game-board";
 import { GameOptions } from "../../components/game/game-options";
@@ -16,29 +16,73 @@ import { toast } from "sonner";
 import type { StakeInfo } from "@/components/game/game-options";
 import { getMemojiForAddress } from "@/lib/memoji";
 
+type PendingMatch = {
+  roomId: string;
+  color: "white" | "black";
+  opponent: string;
+  playerRating: number;
+  opponentRating: number;
+  staked?: boolean;
+  stakeToken?: string | null;
+  stakeAmount?: string | null;
+};
+
 export default function PlayPage() {
   const router = useRouter();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const { gameMode, setGameMode, setStatus, setRoomId, setPlayerColor, setOpponent, setPlayer, setOnChainGameId } = useGameStore();
+  const {
+    status,
+    roomId,
+    gameMode,
+    setGameMode,
+    setStatus,
+    setRoomId,
+    setPlayerColor,
+    setOpponent,
+    setPlayer,
+    setOnChainGameId,
+    setStakeToken,
+    setStakeAmountRaw,
+    clearMatchState,
+  } = useGameStore();
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
   const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
-  const [pendingMatch, setPendingMatch] = useState<{
-    roomId: string;
-    color: "white" | "black";
-    opponent: string;
-    playerRating: number;
-    opponentRating: number;
-    staked?: boolean;
-    stakeToken?: string | null;
-    stakeAmount?: string | null;
-  } | null>(null);
+  const [pendingMatch, setPendingMatch] = useState<PendingMatch | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
   const searchMemojiRef = useRef<string | null>(null);
+  const hasHandledAutoActionRef = useRef(false);
+
+  const enterMatchedGame = useCallback((match: PendingMatch, options?: { onChainGameId?: bigint | null }) => {
+    if (!address) return;
+
+    clearMatchState();
+    if (options?.onChainGameId !== undefined) {
+      setOnChainGameId(options.onChainGameId);
+    }
+    setStakeToken(match.staked ? (match.stakeToken ?? null) : null);
+    setStakeAmountRaw(match.staked ? (match.stakeAmount ?? null) : null);
+    setRoomId(match.roomId);
+    setPlayerColor(match.color);
+    setOpponent({
+      address: match.opponent,
+      rating: match.opponentRating,
+      memoji: searchMemojiRef.current ?? getMemojiForAddress(match.opponent),
+    });
+    setPlayer({
+      address,
+      rating: match.playerRating,
+      memoji: getMemojiForAddress(address),
+    });
+    if (!gameMode) setGameMode("online");
+    setStatus("in-progress");
+    setPendingMatch(null);
+    router.push(`/play/game/${match.roomId}`);
+  }, [address, clearMatchState, gameMode, router, setGameMode, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus]);
 
   useEffect(() => {
     if (isConnected && address) {
@@ -56,18 +100,34 @@ export default function PlayPage() {
   }, [isConnected, address, setPlayer]);
 
   useEffect(() => {
+    if (hasHandledAutoActionRef.current) return;
+
+    const params = typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
+    const autoQueue = params?.get("autoQueue");
+    if (autoQueue !== "online") return;
+    if (!address || !socket || !isSocketConnected) return;
+
+    hasHandledAutoActionRef.current = true;
+    setGameMode("online");
+    setIsSearchOpen(true);
+    socket.emit("joinQueue", { userId: address });
+    router.replace("/play");
+  }, [address, isSocketConnected, router, setGameMode, socket]);
+
+  useEffect(() => {
     if (!socket) return;
 
-    socket.on('matchFound', (data: {
-      roomId: string; color: "white" | "black"; opponent: string;
-      playerRating: number; opponentRating: number;
-      staked?: boolean;
-      stakeToken?: string | null; stakeAmount?: string | null;
-    }) => {
+    socket.on('matchFound', (data: PendingMatch) => {
       console.log("MATCH FOUND EVENT:", data);
-      setPendingMatch(data);
       setIsSearchOpen(false);
       toast.success(`Match found! You are ${data.color}`);
+
+      if (data.staked) {
+        setPendingMatch(data);
+        return;
+      }
+
+      enterMatchedGame(data);
     });
 
     // Staked game: both players confirmed — game is ready
@@ -75,18 +135,10 @@ export default function PlayPage() {
       console.log("GAME READY EVENT:", data);
       setPendingMatch(prev => {
         if (!prev || prev.roomId !== data.roomId) return prev;
-        // Store on-chain game ID for prize claiming
-        if (data.onChainGameId) {
-          setOnChainGameId(BigInt(data.onChainGameId));
-        }
         // Auto-enter match for the creator (white) who was waiting
-        setRoomId(prev.roomId);
-        setPlayerColor(prev.color);
-        setOpponent({ address: prev.opponent, rating: prev.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(prev.opponent) });
-        setPlayer({ address: address!, rating: prev.playerRating, memoji: getMemojiForAddress(address!) });
-        if (!gameMode) setGameMode("online");
-        setStatus("in-progress");
-        router.push(`/play/game/${prev.roomId}`);
+        enterMatchedGame(prev, {
+          onChainGameId: data.onChainGameId ? BigInt(data.onChainGameId) : null,
+        });
         return null;
       });
     });
@@ -113,8 +165,14 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
-    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number }) => {
+    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
       console.log("GAME REJOINED EVENT:", data);
+      if (roomId !== data.roomId || status !== "in-progress") {
+        clearMatchState();
+      }
+      setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
+      setStakeToken(data.stakeToken ?? null);
+      setStakeAmountRaw(data.stakeAmount ?? null);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
@@ -141,7 +199,7 @@ export default function PlayPage() {
       socket.off('challengeError');
       socket.off('gameRejoined');
     };
-  }, [socket, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId]);
+  }, [socket, status, roomId, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, enterMatchedGame, clearMatchState]);
 
   const handleStartGame = (stakeInfo?: StakeInfo) => {
     if (!isConnected) {
@@ -166,6 +224,7 @@ export default function PlayPage() {
         socket?.emit("joinQueue", { userId: address });
       }
     } else if (gameMode === 'computer') {
+      clearMatchState();
       setPlayerColor("white");
       setOpponent({ address: 'stockfish', rating: 1500, memoji: getMemojiForAddress('stockfish') });
       setStatus("in-progress");
@@ -208,14 +267,7 @@ export default function PlayPage() {
                 color: pendingMatch.color,
                 opponent: pendingMatch.opponent
               });
-              setRoomId(pendingMatch.roomId);
-              setPlayerColor(pendingMatch.color);
-              setOpponent({ address: pendingMatch.opponent, rating: pendingMatch.opponentRating, memoji: searchMemojiRef.current ?? getMemojiForAddress(pendingMatch.opponent) });
-              setPlayer({ address: address!, rating: pendingMatch.playerRating, memoji: getMemojiForAddress(address!) });
-              if (!gameMode) setGameMode("online");
-              setStatus("in-progress");
-              setPendingMatch(null);
-              router.push(`/play/game/${pendingMatch.roomId}`);
+              enterMatchedGame(pendingMatch);
             }}
             onDecline={() => {
               setPendingMatch(null);

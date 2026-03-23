@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { Chess, Move } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { useGameStore } from "@/stores/game-store";
@@ -12,7 +13,22 @@ import { ResignConfirmModal } from "./resign-confirm-modal";
 import { DrawOfferModal } from "./draw-offer-modal";
 import { GlassBg } from "../glass-bg";
 import { useChessSounds } from "@/hooks/useChessSounds";
+import { MaterialBalanceStrip } from "@/components/chess/material-balance-strip";
+import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
+import {
+  formatGameReason,
+  getAutomaticDrawReason,
+} from "@/lib/game-result-display";
+import { PromotionChooser } from "@/components/chess/promotion-chooser";
+import {
+  getPromotionSelection,
+  type PromotionPiece,
+  type PromotionSelection,
+} from "@/lib/chess-promotion";
+import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
+import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { SignalStrength } from "./signal-strength";
+import { customPieces } from "@/components/chess/custom-pieces";
 import { X } from "lucide-react";
 import { getMemojiForAddress } from "@/lib/memoji";
 import Image from "next/image";
@@ -35,23 +51,8 @@ const pieceSymbols: Record<string, { w: string; b: string }> = {
   k: { w: "\u2654", b: "\u265A" },
 };
 
-// Custom chess piece renderer using SVGs from /pieces/
-const PIECE_CODES = ['K', 'Q', 'R', 'B', 'N', 'P'] as const;
-const customPieces: Record<string, () => React.JSX.Element> = {};
-for (const code of PIECE_CODES) {
-  const isPawn = code === 'P';
-  const size = isPawn ? '68%' : '75%';
-  customPieces[`w${code}`] = () => (
-    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={`/pieces/w${code}.svg`} alt={`w${code}`} style={{ width: size, height: size }} />
-    </div>
-  );
-  customPieces[`b${code}`] = () => (
-    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img src={`/pieces/b${code}.svg`} alt={`b${code}`} style={{ width: size, height: size }} />
-    </div>
-  );
-}
+type SelectionMode = "move" | "premove" | null;
+const MOVE_ANIMATION_DURATION_MS = 200;
 
 export function GameBoard() {
   const {
@@ -76,6 +77,8 @@ export function GameBoard() {
     resetTimers,
     gameOver,
     setGameOver,
+    gameResultModalDismissed,
+    setGameResultModalDismissed,
     drawOfferReceived,
     drawOfferSent,
     setDrawOfferReceived,
@@ -89,6 +92,8 @@ export function GameBoard() {
     setOpponentDisconnectDeadline,
     // On-chain state
     onChainGameId,
+    stakeToken,
+    stakeAmountRaw,
     reset: resetStore,
     // Move navigation
     viewMoveIndex,
@@ -103,8 +108,8 @@ export function GameBoard() {
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
   const [prizeClaimed, setPrizeClaimed] = useState(false);
   const [settlementFailed, setSettlementFailed] = useState(false);
-  const [modalDismissed, setModalDismissed] = useState(false);
 
+  const router = useRouter();
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
   const { playMoveSound, playGameOver } = useChessSounds();
@@ -115,6 +120,10 @@ export function GameBoard() {
   // We use fen as the source of truth for React rendering.
   const game = useMemo(() => new Chess(), []);
   const [fen, setFen] = useState(game.fen());
+  const isMultiplayer = gameMode === "online" || gameMode === "friend";
+  const effectiveColor = playerColor || (gameMode === "computer" ? "white" : undefined);
+  const playerTurnCode = effectiveColor ? (effectiveColor === "black" ? "b" : "w") : null;
+  const chessboardId = useMemo(() => `game-board-${roomId ?? gameMode ?? "local"}`, [gameMode, roomId]);
 
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
@@ -122,6 +131,9 @@ export function GameBoard() {
   // State for move highlighting
   const [moveSquares, setMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>(null);
+  const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
+  const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   // State for last move highlighting (persists between moves)
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
 
@@ -149,6 +161,12 @@ export function GameBoard() {
     setFen(game.fen());
   }, [game]);
 
+  const clearSelection = useCallback(() => {
+    setMoveSquares({});
+    setSourceSquare(null);
+    setSelectionMode(null);
+  }, []);
+
   const safeMove = useCallback((move: any) => {
     try {
       const result = game.move(move);
@@ -172,8 +190,7 @@ export function GameBoard() {
         });
 
         // Clear selection highlights after move
-        setMoveSquares({});
-        setSourceSquare(null);
+        clearSelection();
 
         // Play sound based on move type
         playMoveSound(result);
@@ -184,7 +201,84 @@ export function GameBoard() {
       console.error(e);
     }
     return null;
-  }, [game, syncState, addMove, playMoveSound]);
+  }, [game, syncState, addMove, clearSelection, playMoveSound]);
+
+  const emitPlayerMove = useCallback((move: Premove, result: Move) => {
+    if (!isMultiplayer || !roomId) return;
+
+    socket?.emit("movePiece", {
+      roomId,
+      move,
+      fen: game.fen(),
+      moveRecord: {
+        san: result.san,
+        from: result.from,
+        to: result.to,
+        color: result.color,
+        piece: result.piece,
+        timestamp: Date.now(),
+      },
+    });
+  }, [game, isMultiplayer, roomId, socket]);
+
+  const playPlayerMove = useCallback((move: Premove) => {
+    const result = safeMove(move);
+    if (!result) return null;
+
+    emitPlayerMove(move, result);
+    return result;
+  }, [emitPlayerMove, safeMove]);
+
+  const queuePremove = useCallback((move: Premove) => {
+    setQueuedPremove((current) =>
+      current && current.from === move.from && current.to === move.to ? null : move,
+    );
+    clearSelection();
+  }, [clearSelection]);
+
+  const clearQueuedPremove = useCallback(() => {
+    setQueuedPremove(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const requestPromotion = useCallback((from: string, to: string) => {
+    const selection = getPromotionSelection(game, from, to);
+    if (!selection) return false;
+
+    setPromotionSelection(selection);
+    clearSelection();
+    return true;
+  }, [clearSelection, game]);
+
+  const cancelPromotionSelection = useCallback(() => {
+    setPromotionSelection(null);
+    clearSelection();
+  }, [clearSelection]);
+
+  const handlePromotionSelect = useCallback((promotion: PromotionPiece) => {
+    if (!promotionSelection) return;
+
+    playPlayerMove({
+      from: promotionSelection.from,
+      to: promotionSelection.to,
+      promotion,
+    });
+    setPromotionSelection(null);
+  }, [playPlayerMove, promotionSelection]);
+
+  const premoveSquares = useMemo<Record<string, React.CSSProperties>>(() => {
+    if (!queuedPremove) return {};
+
+    return {
+      [queuedPremove.from]: {
+        background: "rgba(59, 130, 246, 0.35)",
+      },
+      [queuedPremove.to]: {
+        background: "radial-gradient(circle, rgba(59,130,246,0.35) 28%, transparent 30%)",
+        borderRadius: "50%",
+      },
+    };
+  }, [queuedPremove]);
 
   // Handle Game Initialization / Resets
   useEffect(() => {
@@ -192,13 +286,20 @@ export function GameBoard() {
       game.reset();
       syncState();
       setLastMove(null);
+      setCheckFlash({});
+      setRatingChange(null);
+      setDisconnectCountdown(null);
+      setPrizeClaimed(false);
+      setSettlementFailed(false);
+      setGameResultModalDismissed(false);
       clearMoves();
       resetTimers();
-      setMoveSquares({});
-      setSourceSquare(null);
+      clearSelection();
+      setQueuedPremove(null);
+      setPromotionSelection(null);
       setLastMoveSquares({});
     }
-  }, [status, game, syncState, clearMoves, resetTimers]);
+  }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed]);
 
   // Load rejoined game state (after browser refresh reconnection)
   useEffect(() => {
@@ -208,6 +309,9 @@ export function GameBoard() {
         syncState();
         clearMoves();
         rejoinMoves.forEach(m => addMove(m));
+        clearSelection();
+        setQueuedPremove(null);
+        setPromotionSelection(null);
         clearRejoinData();
         console.log("[CLIENT] Rejoined game state loaded, FEN:", rejoinFen);
       } catch (e) {
@@ -215,7 +319,15 @@ export function GameBoard() {
         clearRejoinData();
       }
     }
-  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData]);
+  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData, clearSelection]);
+
+  useEffect(() => {
+    if (status !== "in-progress" || gameOver) {
+      clearSelection();
+      setQueuedPremove(null);
+      setPromotionSelection(null);
+    }
+  }, [status, gameOver, clearSelection]);
 
   // Opponent disconnect countdown ticker
   useEffect(() => {
@@ -365,6 +477,18 @@ export function GameBoard() {
     return () => { socket.off('opponentMove', handleOpponentMove); };
   }, [socket, gameMode, roomId, safeMove]);
 
+  useEffect(() => {
+    if (!queuedPremove || status !== "in-progress" || game.isGameOver() || !playerTurnCode) {
+      return;
+    }
+
+    if (game.turn() !== playerTurnCode) return;
+
+    const pendingMove = queuedPremove;
+    setQueuedPremove(null);
+    playPlayerMove(pendingMove);
+  }, [fen, game, playerTurnCode, playPlayerMove, queuedPremove, status]);
+
   // Track opponent connection status and Game Over events
   useEffect(() => {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
@@ -382,7 +506,7 @@ export function GameBoard() {
       console.log("[CLIENT] gameOver event received:", { winner, reason, ratings, settlementFailed: settFailed });
       setGameOver(winner, reason);
       setStatus("finished");
-      setModalDismissed(false);
+      setGameResultModalDismissed(false);
       playGameOver();
       if (settFailed) {
         setSettlementFailed(true);
@@ -482,7 +606,20 @@ export function GameBoard() {
       socket.off('opponentDisconnecting', handleOpponentDisconnecting);
       socket.off('opponentReconnected', handleOpponentReconnected);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed]);
+
+  const handlePostGamePlayAgain = useCallback(() => {
+    if (socket && roomId) {
+      socket.emit("leaveRoom", { roomId });
+    }
+    resetStore();
+    const isStakedMatch = !!stakeToken || !!stakeAmountRaw || onChainGameId !== null;
+    if (gameMode === "online" && !isStakedMatch) {
+      router.push("/play?autoQueue=online");
+      return;
+    }
+    router.push("/play");
+  }, [gameMode, onChainGameId, resetStore, roomId, router, socket, stakeAmountRaw, stakeToken]);
 
   // Flash the king square red when in check and player tries an invalid action
   const flashKingCheck = useCallback(() => {
@@ -510,24 +647,13 @@ export function GameBoard() {
   }, [game]);
 
   // Calculate and style possible moves
-  const getMoveOptions = (square: string) => {
-    // Only allow selecting if it's the player's turn and color
+  const getMoveOptions = useCallback((square: string) => {
+    if (!playerTurnCode) return false;
+
     const turn = game.turn();
     const piece = game.get(square as any);
 
-    // Check if it's our piece
-    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-    const myColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
-
-    // In multiplayer, must be assigned color. In computer, default is white.
-    // Also must be turn of the piece (white/black)
-    if (!piece || piece.color !== turn) {
-      return false;
-    }
-
-    // Must be our color in multiplayer or computer mode
-    const myTurnCode = myColor === 'black' ? 'b' : 'w';
-    if (piece.color !== myTurnCode) {
+    if (!piece || piece.color !== turn || piece.color !== playerTurnCode) {
       return false;
     }
 
@@ -543,141 +669,142 @@ export function GameBoard() {
     }
 
     const newSquares: Record<string, React.CSSProperties> = {};
-    const sourcePiece = game.get(square as any); // Capture piece for stable color comparison
-    const sourceColor = sourcePiece?.color;
 
-    moves.map((move: any) => {
+    moves.forEach((move: any) => {
       const targetPiece = game.get(move.to);
       newSquares[move.to] = {
         background:
-          targetPiece && targetPiece.color !== sourceColor
+          targetPiece && targetPiece.color !== piece.color
             ? "radial-gradient(circle, rgba(0,0,0,.1) 85%, transparent 85%)"
             : "radial-gradient(circle, rgba(0,0,0,.1) 25%, transparent 25%)",
         borderRadius: "50%",
       };
-      return move;
     });
 
-    // Also highlight the source square
     newSquares[square] = {
       background: "rgba(255, 255, 0, 0.4)",
     };
 
     setMoveSquares(newSquares);
     return true;
-  }
+  }, [flashKingCheck, game, playerTurnCode]);
+
+  const getPremoveOptions = useCallback((square: string) => {
+    if (!playerTurnCode || game.turn() === playerTurnCode) return false;
+
+    const piece = game.get(square as any);
+    if (!piece || piece.color !== playerTurnCode) return false;
+
+    const targets = getPremoveTargets(game, square);
+    if (targets.length === 0) {
+      setMoveSquares({});
+      return false;
+    }
+
+    const newSquares: Record<string, React.CSSProperties> = {};
+
+    targets.forEach((target) => {
+      const targetPiece = game.get(target as any);
+      newSquares[target] = {
+        background:
+          targetPiece
+            ? "radial-gradient(circle, rgba(59,130,246,0.22) 72%, transparent 74%)"
+            : "radial-gradient(circle, rgba(59,130,246,0.32) 24%, transparent 26%)",
+        borderRadius: "50%",
+      };
+    });
+
+    newSquares[square] = {
+      background: "rgba(59, 130, 246, 0.24)",
+    };
+
+    setMoveSquares(newSquares);
+    return true;
+  }, [game, playerTurnCode]);
+
+  const tryQueuePremove = useCallback((source: string, target: string) => {
+    if (!playerTurnCode || game.turn() === playerTurnCode) return false;
+
+    const piece = game.get(source as any);
+    if (!piece || piece.color !== playerTurnCode) return false;
+    if (!canSetPremove(game, source, target)) return false;
+
+    queuePremove({ from: source, to: target, promotion: "q" });
+    return true;
+  }, [game, playerTurnCode, queuePremove]);
 
   // Handle square clicks for click-to-move and highlighting
   const onSquareClick = ({ square }: { square: string }) => {
-    if (status !== "in-progress") return;
+    if (status !== "in-progress" || !playerTurnCode || promotionSelection) return;
 
-    // If we already have a selected piece
+    const isPlayersTurn = game.turn() === playerTurnCode;
+
     if (sourceSquare) {
-      // If clicking the same square, deselect
       if (sourceSquare === square) {
-        setSourceSquare(null);
-        setMoveSquares({});
+        clearSelection();
         return;
       }
 
-      // Attempt to move
-      const moveData = {
-        from: sourceSquare,
-        to: square,
-        promotion: "q", // always promote to queen for simplicity
-      };
-
-      try {
-        const move = game.move(moveData); // Validates and executes if valid
+      if (selectionMode === "move" && isPlayersTurn) {
+        const move = game
+          .moves({ square: sourceSquare as any, verbose: true })
+          .find((candidate: any) => candidate.to === square);
 
         if (move) {
-          // Move was valid (game.move modifies state locally)
-          // Undo local move to use safeMove which handles sync and side effects logic
-          game.undo();
-
-          const result = safeMove(moveData); // Use our wrapper
-
-          if (result && (gameMode === 'online' || gameMode === 'friend') && roomId) {
-            socket?.emit("movePiece", {
-              roomId,
-              move: moveData,
-              fen: game.fen(),
-              moveRecord: { san: result.san, from: result.from, to: result.to, color: result.color, piece: result.piece, timestamp: Date.now() },
-            });
+          if (move.promotion && requestPromotion(sourceSquare, square)) {
+            return;
           }
+          playPlayerMove({ from: sourceSquare, to: square, promotion: "q" });
           return;
         }
-      } catch (e) {
-        // move failed, fall through to piece selection logic
       }
 
-      // If move was invalid (or threw), check if we clicked on another one of our pieces
-      const piece = game.get(square as any);
-      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-      const myColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
-      const myTurnCode = myColor === 'black' ? 'b' : 'w';
-
-      if (piece && piece.color === myTurnCode) {
-        // Switch selection
-        setSourceSquare(square);
-        getMoveOptions(square);
+      if (selectionMode === "premove" && !isPlayersTurn && tryQueuePremove(sourceSquare, square)) {
         return;
       }
 
-      // Invalid move and not clicking our own piece -> Deselect
-      flashKingCheck();
-      setSourceSquare(null);
-      setMoveSquares({});
+      const piece = game.get(square as any);
+      if (piece && piece.color === playerTurnCode) {
+        const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
+        if (selected) {
+          setSourceSquare(square);
+          setSelectionMode(isPlayersTurn ? "move" : "premove");
+        }
+        return;
+      }
+
+      if (selectionMode === "move") {
+        flashKingCheck();
+      }
+      clearSelection();
       return;
     }
 
-    // No piece selected yet, try to select
-    if (getMoveOptions(square)) {
+    const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
+    if (selected) {
       setSourceSquare(square);
+      setSelectionMode(isPlayersTurn ? "move" : "premove");
     } else {
-      setSourceSquare(null);
-      setMoveSquares({});
+      clearSelection();
     }
   };
 
   // Primary Move Handler for Chessboard (Drag and Drop)
   const onDrop = useCallback((source: string, target: string) => {
-    if (status !== "in-progress") return false;
+    if (status !== "in-progress" || promotionSelection) return false;
     if (game.isGameOver()) return false;
+    if (!playerTurnCode) return false;
 
-    // For multiplayer, playerColor must be set
-    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-    const myColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
-
-    if (isMultiplayer && !myColor) {
-      console.warn("ACTION: Player color not assigned yet in multiplayer");
+    if (game.turn() !== playerTurnCode) {
+      tryQueuePremove(source, target);
       return false;
     }
 
-    const turn = game.turn();
-    const myTurnCode = myColor === 'black' ? 'b' : 'w';
+    if (requestPromotion(source, target)) return false;
 
-    if (turn !== myTurnCode) {
-      return false;
-    }
-
-    const moveData = { from: source, to: target, promotion: "q" };
-    const result = safeMove(moveData);
-
-    if (result) {
-      if (isMultiplayer && roomId) {
-        socket?.emit("movePiece", {
-          roomId,
-          move: moveData,
-          fen: game.fen(),
-          moveRecord: { san: result.san, from: result.from, to: result.to, color: result.color, piece: result.piece, timestamp: Date.now() },
-        });
-      }
-      return true;
-    }
-
-    return false;
-  }, [game, status, playerColor, gameMode, roomId, socket, safeMove]);
+    const result = playPlayerMove({ from: source, to: target, promotion: "q" });
+    return !!result;
+  }, [game, playerTurnCode, playPlayerMove, promotionSelection, requestPromotion, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -692,9 +819,27 @@ export function GameBoard() {
     return temp.fen();
   }, [viewMoveIndex, storeMoves, fen]);
 
-  const effectiveColor = playerColor || (gameMode === 'computer' ? 'white' : undefined);
   // Board orientation: "black" means black pieces at bottom, "white" means white pieces at bottom
   const orientation: "white" | "black" = effectiveColor === "black" ? "black" : "white";
+  const materialBalance = useMemo(() => getMaterialBalance(displayFen), [displayFen]);
+  const playerMaterialDisplay = useMemo(() => {
+    if (!effectiveColor) return null;
+
+    return getSideMaterialDisplay(materialBalance, effectiveColor);
+  }, [effectiveColor, materialBalance]);
+  const opponentMaterialDisplay = useMemo(() => {
+    if (!effectiveColor) return null;
+
+    return getSideMaterialDisplay(
+      materialBalance,
+      effectiveColor === "white" ? "black" : "white",
+    );
+  }, [effectiveColor, materialBalance]);
+  const displayedGameReason = useMemo(() => {
+    if (!gameOver?.reason) return null;
+    if (gameOver.reason !== "draw") return gameOver.reason;
+    return getAutomaticDrawReason(game) ?? gameOver.reason;
+  }, [fen, game, gameOver]);
 
   // Force remount counter when color changes
   const [boardKey, setBoardKey] = useState(0);
@@ -745,8 +890,7 @@ export function GameBoard() {
 
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
-  const playerTurnCode = effectiveColor === 'black' ? 'b' : 'w';
-  const isMyTurn = currentTurn === playerTurnCode;
+  const isMyTurn = !!playerTurnCode && currentTurn === playerTurnCode;
 
   return (
     <div className="mx-auto flex w-full max-w-[clamp(480px,calc(100vh-7rem),1300px)] flex-col gap-2 sm:gap-4">
@@ -764,12 +908,21 @@ export function GameBoard() {
             )}
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-white truncate">
-              {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
-            </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="truncate text-sm font-semibold text-white">
+                {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
+              </p>
+              <PlayerRatingBadge rating={opponent?.rating} />
+            </div>
             <p className="text-xs text-white/30 truncate">
               {status === 'in-progress' && !isMyTurn ? 'Thinking...' : opponent ? opponent.address.slice(0, 4) + '...' + opponent.address.slice(-4) : ''}
             </p>
+            {opponentMaterialDisplay ? (
+              <MaterialBalanceStrip
+                advantage={opponentMaterialDisplay.advantage}
+                capturedPieces={opponentMaterialDisplay.capturedPieces}
+              />
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -806,13 +959,20 @@ export function GameBoard() {
           <Chessboard
             key={`board-${boardKey}-${orientation}`}
             options={{
+              id: chessboardId,
               position: displayFen,
               boardOrientation: orientation,
-              allowDragging: status === 'in-progress' && !!effectiveColor && !isViewingHistory,
+              showAnimations: true,
+              animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              allowDragging:
+                status === 'in-progress' &&
+                !!effectiveColor &&
+                !isViewingHistory &&
+                !promotionSelection,
               boardStyle: { borderRadius: '4px' },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
-              squareStyles: { ...lastMoveSquares, ...checkSquare, ...moveSquares, ...checkFlash },
+              squareStyles: { ...lastMoveSquares, ...checkSquare, ...premoveSquares, ...moveSquares, ...checkFlash },
               pieces: customPieces,
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
@@ -821,6 +981,16 @@ export function GameBoard() {
               },
             }}
           />
+
+          {promotionSelection ? (
+            <PromotionChooser
+              targetSquare={promotionSelection.to}
+              color={promotionSelection.color}
+              orientation={orientation}
+              onSelect={handlePromotionSelect}
+              onCancel={cancelPromotionSelection}
+            />
+          ) : null}
 
           {status === "waiting" && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 animate-in fade-in duration-500">
@@ -831,12 +1001,12 @@ export function GameBoard() {
             </div>
           )}
 
-          {gameOver && !modalDismissed && (
+          {gameOver && !gameResultModalDismissed && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
               <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
                 <GlassBg className="p-5 sm:p-8 text-center relative" height="auto">
                   <button
-                    onClick={() => setModalDismissed(true)}
+                    onClick={() => setGameResultModalDismissed(true)}
                     className="absolute top-3 right-3 rounded-full p-1.5 text-white/40 transition hover:bg-white/10 hover:text-white"
                   >
                     <X className="h-5 w-5" />
@@ -859,11 +1029,10 @@ export function GameBoard() {
                         {gameOver.winner === 'draw' ? "DRAW" : (gameOver.winner === playerColor || gameOver.winner === 'opponent') ? "YOU WON!" : "GAME OVER"}
                       </h2>
                       <p className="text-xs sm:text-sm text-white/60 capitalize">
-                        {gameOver.reason === 'disconnection' ? 'Opponent Disconnected' :
-                          gameOver.reason === 'resignation' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Resigned' : 'You Resigned') :
-                            gameOver.reason === 'timeout' ? (gameOver.winner === playerColor || gameOver.winner === 'opponent' ? 'Opponent Ran Out of Time' : 'You Ran Out of Time') :
-                              gameOver.reason === 'draw' ? 'Draw by Agreement' :
-                                gameOver.reason}
+                        {formatGameReason(
+                          displayedGameReason,
+                          gameOver.winner === playerColor || gameOver.winner === "opponent",
+                        )}
                       </p>
                     </div>
 
@@ -904,7 +1073,7 @@ export function GameBoard() {
                     )}
 
                     <button
-                      onClick={() => window.location.reload()}
+                      onClick={handlePostGamePlayAgain}
                       className="w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 mt-1 sm:mt-2"
                     >
                       <div className="absolute inset-0 bg-linear-to-r from-blue-600 to-purple-600 opacity-90 group-hover:opacity-100 transition-opacity" />
@@ -929,10 +1098,36 @@ export function GameBoard() {
             )}
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-white">You(Player)</p>
-            <p className="text-xs text-white/30">
-              {status === 'in-progress' && isMyTurn ? 'Your move' : status === 'in-progress' ? 'Waiting for opponent' : 'Online'}
-            </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="truncate text-sm font-semibold text-white">You(Player)</p>
+              <PlayerRatingBadge rating={player?.rating} />
+            </div>
+            <div className="flex items-center gap-2 text-xs text-white/30">
+              <p>
+                {status === 'in-progress' && isMyTurn
+                  ? 'Your move'
+                  : status === 'in-progress' && queuedPremove
+                    ? 'Premove set'
+                    : status === 'in-progress'
+                      ? 'Waiting for opponent'
+                      : 'Online'}
+              </p>
+              {status === "in-progress" && queuedPremove ? (
+                <button
+                  type="button"
+                  onClick={clearQueuedPremove}
+                  className="rounded-sm text-[11px] font-medium text-blue-300/80 transition hover:text-blue-200"
+                >
+                  Cancel premove
+                </button>
+              ) : null}
+            </div>
+            {playerMaterialDisplay ? (
+              <MaterialBalanceStrip
+                advantage={playerMaterialDisplay.advantage}
+                capturedPieces={playerMaterialDisplay.capturedPieces}
+              />
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
