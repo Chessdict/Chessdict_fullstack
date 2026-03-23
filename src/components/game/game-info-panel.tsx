@@ -9,6 +9,7 @@ import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { getGameHistory } from "@/app/actions";
 import { getMemojiForAddress } from "@/lib/memoji";
+import { getTimeControlDisplay, getTimeControlMinutesFromSeconds } from "@/lib/time-control";
 import { toast } from "sonner";
 
 type ChatMessage = {
@@ -38,6 +39,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     player,
     opponent,
     playerColor,
+    initialTime,
     moves,
     isOpponentConnected,
     roomId,
@@ -149,6 +151,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const isGameFinished = status === "finished";
   const canReviewGame = isGameActive || isGameFinished;
   const canPlayAgain = gameMode === "online" && !stakeToken && !stakeAmountRaw;
+  const timeControlMinutes = getTimeControlMinutesFromSeconds(initialTime);
+  const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
 
   // Chat socket listener
   useEffect(() => {
@@ -244,8 +248,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     }
     reset();
     toast.success("Finding a new match...");
-    router.push("/play?autoQueue=online");
-  }, [canPlayAgain, handlePlayNewGame, reset, roomId, router, socket, stopAutoPlay]);
+    router.push(`/play?autoQueue=online&timeControl=${timeControlMinutes}`);
+  }, [canPlayAgain, handlePlayNewGame, reset, roomId, router, socket, stopAutoPlay, timeControlMinutes]);
 
   // Clear chat only when switching to a genuinely different game
   const prevRoomIdRef = useRef<string | undefined>(undefined);
@@ -473,6 +477,11 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           {activeSubTab === "info" && canReviewGame && opponent && (
             <div className="flex flex-col gap-3">
               <h3 className="text-xs font-bold uppercase tracking-widest text-white/40">Players</h3>
+
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <p className="text-[11px] font-medium uppercase tracking-widest text-white/35">Time Control</p>
+                <p className="mt-1 text-sm font-semibold text-white">{timeControlDisplay}</p>
+              </div>
 
               {/* Opponent */}
               <div className="flex items-center justify-between rounded-xl bg-white/5 p-3">

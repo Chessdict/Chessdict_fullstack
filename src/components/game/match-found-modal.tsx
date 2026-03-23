@@ -7,6 +7,10 @@ import { cn, formatName } from "@/lib/utils";
 import { useChessdict, useTokenSymbol, useTokenDecimals } from "@/hooks/useChessdict";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { useAccount } from "wagmi";
+import {
+    getTimeControlDisplay,
+    normalizeTimeControlMinutes,
+} from "@/lib/time-control";
 
 interface MatchFoundModalProps {
     opponent: string;
@@ -19,6 +23,7 @@ interface MatchFoundModalProps {
     staked?: boolean;
     stakeToken?: string | null;
     stakeAmount?: string | null;
+    timeControl?: number;
     roomId?: string;
     socket?: any;
 }
@@ -36,6 +41,7 @@ export function MatchFoundModal({
     staked,
     stakeToken,
     stakeAmount,
+    timeControl,
     roomId,
     socket,
 }: MatchFoundModalProps) {
@@ -61,6 +67,8 @@ export function MatchFoundModal({
     const opponentMemoji = memoji ?? getMemojiForAddress(opponent);
     const playerMemoji = getMemojiForAddress(address ?? "player");
     const playerLabel = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "You";
+    const timeControlMinutes = normalizeTimeControlMinutes(timeControl);
+    const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
 
     useEffect(() => {
         onAcceptRef.current = onAccept;
@@ -253,6 +261,9 @@ export function MatchFoundModal({
                                 <p className="text-xs sm:text-sm text-white/60">
                                     Opponent: {formatName(opponent)}
                                 </p>
+                                <p className="mt-2 text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
+                                    {timeControlDisplay}
+                                </p>
                                 {stakeAmount && (
                                     <p className="text-xs text-yellow-400 mt-1">
                                         Stake: {stakeAmount} {(tokenSymbol as string) ?? "tokens"}
@@ -385,6 +396,9 @@ export function MatchFoundModal({
                                 <h2 className="text-lg sm:text-xl font-bold text-white">Match Found!</h2>
                                 <p className="text-xs sm:text-sm text-white/60">
                                     Opponent: {formatName(opponent)}
+                                </p>
+                                <p className="mt-2 text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
+                                    {timeControlDisplay}
                                 </p>
                                 <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest mt-2">
                                     You are playing as {color}
@@ -549,6 +563,9 @@ export function MatchFoundModal({
                         <div className="space-y-2">
                             <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest">
                                 You are playing as {color}
+                            </p>
+                            <p className="text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
+                                {timeControlDisplay}
                             </p>
                             <p className="text-xs text-white/45">
                                 {autoEnter ? "Starting the board..." : "Ready to enter the match."}

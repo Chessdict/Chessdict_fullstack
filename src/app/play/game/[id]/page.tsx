@@ -10,6 +10,7 @@ import { useAccount } from "wagmi";
 import { loginWithWallet } from "@/app/actions";
 import { toast } from "sonner";
 import { getMemojiForAddress } from "@/lib/memoji";
+import { getTimeControlSeconds, normalizeTimeControlMinutes } from "@/lib/time-control";
 
 export default function GamePage({
   params,
@@ -42,6 +43,7 @@ export default function GamePage({
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
+  const setInitialTime = useGameStore((s) => s.setInitialTime);
 
   // Login with wallet on mount
   useEffect(() => {
@@ -72,6 +74,7 @@ export default function GamePage({
       chatMessages?: { sender: string; text: string; timestamp: number }[];
       whiteTime: number;
       blackTime: number;
+      timeControl?: number;
       onChainGameId?: string | null;
       stakeToken?: string | null;
       stakeAmount?: string | null;
@@ -79,6 +82,11 @@ export default function GamePage({
       if (roomId !== data.roomId || status !== "in-progress") {
         clearMatchState();
       }
+      const timeControlMinutes = normalizeTimeControlMinutes(
+        data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
+      );
+      const initialSeconds = getTimeControlSeconds(timeControlMinutes);
+      setInitialTime(initialSeconds);
       setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
       setStakeToken(data.stakeToken ?? null);
       setStakeAmountRaw(data.stakeAmount ?? null);
@@ -86,11 +94,8 @@ export default function GamePage({
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
       if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
-      const { initialTime, whiteTime: curWhite, blackTime: curBlack } = useGameStore.getState();
-      const newWhite = Math.min(data.whiteTime, initialTime);
-      const newBlack = Math.min(data.blackTime, initialTime);
-      if (newWhite <= curWhite) setWhiteTime(newWhite);
-      if (newBlack <= curBlack) setBlackTime(newBlack);
+      setWhiteTime(Math.min(data.whiteTime, initialSeconds));
+      setBlackTime(Math.min(data.blackTime, initialSeconds));
       setRejoinData(data.fen, data.moves);
       if (data.chatMessages?.length) {
         setRejoinChatMessages(data.chatMessages);
@@ -103,7 +108,7 @@ export default function GamePage({
     return () => {
       socket.off("gameRejoined", handleGameRejoined);
     };
-  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus]);
+  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setInitialTime]);
 
   // Effect 2: Emit rejoinGame on initial page load AND on every socket reconnection
   // This ensures we always get fresh game state + chat even after tab close/reopen

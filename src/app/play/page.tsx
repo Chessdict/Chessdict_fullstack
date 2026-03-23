@@ -15,6 +15,12 @@ import { MatchFoundModal } from "@/components/game/match-found-modal";
 import { toast } from "sonner";
 import type { StakeInfo } from "@/components/game/game-options";
 import { getMemojiForAddress } from "@/lib/memoji";
+import {
+  clampStakedTimeControlMinutes,
+  DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
+  getTimeControlSeconds,
+  normalizeTimeControlMinutes,
+} from "@/lib/time-control";
 
 type PendingMatch = {
   roomId: string;
@@ -22,9 +28,18 @@ type PendingMatch = {
   opponent: string;
   playerRating: number;
   opponentRating: number;
+  timeControl: number;
   staked?: boolean;
   stakeToken?: string | null;
   stakeAmount?: string | null;
+};
+
+type IncomingChallenge = {
+  from: string;
+  stakeEnabled?: boolean;
+  stakeToken?: string | null;
+  stakeAmount?: string | null;
+  timeControl?: number;
 };
 
 export default function PlayPage() {
@@ -49,22 +64,22 @@ export default function PlayPage() {
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
-  const [incomingChallenge, setIncomingChallenge] = useState<string | null>(null);
+  const [incomingChallenge, setIncomingChallenge] = useState<IncomingChallenge | null>(null);
   const [pendingMatch, setPendingMatch] = useState<PendingMatch | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
   const searchMemojiRef = useRef<string | null>(null);
-  const selectedTimeRef = useRef<number>(3); // minutes, default blitz
+  const selectedTimeRef = useRef<number>(DEFAULT_QUEUE_TIME_CONTROL_MINUTES);
   const hasHandledAutoActionRef = useRef(false);
   const setInitialTime = useGameStore((s) => s.setInitialTime);
 
   const enterMatchedGame = useCallback((match: PendingMatch, options?: { onChainGameId?: bigint | null }) => {
     if (!address) return;
 
+    const timeControlMinutes = normalizeTimeControlMinutes(match.timeControl);
     clearMatchState();
-    // Re-apply selected time after clearMatchState resets timers
-    setInitialTime(selectedTimeRef.current * 60);
+    setInitialTime(getTimeControlSeconds(timeControlMinutes));
     if (options?.onChainGameId !== undefined) {
       setOnChainGameId(options.onChainGameId);
     }
@@ -111,12 +126,17 @@ export default function PlayPage() {
     if (autoQueue !== "online") return;
     if (!address || !socket || !isSocketConnected) return;
 
+    const timeControlMinutes = normalizeTimeControlMinutes(
+      params?.get("timeControl") ?? DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
+    );
     hasHandledAutoActionRef.current = true;
+    selectedTimeRef.current = timeControlMinutes;
+    setInitialTime(getTimeControlSeconds(timeControlMinutes));
     setGameMode("online");
     setIsSearchOpen(true);
-    socket.emit("joinQueue", { userId: address });
+    socket.emit("joinQueue", { userId: address, timeControl: timeControlMinutes });
     router.replace("/play");
-  }, [address, isSocketConnected, router, setGameMode, socket]);
+  }, [address, isSocketConnected, router, setGameMode, setInitialTime, socket]);
 
   useEffect(() => {
     if (!socket) return;
@@ -126,15 +146,21 @@ export default function PlayPage() {
       setIsSearchOpen(false);
       toast.success(`Match found! You are ${data.color}`);
 
-      setPendingMatch(data);
+      setPendingMatch({
+        ...data,
+        timeControl: normalizeTimeControlMinutes(data.timeControl),
+      });
     });
 
     // Staked game: both players confirmed — game is ready
-    socket.on('gameReady', (data: { roomId: string; onChainGameId?: string | null }) => {
+    socket.on('gameReady', (data: { roomId: string; onChainGameId?: string | null; timeControl?: number }) => {
       console.log("GAME READY EVENT:", data);
       setPendingMatch(prev => {
         if (!prev || prev.roomId !== data.roomId) return prev;
-        enterMatchedGame(prev, {
+        enterMatchedGame({
+          ...prev,
+          timeControl: normalizeTimeControlMinutes(data.timeControl ?? prev.timeControl),
+        }, {
           onChainGameId: data.onChainGameId ? BigInt(data.onChainGameId) : null,
         });
         return null;
@@ -151,8 +177,13 @@ export default function PlayPage() {
       console.log("STAKE TIMEOUT:", data);
     });
 
-    socket.on('challengeReceived', (data: { from: string }) => {
-      setIncomingChallenge(data.from);
+    socket.on('challengeReceived', (data: IncomingChallenge) => {
+      setIncomingChallenge({
+        ...data,
+        timeControl: data.stakeEnabled
+          ? clampStakedTimeControlMinutes(data.timeControl)
+          : normalizeTimeControlMinutes(data.timeControl),
+      });
     });
 
     socket.on('challengeDeclined', (data: { from: string }) => {
@@ -163,11 +194,17 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
-    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
+    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
       console.log("GAME REJOINED EVENT:", data);
       if (roomId !== data.roomId || status !== "in-progress") {
         clearMatchState();
       }
+      const timeControlMinutes = normalizeTimeControlMinutes(
+        data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
+      );
+      const initialSeconds = getTimeControlSeconds(timeControlMinutes);
+      selectedTimeRef.current = timeControlMinutes;
+      setInitialTime(initialSeconds);
       setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
       setStakeToken(data.stakeToken ?? null);
       setStakeAmountRaw(data.stakeAmount ?? null);
@@ -175,11 +212,8 @@ export default function PlayPage() {
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
       if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
-      const { initialTime, whiteTime: curWhite, blackTime: curBlack } = useGameStore.getState();
-      const newWhite = Math.min(data.whiteTime, initialTime);
-      const newBlack = Math.min(data.blackTime, initialTime);
-      if (newWhite <= curWhite) setWhiteTime(newWhite);
-      if (newBlack <= curBlack) setBlackTime(newBlack);
+      setWhiteTime(Math.min(data.whiteTime, initialSeconds));
+      setBlackTime(Math.min(data.blackTime, initialSeconds));
       setRejoinData(data.fen, data.moves);
       if (data.chatMessages?.length) {
         setRejoinChatMessages(data.chatMessages);
@@ -200,7 +234,7 @@ export default function PlayPage() {
       socket.off('challengeError');
       socket.off('gameRejoined');
     };
-  }, [socket, status, roomId, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, enterMatchedGame, clearMatchState]);
+  }, [socket, status, roomId, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, enterMatchedGame, clearMatchState, setInitialTime]);
 
   const handleStartGame = (stakeInfo?: StakeInfo, timeControl?: number) => {
     if (!isConnected) {
@@ -208,9 +242,9 @@ export default function PlayPage() {
       return;
     }
 
-    const timeMinutes = timeControl ?? 3;
+    const timeMinutes = normalizeTimeControlMinutes(timeControl ?? DEFAULT_QUEUE_TIME_CONTROL_MINUTES);
     selectedTimeRef.current = timeMinutes;
-    setInitialTime(timeMinutes * 60);
+    setInitialTime(getTimeControlSeconds(timeMinutes));
 
     if (gameMode === 'online') {
       if (!isSocketConnected) {
@@ -245,13 +279,20 @@ export default function PlayPage() {
       <div className="container relative mx-auto flex flex-1 flex-col items-center gap-6 px-3 pb-6 sm:px-6 sm:gap-12 lg:flex-row lg:items-start">
         {incomingChallenge && (
           <ChallengeModal
-            from={incomingChallenge}
+            from={incomingChallenge.from}
+            stakeEnabled={incomingChallenge.stakeEnabled}
+            timeControl={incomingChallenge.timeControl}
             onAccept={() => {
-              socket?.emit('acceptChallenge', { opponentId: incomingChallenge, userId: address });
+              socket?.emit('acceptChallenge', {
+                opponentId: incomingChallenge.from,
+                userId: address,
+                stakeEnabled: incomingChallenge.stakeEnabled,
+                timeControl: incomingChallenge.timeControl,
+              });
               setIncomingChallenge(null);
             }}
             onDecline={() => {
-              socket?.emit('declineChallenge', { toUserId: incomingChallenge, fromUserId: address });
+              socket?.emit('declineChallenge', { toUserId: incomingChallenge.from, fromUserId: address });
               setIncomingChallenge(null);
             }}
           />
@@ -266,6 +307,7 @@ export default function PlayPage() {
             staked={pendingMatch.staked}
             stakeToken={pendingMatch.stakeToken}
             stakeAmount={pendingMatch.stakeAmount}
+            timeControl={pendingMatch.timeControl}
             roomId={pendingMatch.roomId}
             socket={socket}
             onAccept={() => {

@@ -59,7 +59,7 @@ type GameState = {
   setDrawOfferReceived: (received: boolean) => void;
   setDrawOfferSent: (sent: boolean) => void;
   // Timer state
-  initialTime: number; // in seconds (default 600 = 10 minutes)
+  initialTime: number; // in seconds (default 180 = 3 minutes)
   whiteTime: number; // remaining time for white in seconds
   blackTime: number; // remaining time for black in seconds
   setInitialTime: (time: number) => void;
