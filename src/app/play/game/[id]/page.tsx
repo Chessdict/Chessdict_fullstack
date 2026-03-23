@@ -10,7 +10,12 @@ import { useAccount } from "wagmi";
 import { loginWithWallet } from "@/app/actions";
 import { toast } from "sonner";
 import { getMemojiForAddress } from "@/lib/memoji";
-import { getTimeControlSeconds, normalizeTimeControlMinutes } from "@/lib/time-control";
+import { getPlayerRatingForTimeControl } from "@/lib/player-ratings";
+import {
+  DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
+  getTimeControlSeconds,
+  normalizeTimeControlMinutes,
+} from "@/lib/time-control";
 
 export default function GamePage({
   params,
@@ -51,7 +56,14 @@ export default function GamePage({
       loginWithWallet(address)
         .then((result) => {
           if (result.success && result.user) {
-            setPlayer({ address, rating: result.user.rating ?? 1200, memoji: getMemojiForAddress(address) });
+            setPlayer({
+              address,
+              rating: getPlayerRatingForTimeControl(
+                result.user,
+                DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
+              ),
+              memoji: getMemojiForAddress(address),
+            });
           }
         })
         .catch(console.error);
@@ -142,14 +154,14 @@ export default function GamePage({
     <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
 
-      <div className="container relative mx-auto flex flex-1 flex-col items-center gap-6 px-3 pb-6 sm:px-6 sm:gap-12 lg:flex-row lg:items-start lg:justify-center">
+      <div className="container relative mx-auto flex flex-1 flex-col items-center gap-2 px-0 pb-3 sm:px-6 sm:gap-12 sm:pb-6 lg:flex-row lg:items-start lg:justify-center">
         {/* Chess Board */}
-        <div className="w-full max-w-[720px] flex-none">
+        <div className="w-full max-w-none flex-none px-0 sm:max-w-[760px] sm:px-0">
           <GameBoard />
         </div>
 
         {/* Game Info Panel */}
-        <div className="w-full max-w-sm flex-none">
+        <div className="w-full max-w-none flex-none px-1.5 sm:max-w-sm sm:px-0">
           <GameInfoPanel isSocketConnected={isSocketConnected} />
         </div>
       </div>

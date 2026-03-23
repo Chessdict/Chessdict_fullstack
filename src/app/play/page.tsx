@@ -15,6 +15,7 @@ import { MatchFoundModal } from "@/components/game/match-found-modal";
 import { toast } from "sonner";
 import type { StakeInfo } from "@/components/game/game-options";
 import { getMemojiForAddress } from "@/lib/memoji";
+import { getPlayerRatingForTimeControl } from "@/lib/player-ratings";
 import {
   clampStakedTimeControlMinutes,
   DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
@@ -109,7 +110,14 @@ export default function PlayPage() {
         .then((result) => {
           if (result.success && result.user) {
             console.log("Logged in with wallet:", result.user);
-            setPlayer({ address, rating: result.user.rating ?? 1200, memoji: getMemojiForAddress(address) });
+            setPlayer({
+              address,
+              rating: getPlayerRatingForTimeControl(
+                result.user,
+                DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
+              ),
+              memoji: getMemojiForAddress(address),
+            });
           } else {
             console.error("Login failed:", result.error);
           }

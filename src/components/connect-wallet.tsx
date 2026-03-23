@@ -114,11 +114,6 @@ export function ConnectWallet() {
   if (isConnected && address) {
     const shortenedAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
 
-    const handleProfile = () => {
-      setIsOpen(false);
-      router.push("/profile");
-    };
-
     const handleDisconnect = async () => {
       setIsOpen(false);
 
@@ -199,13 +194,14 @@ export function ConnectWallet() {
                     <div className="border-t border-white/10" />
                   </>
                 )}
-                <button
-                  onClick={handleProfile}
+                <Link
+                  href="/profile"
+                  onClick={() => setIsOpen(false)}
                   className="flex w-full items-center gap-3 px-4 py-4 text-base text-white/80 transition active:bg-white/10"
                 >
                   <User className="h-5 w-5" />
                   Profile
-                </button>
+                </Link>
                 <div className="border-t border-white/10" />
                 <button
                   onClick={handleDisconnect}
