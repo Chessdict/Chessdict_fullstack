@@ -5,6 +5,7 @@ import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { getAutomaticDrawReason } from "@/lib/game-result-display";
 import { PromotionChooser } from "@/components/chess/promotion-chooser";
+import { PremoveGhostOverlay } from "@/components/chess/premove-ghost-overlay";
 import { MaterialBalanceStrip } from "@/components/chess/material-balance-strip";
 import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
 import { useTournamentStore } from "@/stores/tournament-store";
@@ -32,6 +33,11 @@ interface TournamentGameBoardProps {
 
 type SelectionMode = "move" | "premove" | null;
 const MOVE_ANIMATION_DURATION_MS = 200;
+
+function isPromotionDestination(square: string, color: "w" | "b") {
+  const rank = square[1];
+  return (color === "w" && rank === "8") || (color === "b" && rank === "1");
+}
 
 export function TournamentGameBoard({
   socket,
@@ -162,18 +168,24 @@ export function TournamentGameBoard({
   }, [playPlayerMove, promotionSelection]);
 
   const premoveSquares = useMemo<Record<string, React.CSSProperties>>(() => {
-    if (!queuedPremove) return {};
+    return {};
+  }, []);
 
-    return {
-      [queuedPremove.from]: {
-        background: "rgba(59, 130, 246, 0.35)",
-      },
-      [queuedPremove.to]: {
-        background: "radial-gradient(circle, rgba(59,130,246,0.35) 28%, transparent 30%)",
-        borderRadius: "50%",
-      },
-    };
-  }, [queuedPremove]);
+  const queuedPremovePieceCode = useMemo(() => {
+    if (!queuedPremove) return null;
+
+    const sourcePiece = game.get(queuedPremove.from as any);
+    if (!sourcePiece) return null;
+
+    const promotedPiece =
+      sourcePiece.type === "p" &&
+      queuedPremove.promotion &&
+      isPromotionDestination(queuedPremove.to, sourcePiece.color)
+        ? queuedPremove.promotion
+        : sourcePiece.type;
+
+    return `${sourcePiece.color}${promotedPiece.toUpperCase()}`;
+  }, [fen, game, queuedPremove]);
 
   // Timer countdown
   useEffect(() => {
@@ -378,6 +390,11 @@ export function TournamentGameBoard({
 
     const isPlayersTurn = game.turn() === playerTurnCode;
 
+    if (!isPlayersTurn && queuedPremove) {
+      clearQueuedPremove();
+      return;
+    }
+
     if (sourceSquare) {
       if (sourceSquare === square) {
         clearSelection();
@@ -432,6 +449,10 @@ export function TournamentGameBoard({
       if (!playerTurnCode) return false;
 
       if (game.turn() !== playerTurnCode) {
+        if (queuedPremove) {
+          clearQueuedPremove();
+          return false;
+        }
         tryQueuePremove(source, target);
         return false;
       }
@@ -441,7 +462,7 @@ export function TournamentGameBoard({
       const result = playPlayerMove({ from: source, to: target, promotion: "q" });
       return !!result;
     },
-    [game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, requestPromotion, tryQueuePremove],
+    [clearQueuedPremove, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, tryQueuePremove],
   );
 
   const handleResign = () => {
@@ -584,6 +605,14 @@ export function TournamentGameBoard({
               },
             }}
           />
+          {queuedPremove ? (
+            <PremoveGhostOverlay
+              from={queuedPremove.from}
+              to={queuedPremove.to}
+              orientation={orientation}
+              pieceCode={queuedPremovePieceCode}
+            />
+          ) : null}
           {promotionSelection ? (
             <PromotionChooser
               targetSquare={promotionSelection.to}
@@ -617,15 +646,6 @@ export function TournamentGameBoard({
               <span>
                 {isMyTurn && !gameResult ? "Your turn" : queuedPremove && !gameResult ? "Premove set" : "Waiting"}
               </span>
-              {queuedPremove && !gameResult ? (
-                <button
-                  type="button"
-                  onClick={clearQueuedPremove}
-                  className="rounded-sm text-[10px] tracking-normal text-blue-300/80 transition hover:text-blue-200"
-                >
-                  Cancel premove
-                </button>
-              ) : null}
             </div>
             {playerMaterialDisplay ? (
               <MaterialBalanceStrip

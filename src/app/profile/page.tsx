@@ -15,6 +15,7 @@ type Profile = {
         bullet: number;
         blitz: number;
         rapid: number;
+        staked: number;
     };
     joinedAt: string;
     totalGames: number;
@@ -163,10 +164,11 @@ export default function ProfilePage() {
                 {/* Ratings */}
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6">
                     <p className="text-xs uppercase tracking-widest text-white/40 mb-4 text-center">Ratings</p>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <RatingCard label="Bullet" value={profile.ratings.bullet} accent="text-sky-300" />
                         <RatingCard label="Blitz" value={profile.ratings.blitz} accent="text-amber-300" />
                         <RatingCard label="Rapid" value={profile.ratings.rapid} accent="text-emerald-300" />
+                        <RatingCard label="Staked" value={profile.ratings.staked} accent="text-violet-300" />
                     </div>
                 </div>
 

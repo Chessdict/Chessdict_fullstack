@@ -33,6 +33,7 @@ type PendingMatch = {
   staked?: boolean;
   stakeToken?: string | null;
   stakeAmount?: string | null;
+  requestedStakeAmount?: string | null;
 };
 
 type IncomingChallenge = {
@@ -72,6 +73,7 @@ export default function PlayPage() {
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
   const searchMemojiRef = useRef<string | null>(null);
   const selectedTimeRef = useRef<number>(DEFAULT_QUEUE_TIME_CONTROL_MINUTES);
+  const queuedStakeAmountRef = useRef<string | null>(null);
   const hasHandledAutoActionRef = useRef(false);
   const setInitialTime = useGameStore((s) => s.setInitialTime);
 
@@ -86,6 +88,7 @@ export default function PlayPage() {
     }
     setStakeToken(match.staked ? (match.stakeToken ?? null) : null);
     setStakeAmountRaw(match.staked ? (match.stakeAmount ?? null) : null);
+    queuedStakeAmountRef.current = null;
     setRoomId(match.roomId);
     setPlayerColor(match.color);
     setOpponent({
@@ -157,6 +160,7 @@ export default function PlayPage() {
       setPendingMatch({
         ...data,
         timeControl: normalizeTimeControlMinutes(data.timeControl),
+        requestedStakeAmount: data.staked ? queuedStakeAmountRef.current : null,
       });
     });
 
@@ -261,6 +265,7 @@ export default function PlayPage() {
       }
       setIsSearchOpen(true);
       if (stakeInfo) {
+        queuedStakeAmountRef.current = stakeInfo.stakeAmount;
         socket?.emit("joinQueue", {
           userId: address,
           staked: true,
@@ -269,9 +274,11 @@ export default function PlayPage() {
           timeControl: timeMinutes,
         });
       } else {
+        queuedStakeAmountRef.current = null;
         socket?.emit("joinQueue", { userId: address, timeControl: timeMinutes });
       }
     } else if (gameMode === 'computer') {
+      queuedStakeAmountRef.current = null;
       clearMatchState();
       setPlayerColor("white");
       setOpponent({ address: 'stockfish', rating: 1500, memoji: getMemojiForAddress('stockfish') });
@@ -315,6 +322,7 @@ export default function PlayPage() {
             staked={pendingMatch.staked}
             stakeToken={pendingMatch.stakeToken}
             stakeAmount={pendingMatch.stakeAmount}
+            requestedStakeAmount={pendingMatch.requestedStakeAmount}
             timeControl={pendingMatch.timeControl}
             roomId={pendingMatch.roomId}
             socket={socket}
@@ -327,6 +335,7 @@ export default function PlayPage() {
               enterMatchedGame(pendingMatch);
             }}
             onDecline={() => {
+              queuedStakeAmountRef.current = null;
               setPendingMatch(null);
             }}
           />
@@ -346,6 +355,7 @@ export default function PlayPage() {
         isOpen={isSearchOpen}
         onClose={() => {
           socket?.emit("leaveQueue");
+          queuedStakeAmountRef.current = null;
           setIsSearchOpen(false);
         }}
         onMemojiSelected={(memoji) => {

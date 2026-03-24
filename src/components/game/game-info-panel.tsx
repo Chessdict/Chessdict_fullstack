@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
+import { RematchOfferModal } from "./rematch-offer-modal";
 import { getGameHistory } from "@/app/actions";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay, getTimeControlMinutesFromSeconds } from "@/lib/time-control";
@@ -67,6 +68,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
   const [showResignModal, setShowResignModal] = useState(false);
+  const [rematchRequestPending, setRematchRequestPending] = useState(false);
+  const [incomingRematchRequester, setIncomingRematchRequester] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"play" | "history">("play");
   const [activeSubTab, setActiveSubTab] = useState<"moves" | "info">("moves");
 
@@ -158,6 +161,11 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const isGameFinished = status === "finished";
   const canReviewGame = isGameActive || isGameFinished;
   const canPlayAgain = gameMode === "online" && !stakeToken && !stakeAmountRaw;
+  const canRequestRematch =
+    isGameFinished &&
+    (gameMode === "online" || gameMode === "friend") &&
+    !stakeToken &&
+    !stakeAmountRaw;
   const timeControlMinutes = getTimeControlMinutesFromSeconds(initialTime);
   const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
   const showMobileMoveDock =
@@ -239,6 +247,61 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     return () => { socket.off("gameRejoined", handleGameRejoined); };
   }, [socket]);
 
+  useEffect(() => {
+    setRematchRequestPending(false);
+    setIncomingRematchRequester(null);
+  }, [roomId, status]);
+
+  useEffect(() => {
+    if (!socket || !roomId) return;
+
+    const handleRematchPending = (data: { roomId: string }) => {
+      if (data.roomId !== roomId) return;
+      setRematchRequestPending(true);
+      toast.success("Rematch requested");
+    };
+
+    const handleRematchRequested = (data: { roomId: string; from: string }) => {
+      if (data.roomId !== roomId) return;
+      setIncomingRematchRequester(data.from);
+      setRematchRequestPending(false);
+    };
+
+    const handleRematchDeclined = (data: { roomId: string }) => {
+      if (data.roomId !== roomId) return;
+      setRematchRequestPending(false);
+      toast.error("Rematch declined");
+    };
+
+    const handleRematchUnavailable = (data: { roomId: string; error: string }) => {
+      if (data.roomId !== roomId) return;
+      setRematchRequestPending(false);
+      setIncomingRematchRequester(null);
+      toast.error(data.error);
+    };
+
+    const handleRematchExpired = (data: { roomId: string }) => {
+      if (data.roomId !== roomId) return;
+      setRematchRequestPending(false);
+      setIncomingRematchRequester(null);
+      toast.error("Rematch request expired");
+    };
+
+    socket.on("rematchPending", handleRematchPending);
+    socket.on("rematchRequested", handleRematchRequested);
+    socket.on("rematchDeclined", handleRematchDeclined);
+    socket.on("rematchUnavailable", handleRematchUnavailable);
+    socket.on("rematchExpired", handleRematchExpired);
+
+    return () => {
+      socket.off("rematchPending", handleRematchPending);
+      socket.off("rematchRequested", handleRematchRequested);
+      socket.off("rematchDeclined", handleRematchDeclined);
+      socket.off("rematchUnavailable", handleRematchUnavailable);
+      socket.off("rematchExpired", handleRematchExpired);
+    };
+  }, [roomId, socket]);
+
   // Send chat message
   const sendChatMessage = useCallback(() => {
     if (!socket || !roomId || !chatInput.trim() || !address) return;
@@ -279,6 +342,23 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     toast.success("Finding a new match...");
     router.push(`/play?autoQueue=online&timeControl=${timeControlMinutes}`);
   }, [canPlayAgain, handlePlayNewGame, reset, roomId, router, socket, stopAutoPlay, timeControlMinutes]);
+
+  const handleRequestRematch = useCallback(() => {
+    if (!socket || !roomId || !canRequestRematch || rematchRequestPending) return;
+    socket.emit("requestRematch", { roomId });
+  }, [canRequestRematch, rematchRequestPending, roomId, socket]);
+
+  const handleAcceptRematch = useCallback(() => {
+    if (!socket || !roomId) return;
+    socket.emit("respondRematch", { roomId, accept: true });
+    setIncomingRematchRequester(null);
+  }, [roomId, socket]);
+
+  const handleDeclineRematch = useCallback(() => {
+    if (!socket || !roomId) return;
+    socket.emit("respondRematch", { roomId, accept: false });
+    setIncomingRematchRequester(null);
+  }, [roomId, socket]);
 
   // Clear chat only when switching to a genuinely different game
   const prevRoomIdRef = useRef<string | undefined>(undefined);
@@ -399,6 +479,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       "flex flex-col overflow-hidden rounded-[20px] border border-white/10 bg-[#1A1A1A]/90 backdrop-blur-xl sm:rounded-[24px]",
       showMobileMoveDock || showMobileChatButton ? "pb-24 sm:pb-0" : "",
     )}>
+      <RematchOfferModal
+        isOpen={!!incomingRematchRequester}
+        opponentLabel={incomingRematchRequester ? `${incomingRematchRequester.slice(0, 6)}...${incomingRematchRequester.slice(-4)}` : opponentName}
+        onAccept={handleAcceptRematch}
+        onDecline={handleDeclineRematch}
+      />
+
       {/* Top Tabs */}
       <div className="flex items-center border-b border-white/10 px-3 pt-2.5 sm:px-5 sm:pt-3">
         {([
@@ -551,6 +638,20 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                 </p>
               </div>
               <div className="grid grid-cols-1 gap-2">
+                {canRequestRematch ? (
+                  <button
+                    onClick={handleRequestRematch}
+                    disabled={rematchRequestPending}
+                    className={cn(
+                      "rounded-xl border px-4 py-3 text-sm font-semibold backdrop-blur-md transition",
+                      rematchRequestPending
+                        ? "cursor-not-allowed border-emerald-300/15 bg-emerald-300/8 text-emerald-50/55"
+                        : "border-emerald-300/30 bg-emerald-300/18 text-emerald-50 hover:bg-emerald-300/24",
+                    )}
+                  >
+                    {rematchRequestPending ? "Rematch Requested" : "Rematch"}
+                  </button>
+                ) : null}
                 <button
                   onClick={handlePlayAgain}
                   className="rounded-xl border border-emerald-300/30 bg-emerald-300/18 px-4 py-3 text-sm font-semibold text-emerald-50 backdrop-blur-md transition hover:bg-emerald-300/24"

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createMatchmaking, amountsWithinRange } from '../lib/matchmaking.mjs';
+import { createMatchmaking, parseStakeAmount } from '../lib/matchmaking.mjs';
 
 let onMatch;
 let mm;
@@ -66,9 +66,9 @@ describe('Free queue FIFO matching', () => {
   });
 });
 
-// ─── Staked Queue: Range-Based Matching ───
+// ─── Staked Queue: Exact Token/Time Matching ───
 
-describe('Staked queue: range-based matching', () => {
+describe('Staked queue matching', () => {
   it('exact same amount matches (10 == 10)', () => {
     mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'USDC', stakeAmount: '10' });
     mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '10' });
@@ -77,33 +77,17 @@ describe('Staked queue: range-based matching', () => {
     const [, , stakeInfo] = onMatch.mock.calls[0];
     expect(stakeInfo).not.toBeNull();
     expect(stakeInfo.effectiveAmount).toBe(10);
+    expect(stakeInfo.stakeAmount).toBe('10');
   });
 
-  it('within 10% matches (10 vs 9.5 — diff=5%)', () => {
+  it('different positive amounts still match and use the lower amount', () => {
     mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'USDC', stakeAmount: '10' });
-    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '9.5' });
+    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '5' });
 
     expect(onMatch).toHaveBeenCalledOnce();
     const [, , stakeInfo] = onMatch.mock.calls[0];
-    expect(stakeInfo.effectiveAmount).toBe(9.5);
-  });
-
-  it('boundary: exactly 10% apart matches (10 vs 9.0)', () => {
-    // diff = 1 / 10 = 0.10 = exactly 10%
-    mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'ETH', stakeAmount: '10' });
-    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'ETH', stakeAmount: '9' });
-
-    expect(onMatch).toHaveBeenCalledOnce();
-    const [, , stakeInfo] = onMatch.mock.calls[0];
-    expect(stakeInfo.effectiveAmount).toBe(9);
-  });
-
-  it('just outside 10% does NOT match (10 vs 8.9 — diff ≈ 11%)', () => {
-    mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'ETH', stakeAmount: '10' });
-    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'ETH', stakeAmount: '8.9' });
-
-    expect(onMatch).not.toHaveBeenCalled();
-    expect(mm._getStakedQueue().get('eth').length).toBe(2);
+    expect(stakeInfo.effectiveAmount).toBe(5);
+    expect(stakeInfo.stakeAmount).toBe('5');
   });
 
   it('stakeInfo.onChainGameId comes from p1 (creator), effectiveAmount = min', () => {
@@ -115,6 +99,7 @@ describe('Staked queue: range-based matching', () => {
     expect(p1.userId).toBe('alice');
     expect(stakeInfo.onChainGameId).toBe('creator-game-id');
     expect(stakeInfo.effectiveAmount).toBe(9.5);
+    expect(stakeInfo.stakeAmount).toBe('9.5');
   });
 });
 
@@ -140,12 +125,13 @@ describe('Staked queue isolation', () => {
     expect(mm._getStakedQueueSize()).toBe(2);
   });
 
-  it('same token, amounts too far apart (>10%) → no match', () => {
+  it('same token and time still match even when amounts are far apart', () => {
     mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'USDC', stakeAmount: '10' });
     mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '5' });
 
-    expect(onMatch).not.toHaveBeenCalled();
-    expect(mm._getStakedQueue().get('usdc').length).toBe(2);
+    expect(onMatch).toHaveBeenCalledOnce();
+    const [, , stakeInfo] = onMatch.mock.calls[0];
+    expect(stakeInfo.effectiveAmount).toBe(5);
   });
 
   it('same token and amount but different time control do not match', () => {
@@ -244,9 +230,9 @@ describe('removeFromAllQueues cleanup', () => {
   });
 
   it('leaves other players in same bucket untouched', () => {
-    // Use amounts far apart so they won't match
-    mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'ETH', stakeAmount: '1' });
-    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'ETH', stakeAmount: '100' });
+    // Use different time controls so they won't match
+    mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'ETH', stakeAmount: '1', timeControl: 3 });
+    mm.joinQueue('s2', { userId: 'bob', staked: true, onChainGameId: 'g2', token: 'ETH', stakeAmount: '100', timeControl: 1 });
 
     mm.removeFromAllQueues('s1');
     const bucket = mm._getStakedQueue().get('eth');
@@ -271,6 +257,20 @@ describe('removeFromAllQueues cleanup', () => {
 
     expect(mm._getFreeQueueLength()).toBe(0);
     expect(mm._getStakedQueueSize()).toBe(0);
+  });
+});
+
+describe('parseStakeAmount', () => {
+  it('normalizes valid positive stake amounts', () => {
+    expect(parseStakeAmount('10')).toBe(10);
+    expect(parseStakeAmount('9.5')).toBe(9.5);
+  });
+
+  it('returns null for invalid or non-positive stake amounts', () => {
+    expect(parseStakeAmount('abc')).toBeNull();
+    expect(parseStakeAmount('NaN')).toBeNull();
+    expect(parseStakeAmount('-1')).toBeNull();
+    expect(parseStakeAmount('0')).toBeNull();
   });
 });
 
@@ -370,34 +370,23 @@ describe('Edge cases', () => {
   });
 });
 
-// ─── amountsWithinRange unit tests ───
+// ─── parseStakeAmount unit tests ───
 
-describe('amountsWithinRange', () => {
-  it('returns true for equal amounts', () => {
-    expect(amountsWithinRange('10', '10')).toBe(true);
+describe('parseStakeAmount', () => {
+  it('normalizes valid positive stake amounts', () => {
+    expect(parseStakeAmount('10')).toBe(10);
+    expect(parseStakeAmount('9.5')).toBe(9.5);
   });
 
-  it('returns true for amounts within 10%', () => {
-    expect(amountsWithinRange('10', '9.5')).toBe(true);
+  it('returns null for zero', () => {
+    expect(parseStakeAmount('0')).toBeNull();
   });
 
-  it('returns true at exactly 10% boundary', () => {
-    expect(amountsWithinRange('10', '9')).toBe(true);
+  it('returns null for negative', () => {
+    expect(parseStakeAmount('-5')).toBeNull();
   });
 
-  it('returns false for amounts outside 10%', () => {
-    expect(amountsWithinRange('10', '8.9')).toBe(false);
-  });
-
-  it('returns false for zero', () => {
-    expect(amountsWithinRange('0', '10')).toBe(false);
-  });
-
-  it('returns false for negative', () => {
-    expect(amountsWithinRange('-5', '10')).toBe(false);
-  });
-
-  it('returns false for NaN', () => {
-    expect(amountsWithinRange('abc', '10')).toBe(false);
+  it('returns null for NaN', () => {
+    expect(parseStakeAmount('abc')).toBeNull();
   });
 });

@@ -4,8 +4,90 @@ import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { containsProfanity } from "@/lib/utils";
 import { getAllRatings, getPlayerRatingForTimeControl } from "@/lib/player-ratings";
+import {
+  clampStakedTimeControlMinutes,
+  normalizeTimeControlMinutes,
+} from "@/lib/time-control";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+
+const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 60 * 24;
+
+function normalizeStakeAmountString(value: unknown) {
+  const numericAmount = Number.parseFloat(String(value ?? ""));
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) return null;
+  return String(numericAmount);
+}
+
+async function serializeOpenChallenge(challenge: {
+  id: string;
+  status: "OPEN" | "ACCEPTED" | "CANCELLED" | "EXPIRED";
+  timeControl: number;
+  staked: boolean;
+  stakeToken: string | null;
+  stakeAmount: string | null;
+  roomId: string | null;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+  cancelledAt: Date | null;
+  createdAt: Date;
+  creator: { walletAddress: string };
+  acceptedBy: { walletAddress: string } | null;
+}) {
+  const game = challenge.roomId
+    ? await prisma.game.findUnique({
+        where: { id: challenge.roomId },
+        select: {
+          status: true,
+          onChainGameId: true,
+        },
+      })
+    : null;
+
+  return {
+    id: challenge.id,
+    status: challenge.status,
+    timeControl: normalizeTimeControlMinutes(challenge.timeControl),
+    staked: challenge.staked,
+    stakeToken: challenge.stakeToken,
+    stakeAmount: challenge.stakeAmount,
+    roomId: challenge.roomId,
+    gameStatus: game?.status ?? null,
+    onChainGameId: game?.onChainGameId ?? null,
+    expiresAt: challenge.expiresAt.toISOString(),
+    acceptedAt: challenge.acceptedAt?.toISOString() ?? null,
+    cancelledAt: challenge.cancelledAt?.toISOString() ?? null,
+    createdAt: challenge.createdAt.toISOString(),
+    creatorAddress: challenge.creator.walletAddress,
+    acceptedByAddress: challenge.acceptedBy?.walletAddress ?? null,
+  };
+}
+
+async function getOpenChallengeRecord(challengeId: string) {
+  const challenge = await prisma.openChallenge.findUnique({
+    where: { id: challengeId },
+    include: {
+      creator: { select: { walletAddress: true } },
+      acceptedBy: { select: { walletAddress: true } },
+    },
+  });
+
+  if (!challenge) return null;
+
+  if (challenge.status === "OPEN" && challenge.expiresAt.getTime() <= Date.now()) {
+    const expired = await prisma.openChallenge.update({
+      where: { id: challenge.id },
+      data: { status: "EXPIRED" },
+      include: {
+        creator: { select: { walletAddress: true } },
+        acceptedBy: { select: { walletAddress: true } },
+      },
+    });
+    return expired;
+  }
+
+  return challenge;
+}
 
 export async function loginWithWallet(walletAddress: string) {
   if (!walletAddress) {
@@ -192,6 +274,155 @@ export async function createGame(
   }
 }
 
+export async function createOpenChallengeLink(
+  walletAddress: string,
+  timeControl?: number | string | null,
+  options?: {
+    staked?: boolean;
+    stakeToken?: string | null;
+    stakeAmount?: string | null;
+  },
+) {
+  if (!walletAddress) {
+    return { success: false, error: "Wallet address is required" };
+  }
+
+  try {
+    const staked = !!options?.staked;
+    const normalizedStakeAmount = staked
+      ? normalizeStakeAmountString(options?.stakeAmount)
+      : null;
+    const normalizedStakeToken = staked ? options?.stakeToken?.trim() ?? null : null;
+
+    if (
+      staked &&
+      (!normalizedStakeToken ||
+        !/^0x[a-fA-F0-9]{40}$/.test(normalizedStakeToken) ||
+        !normalizedStakeAmount)
+    ) {
+      return { success: false, error: "Valid stake token and amount are required" };
+    }
+
+    const user = await prisma.user.upsert({
+      where: { walletAddress },
+      update: {},
+      create: { walletAddress },
+      select: { id: true },
+    });
+
+    await prisma.openChallenge.updateMany({
+      where: {
+        creatorId: user.id,
+        status: "OPEN",
+      },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+      },
+    });
+
+    const challenge = await prisma.openChallenge.create({
+      data: {
+        creatorId: user.id,
+        timeControl: staked
+          ? clampStakedTimeControlMinutes(timeControl)
+          : normalizeTimeControlMinutes(timeControl),
+        staked,
+        stakeToken: normalizedStakeToken,
+        stakeAmount: normalizedStakeAmount,
+        expiresAt: new Date(Date.now() + OPEN_CHALLENGE_TTL_MS),
+      },
+      include: {
+        creator: { select: { walletAddress: true } },
+        acceptedBy: { select: { walletAddress: true } },
+      },
+    });
+
+    return {
+      success: true,
+      challenge: await serializeOpenChallenge(challenge),
+    };
+  } catch (error) {
+    console.error("Error creating open challenge:", error);
+    return { success: false, error: "Failed to create challenge link" };
+  }
+}
+
+export async function getOpenChallenge(challengeId: string) {
+  if (!challengeId) {
+    return { success: false, error: "Challenge id is required" };
+  }
+
+  try {
+    const challenge = await getOpenChallengeRecord(challengeId);
+
+    if (!challenge) {
+      return { success: false, error: "Challenge not found" };
+    }
+
+    return {
+      success: true,
+      challenge: await serializeOpenChallenge(challenge),
+    };
+  } catch (error) {
+    console.error("Error fetching open challenge:", error);
+    return { success: false, error: "Failed to fetch challenge" };
+  }
+}
+
+export async function cancelOpenChallenge(
+  challengeId: string,
+  walletAddress: string,
+) {
+  if (!challengeId || !walletAddress) {
+    return { success: false, error: "Challenge id and wallet are required" };
+  }
+
+  try {
+    const challenge = await getOpenChallengeRecord(challengeId);
+
+    if (!challenge) {
+      return { success: false, error: "Challenge not found" };
+    }
+
+    if (challenge.creator.walletAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+      return { success: false, error: "Only the creator can cancel this challenge" };
+    }
+
+    if (challenge.status !== "OPEN") {
+      return {
+        success: false,
+        error:
+          challenge.status === "ACCEPTED"
+            ? "Challenge already accepted"
+            : "Challenge is no longer open",
+      };
+    }
+
+    const cancelled = await prisma.openChallenge.update({
+      where: { id: challengeId },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+      },
+      include: {
+        creator: { select: { walletAddress: true } },
+        acceptedBy: { select: { walletAddress: true } },
+      },
+    });
+
+    revalidatePath(`/play/challenge/${challengeId}`);
+
+    return {
+      success: true,
+      challenge: await serializeOpenChallenge(cancelled),
+    };
+  } catch (error) {
+    console.error("Error cancelling open challenge:", error);
+    return { success: false, error: "Failed to cancel challenge" };
+  }
+}
+
 export async function getUserProfile(walletAddress: string) {
   if (!walletAddress)
     return { success: false, error: "Wallet address is required" };
@@ -206,6 +437,7 @@ export async function getUserProfile(walletAddress: string) {
         bulletRating: true,
         blitzRating: true,
         rapidRating: true,
+        stakedRating: true,
         createdAt: true,
       },
     });
@@ -288,6 +520,7 @@ export async function getGameHistory(
               bulletRating: true,
               blitzRating: true,
               rapidRating: true,
+              stakedRating: true,
             },
           },
           blackPlayer: {
@@ -298,6 +531,7 @@ export async function getGameHistory(
               bulletRating: true,
               blitzRating: true,
               rapidRating: true,
+              stakedRating: true,
             },
           },
           winner: { select: { id: true, walletAddress: true } },
@@ -320,7 +554,11 @@ export async function getGameHistory(
         result,
         playedAs: isWhite ? ("white" as const) : ("black" as const),
         opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
-        opponentRating: getPlayerRatingForTimeControl(opponentPlayer, g.timeControl),
+        opponentRating: getPlayerRatingForTimeControl(
+          opponentPlayer,
+          g.timeControl,
+          !!g.onChainGameId,
+        ),
         timeControl: g.timeControl,
         isStaked: !!g.onChainGameId,
         onChainGameId: g.onChainGameId,
