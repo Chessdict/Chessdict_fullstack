@@ -33,6 +33,7 @@ import { SignalStrength } from "./signal-strength";
 import { customPieces } from "@/components/chess/custom-pieces";
 import { X } from "lucide-react";
 import Image from "next/image";
+import { cn } from "@/lib/utils";
 
 
 // Helper to format time as MM:SS
@@ -92,6 +93,7 @@ export function GameBoard() {
     resetTimers,
     gameOver,
     setGameOver,
+    clearGameOver,
     gameResultModalDismissed,
     setGameResultModalDismissed,
     drawOfferReceived,
@@ -123,12 +125,23 @@ export function GameBoard() {
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
   const [prizeClaimed, setPrizeClaimed] = useState(false);
   const [settlementFailed, setSettlementFailed] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
 
   const router = useRouter();
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
   const { playMoveSound, playGameOver, playLowTime } = useChessSounds();
   const { claimPrizeSingle, isLoading: isClaimLoading } = useChessdict();
+
+  useEffect(() => {
+    const updateViewport = () => {
+      setIsMobileViewport(window.innerWidth < 640);
+    };
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
 
 
   // Initialize the chess instance once and keep it stable.
@@ -151,6 +164,9 @@ export function GameBoard() {
   const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   // State for last move highlighting (persists between moves)
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
+  const sourceSquareRef = useRef<string | null>(null);
+  const selectionModeRef = useRef<SelectionMode>(null);
+  const revalidateSelectionRef = useRef<(() => void) | null>(null);
 
   // Compute persistent check highlight from current position
   const checkSquare = useMemo<Record<string, React.CSSProperties>>(() => {
@@ -177,12 +193,26 @@ export function GameBoard() {
   }, [game]);
 
   const clearSelection = useCallback(() => {
+    sourceSquareRef.current = null;
+    selectionModeRef.current = null;
     setMoveSquares({});
     setSourceSquare(null);
     setSelectionMode(null);
   }, []);
 
-  const safeMove = useCallback((move: any) => {
+  const setActiveSelection = useCallback((square: string, mode: Exclude<SelectionMode, null>) => {
+    sourceSquareRef.current = square;
+    selectionModeRef.current = mode;
+    setSourceSquare(square);
+    setSelectionMode(mode);
+  }, []);
+
+  useEffect(() => {
+    sourceSquareRef.current = sourceSquare;
+    selectionModeRef.current = selectionMode;
+  }, [sourceSquare, selectionMode]);
+
+  const safeMove = useCallback((move: any, options?: { preserveSelection?: boolean }) => {
     try {
       const result = game.move(move);
       if (result) {
@@ -204,8 +234,11 @@ export function GameBoard() {
           [result.to]: { background: "rgba(255, 255, 0, 0.4)" },
         });
 
-        // Clear selection highlights after move
-        clearSelection();
+        if (options?.preserveSelection) {
+          revalidateSelectionRef.current?.();
+        } else {
+          clearSelection();
+        }
 
         // Play sound based on move type
         playMoveSound(result);
@@ -321,6 +354,28 @@ export function GameBoard() {
       setLastMoveSquares({});
     }
   }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed]);
+
+  const previousRoomIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (roomId && previousRoomIdRef.current && roomId !== previousRoomIdRef.current) {
+      game.reset();
+      syncState();
+      setLastMove(null);
+      setCheckFlash({});
+      setRatingChange(null);
+      setDisconnectCountdown(null);
+      setPrizeClaimed(false);
+      setSettlementFailed(false);
+      setGameResultModalDismissed(false);
+      clearGameOver();
+      clearSelection();
+      setQueuedPremove(null);
+      setPromotionSelection(null);
+      setLastMoveSquares({});
+    }
+
+    previousRoomIdRef.current = roomId;
+  }, [roomId, game, syncState, clearGameOver, clearSelection, setGameResultModalDismissed]);
 
   // Load rejoined game state (after browser refresh reconnection)
   useEffect(() => {
@@ -444,7 +499,7 @@ export function GameBoard() {
       const timeoutId = setTimeout(() => {
         const move = getBestMove(new Chess(game.fen()), difficulty);
         if (move) {
-          safeMove(move);
+          safeMove(move, { preserveSelection: true });
         }
       }, 600);
       return () => clearTimeout(timeoutId);
@@ -518,7 +573,7 @@ export function GameBoard() {
     if (!socket || !isMultiplayer || !roomId) return;
 
     const handleOpponentMove = (move: any) => {
-      safeMove(move);
+      safeMove(move, { preserveSelection: true });
     };
 
     socket.on('opponentMove', handleOpponentMove);
@@ -789,6 +844,39 @@ export function GameBoard() {
     return true;
   }, [game, playerTurnCode]);
 
+  const revalidateSelection = useCallback(() => {
+    const currentSourceSquare = sourceSquareRef.current;
+    const currentSelectionMode = selectionModeRef.current;
+
+    if (!currentSourceSquare || !currentSelectionMode || !playerTurnCode) {
+      clearSelection();
+      return;
+    }
+
+    const piece = game.get(currentSourceSquare as any);
+    if (!piece || piece.color !== playerTurnCode) {
+      clearSelection();
+      return;
+    }
+
+    const nextMode: SelectionMode = game.turn() === playerTurnCode ? "move" : "premove";
+    const selected =
+      nextMode === "move"
+        ? getMoveOptions(currentSourceSquare)
+        : getPremoveOptions(currentSourceSquare);
+
+    if (!selected) {
+      clearSelection();
+      return;
+    }
+
+    setActiveSelection(currentSourceSquare, nextMode);
+  }, [clearSelection, game, getMoveOptions, getPremoveOptions, playerTurnCode, setActiveSelection]);
+
+  useEffect(() => {
+    revalidateSelectionRef.current = revalidateSelection;
+  }, [revalidateSelection]);
+
   const tryQueuePremove = useCallback((source: string, target: string) => {
     if (!playerTurnCode || game.turn() === playerTurnCode) return false;
 
@@ -839,8 +927,7 @@ export function GameBoard() {
       if (piece && piece.color === playerTurnCode) {
         const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
         if (selected) {
-          setSourceSquare(square);
-          setSelectionMode(isPlayersTurn ? "move" : "premove");
+          setActiveSelection(square, isPlayersTurn ? "move" : "premove");
         }
         return;
       }
@@ -854,8 +941,7 @@ export function GameBoard() {
 
     const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
     if (selected) {
-      setSourceSquare(square);
-      setSelectionMode(isPlayersTurn ? "move" : "premove");
+      setActiveSelection(square, isPlayersTurn ? "move" : "premove");
     } else {
       clearSelection();
     }
@@ -917,6 +1003,25 @@ export function GameBoard() {
     if (gameOver.reason !== "draw") return gameOver.reason;
     return getAutomaticDrawReason(game) ?? gameOver.reason;
   }, [fen, game, gameOver]);
+  const mobileMovePairs = useMemo(() => {
+    const pairs: { moveNumber: number; white?: string; black?: string }[] = [];
+
+    for (let index = 0; index < storeMoves.length; index += 2) {
+      pairs.push({
+        moveNumber: Math.floor(index / 2) + 1,
+        white: storeMoves[index]?.san,
+        black: storeMoves[index + 1]?.san,
+      });
+    }
+
+    return pairs;
+  }, [storeMoves]);
+  const activeMobileMovePairIndex = useMemo(() => {
+    if (mobileMovePairs.length === 0) return -1;
+    if (viewMoveIndex === null) return mobileMovePairs.length - 1;
+    if (viewMoveIndex < 0) return -1;
+    return Math.floor(viewMoveIndex / 2);
+  }, [mobileMovePairs.length, viewMoveIndex]);
 
   // Force remount counter when color changes
   const [boardKey, setBoardKey] = useState(0);
@@ -973,28 +1078,28 @@ export function GameBoard() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[min(100vw,760px)] flex-col gap-1 sm:max-w-[clamp(480px,calc(100vh-7rem),1300px)] sm:gap-4">
-     <div className="flex flex-col gap-1 rounded-[16px] border border-white/5 bg-[#1A1A1A]/80 px-1 py-1 sm:gap-3 sm:rounded-2xl sm:px-5 sm:py-4">
+    <div className="mx-auto flex w-full max-w-full flex-col gap-0.5 sm:max-w-[clamp(480px,calc(100vh-7rem),1300px)] sm:gap-4">
+     <div className="flex flex-col gap-1 rounded-none border-0 bg-transparent px-0 py-0 sm:gap-3 sm:rounded-2xl sm:border sm:border-white/5 sm:bg-[#1A1A1A]/80 sm:px-5 sm:py-4">
       {/* Top Info (Opponent) */}
-      <div className="flex items-center justify-between px-0.5 sm:px-1">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-amber-700/50 to-amber-900/30 border border-white/10 flex items-center justify-center overflow-hidden">
+      <div className="flex items-center justify-between px-1 sm:px-1">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full border border-white/10 bg-gradient-to-br from-amber-700/50 to-amber-900/30 sm:h-10 sm:w-10">
             {opponent?.memoji ? (
               <Image src={opponent.memoji} alt="Opponent" width={40} height={40} className="h-full w-full object-contain" />
             ) : (
-              <span className="text-xs font-bold text-white/70 uppercase">
+              <span className="flex h-full w-full items-center justify-center text-[10px] font-bold text-white/70 uppercase sm:text-xs">
                 {gameMode === 'computer' ? 'AI' : opponent?.address.slice(2, 4) || '??'}
               </span>
             )}
           </div>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <p className="truncate text-sm font-semibold text-white">
+              <p className="truncate text-[13px] font-semibold text-white sm:text-sm">
                 {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
               </p>
               <PlayerRatingBadge rating={opponent?.rating} />
             </div>
-            <p className="text-[11px] text-white/30 truncate sm:text-xs">
+            <p className="truncate text-[10px] text-white/30 sm:text-xs">
               {status === 'in-progress' && !isMyTurn
                 ? 'Thinking...'
                 : opponent
@@ -1009,7 +1114,7 @@ export function GameBoard() {
             ) : null}
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {gameMode !== 'computer' && (
             <SignalStrength ping={opponentPing} isConnected={!!socket?.connected} variant="opponent" />
           )}
@@ -1017,11 +1122,11 @@ export function GameBoard() {
             const opponentTime = playerColor === 'white' ? blackTime : whiteTime;
             const low = isLowTime(opponentTime, initialTime);
             return (
-              <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
+              <div className={`flex items-center gap-1 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={low ? "text-white/80" : "text-black/60"}>
                   <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
                 </svg>
-                <span className={`text-sm font-mono tabular-nums font-semibold ${low ? 'text-white' : 'text-black'}`}>
+                <span className={`text-[13px] font-mono tabular-nums font-semibold sm:text-sm ${low ? 'text-white' : 'text-black'}`}>
                   {formatTime(opponentTime)}
                 </span>
               </div>
@@ -1043,9 +1148,33 @@ export function GameBoard() {
         </div>
       )}
 
+      {mobileMovePairs.length > 0 && (
+        <div className="sm:hidden">
+          <div className="overflow-x-auto px-1 pb-1 pt-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-w-max items-center gap-1.5">
+              {mobileMovePairs.map((pair, index) => (
+                <div
+                  key={pair.moveNumber}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11px] font-medium whitespace-nowrap transition",
+                    activeMobileMovePairIndex === index
+                      ? "border-emerald-400/35 bg-emerald-400/16 text-emerald-100"
+                      : "border-white/10 bg-white/5 text-white/55",
+                  )}
+                >
+                  <span className="mr-1 font-mono text-white/40">{pair.moveNumber}.</span>
+                  <span>{pair.white ?? "--"}</span>
+                  {pair.black ? <span className="ml-1.5">{pair.black}</span> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Board Container */}
-        <div className="relative w-full aspect-square">
-        <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#1a1816]">
+        <div className="relative left-1/2 aspect-square w-screen max-w-none -translate-x-1/2 sm:left-auto sm:w-full sm:translate-x-0">
+        <div className="relative h-full w-full overflow-hidden rounded-none bg-[#1a1816] sm:rounded-xl">
           <Chessboard
             key={`board-${boardKey}-${orientation}`}
             options={{
@@ -1059,7 +1188,7 @@ export function GameBoard() {
                 !!effectiveColor &&
                 !isViewingHistory &&
                 !promotionSelection,
-              boardStyle: { borderRadius: '4px' },
+              boardStyle: { borderRadius: isMobileViewport ? "0px" : "4px" },
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: { ...lastMoveSquares, ...checkSquare, ...premoveSquares, ...moveSquares, ...checkFlash },
@@ -1187,21 +1316,21 @@ export function GameBoard() {
       </div>
 
       {/* Bottom Info (Player) */}
-      <div className="flex items-center justify-between px-0.5 sm:px-1">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="h-10 w-10 shrink-0 rounded-full bg-white/10 border border-white/10 flex items-center justify-center overflow-hidden">
+      <div className="flex items-center justify-between px-1 sm:px-1">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/10 sm:h-10 sm:w-10">
             {player?.memoji ? (
               <Image src={player.memoji} alt="You" width={40} height={40} className="h-full w-full object-contain" />
             ) : (
-              <span className="text-xs font-bold text-white/50">YOU</span>
+              <span className="text-[10px] font-bold text-white/50 sm:text-xs">YOU</span>
             )}
           </div>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <p className="truncate text-sm font-semibold text-white">You(Player)</p>
+              <p className="truncate text-[13px] font-semibold text-white sm:text-sm">You(Player)</p>
               <PlayerRatingBadge rating={player?.rating} />
             </div>
-            <div className="flex items-center gap-2 text-xs text-white/30">
+            <div className="flex items-center gap-2 text-[10px] text-white/30 sm:text-xs">
               <p>
                 {status === 'in-progress' && isMyTurn
                   ? 'Your move'
@@ -1220,7 +1349,7 @@ export function GameBoard() {
             ) : null}
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {gameMode !== 'computer' && (
             <SignalStrength ping={ping} isConnected={!!socket?.connected} />
           )}
@@ -1228,11 +1357,11 @@ export function GameBoard() {
             const myTime = playerColor === 'white' ? whiteTime : blackTime;
             const low = isLowTime(myTime, initialTime);
             return (
-              <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
+              <div className={`flex items-center gap-1 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={low ? "text-white/80" : "text-black/60"}>
                   <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
                 </svg>
-                <span className={`text-sm font-mono tabular-nums font-semibold ${low ? 'text-white' : 'text-black'}`}>
+                <span className={`text-[13px] font-mono tabular-nums font-semibold sm:text-sm ${low ? 'text-white' : 'text-black'}`}>
                   {formatTime(myTime)}
                 </span>
               </div>
