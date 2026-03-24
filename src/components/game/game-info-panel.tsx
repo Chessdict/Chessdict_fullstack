@@ -169,18 +169,20 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   const showPostGameActions = isGameFinished && gameResultModalDismissed;
   const timeControlMinutes = getTimeControlMinutesFromSeconds(initialTime);
   const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
-  const showMobileMoveDock =
-    canReviewGame &&
+  const showMobileActionDock =
     activeTab === "play" &&
     activeSubTab === "moves" &&
-    moves.length > 0 &&
     !isMobileChatOpen &&
-    (!showPostGameActions || viewMoveIndex !== null || isAutoPlaying);
-  const showMobileChatButton =
+    (
+      isGameActive ||
+      (canReviewGame && moves.length > 0 && (!showPostGameActions || viewMoveIndex !== null || isAutoPlaying))
+    );
+  const canShowMobileChatControl =
     isGameActive &&
     activeTab === "play" &&
     activeSubTab === "moves" &&
     !isMobileChatOpen;
+  const showMobileChatButton = canShowMobileChatControl && !showMobileActionDock;
 
   // Chat socket listener
   useEffect(() => {
@@ -482,7 +484,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   return (
     <div className={cn(
       "flex flex-col overflow-hidden rounded-[20px] border border-white/10 bg-[#1A1A1A]/90 backdrop-blur-xl sm:rounded-[24px]",
-      showMobileMoveDock || showMobileChatButton ? "pb-24 sm:pb-0" : "",
+      showMobileActionDock || showMobileChatButton ? "pb-24 sm:pb-0" : "",
     )}>
       <RematchOfferModal
         isOpen={!!incomingRematchRequester}
@@ -761,28 +763,6 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           {/* Move History */}
           {activeSubTab === "moves" && canReviewGame && (
             <div className="flex flex-col gap-3">
-              <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 sm:hidden">
-                {moves.length === 0 ? (
-                  <p className="text-center text-sm text-white/35">No moves yet</p>
-                ) : (
-                  <>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
-                      Move Ribbon
-                    </p>
-                    <p className="mt-1 text-sm text-white/80">
-                      {viewMoveIndex === null
-                        ? `Live position · ${moves.length} move${moves.length === 1 ? "" : "s"} recorded`
-                        : viewMoveIndex < 0
-                          ? "Reviewing the starting position"
-                          : `Reviewing move ${viewMoveIndex + 1} of ${moves.length}`}
-                    </p>
-                    <p className="mt-1 text-[11px] text-white/40">
-                      Use the move ribbon above the board and the back or forward controls below.
-                    </p>
-                  </>
-                )}
-              </div>
-
               <div ref={movesContainerRef} className="hidden max-h-[260px] overflow-y-auto elegant-scrollbar sm:block">
                 {movePairs.length === 0 ? (
                   <p className="text-center text-sm text-white/30 py-8">No moves yet</p>
@@ -922,50 +902,99 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
       {typeof document !== "undefined" && createPortal(
         <>
-          {showMobileMoveDock && (
+          {showMobileActionDock && (
             <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 sm:hidden" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)" }}>
-              <div className="mx-auto flex max-w-[220px] items-center justify-center gap-3 rounded-[26px] border border-white/10 bg-[#111111]/92 px-4 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+              <div className="mx-auto flex max-w-[360px] items-center justify-center gap-2 rounded-[26px] border border-white/10 bg-[#111111]/92 px-3 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.42)] backdrop-blur-xl">
                 {mobileMoveNavigationButtons.map(({ icon, label, onClick }) => (
                   <button
                     key={label}
                     onClick={onClick}
+                    disabled={
+                      moves.length === 0 ||
+                      (label === "Next" && viewMoveIndex === null)
+                    }
                     className={cn(
-                      "flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white",
+                      "flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 disabled:hover:text-white/60",
                     )}
                     title={label}
                   >
                     <img src={icon} alt={label} width={24} height={24} />
                   </button>
                 ))}
+                {canShowMobileChatControl ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileChatOpen(true)}
+                    className="flex h-10 min-w-[74px] items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 text-white/80 transition hover:bg-white/10 hover:text-white"
+                  >
+                    <span className="text-xs font-semibold">Chat</span>
+                    {unreadChatCount > 0 ? (
+                      <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                        {unreadChatCount}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-white/40">
+                        {chatMessages.length}
+                      </span>
+                    )}
+                  </button>
+                ) : null}
+                {isGameActive && ["online", "friend"].includes(gameMode ?? "") ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!socket || !roomId) return;
+                        if (drawOfferSent) {
+                          socket.emit("cancelDraw", { roomId });
+                          setDrawOfferSent(false);
+                        } else {
+                          socket.emit("offerDraw", { roomId });
+                          setDrawOfferSent(true);
+                        }
+                      }}
+                      className="flex h-10 min-w-[72px] items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 text-xs font-semibold text-emerald-200 transition hover:bg-white/10 hover:text-emerald-100"
+                    >
+                      {drawOfferSent ? "Cancel" : "Draw"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowResignModal(true)}
+                      className="flex h-10 min-w-[76px] items-center justify-center rounded-full border border-white/10 bg-white/5 px-3 text-xs font-semibold text-rose-200 transition hover:bg-white/10 hover:text-rose-100"
+                    >
+                      Resign
+                    </button>
+                  </>
+                ) : null}
               </div>
             </div>
           )}
 
-          {showMobileChatButton && (
+          {!showMobileActionDock && showMobileChatButton && (
             <div
-              className="fixed right-3 z-40 sm:hidden"
+              className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 sm:hidden"
               style={{
-                bottom: showMobileMoveDock
-                  ? "calc(env(safe-area-inset-bottom, 0px) + 5.5rem)"
-                  : "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
+                paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
               }}
             >
-              <button
-                type="button"
-                onClick={() => setIsMobileChatOpen(true)}
-                className="flex items-center gap-2 rounded-full border border-white/10 bg-[#111111]/92 px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-xl"
-              >
-                <span className="text-sm font-semibold text-white">Chat</span>
-                {unreadChatCount > 0 ? (
-                  <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px] font-semibold text-white">
-                    {unreadChatCount}
-                  </span>
-                ) : (
-                  <span className="text-xs text-white/40">
-                    {chatMessages.length}
-                  </span>
-                )}
-              </button>
+              <div className="mx-auto flex max-w-[140px] items-center justify-center rounded-[26px] border border-white/10 bg-[#111111]/92 px-4 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+                <button
+                  type="button"
+                  onClick={() => setIsMobileChatOpen(true)}
+                  className="flex h-11 min-w-[88px] items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 text-white/80 transition hover:bg-white/10 hover:text-white"
+                >
+                  <span className="text-sm font-semibold">Chat</span>
+                  {unreadChatCount > 0 ? (
+                    <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                      {unreadChatCount}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-white/40">
+                      {chatMessages.length}
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
           )}
 

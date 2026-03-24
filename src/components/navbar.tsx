@@ -2,11 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { ConnectWallet } from "./connect-wallet";
-import { Menu, User } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, Menu, User } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import {
   Sheet,
@@ -33,6 +33,30 @@ export function Navbar() {
   const { isConnected } = useAccount();
 
   const pathname = usePathname();
+  const router = useRouter();
+  const isProfilePage = pathname === "/profile";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (pathname && pathname !== "/profile") {
+      window.sessionStorage.setItem("lastNonProfilePath", pathname);
+    }
+  }, [pathname]);
+
+  const handleMobileProfileClick = () => {
+    if (typeof window === "undefined") {
+      router.push(isProfilePage ? "/play" : "/profile");
+      return;
+    }
+
+    if (isProfilePage) {
+      const previousPath = window.sessionStorage.getItem("lastNonProfilePath") || "/play";
+      router.push(previousPath);
+      return;
+    }
+
+    router.push("/profile");
+  };
 
   return (
     <header className="w-full">
@@ -108,13 +132,18 @@ export function Navbar() {
 
           <div className="z-20 flex items-center gap-2">
             {isConnected ? (
-              <Link
-                href="/profile"
+              <button
+                type="button"
+                onClick={handleMobileProfileClick}
                 className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/80 transition hover:bg-white/10 hover:text-white"
-                aria-label="Open profile"
+                aria-label={isProfilePage ? "Go back" : "Open profile"}
               >
-                <User className="h-4.5 w-4.5" />
-              </Link>
+                {isProfilePage ? (
+                  <ArrowLeft className="h-4.5 w-4.5" />
+                ) : (
+                  <User className="h-4.5 w-4.5" />
+                )}
+              </button>
             ) : null}
             <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
               <SheetTitle></SheetTitle>

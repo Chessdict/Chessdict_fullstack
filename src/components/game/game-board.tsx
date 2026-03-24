@@ -28,7 +28,7 @@ import {
 } from "@/lib/chess-promotion";
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
-import { getRatingCategoryForTimeControl } from "@/lib/player-ratings";
+import { getRatingFieldForTimeControl } from "@/lib/player-ratings";
 import { SignalStrength } from "./signal-strength";
 import { customPieces } from "@/components/chess/custom-pieces";
 import { X } from "lucide-react";
@@ -66,6 +66,79 @@ const INITIAL_BOARD_FEN = new Chess().fen();
 function isPromotionDestination(square: string, color: "w" | "b") {
   const rank = square[1];
   return (color === "w" && rank === "8") || (color === "b" && rank === "1");
+}
+
+function WinnerCupIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="winner-cup-gold" x1="16" y1="8" x2="48" y2="56" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#FFF7BF" />
+          <stop offset="0.28" stopColor="#F7D766" />
+          <stop offset="0.6" stopColor="#D8A128" />
+          <stop offset="1" stopColor="#8E5A08" />
+        </linearGradient>
+        <linearGradient id="winner-cup-base" x1="24" y1="42" x2="40" y2="58" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#F5D76B" />
+          <stop offset="1" stopColor="#9A640C" />
+        </linearGradient>
+      </defs>
+
+      <path
+        d="M21 10h22v7c0 10.3-4.8 18.3-11 22.4C25.8 35.3 21 27.3 21 17v-7Z"
+        fill="url(#winner-cup-gold)"
+        stroke="#7A4A00"
+        strokeWidth="2.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18 14h-4c-1.7 0-3 1.3-3 3 0 6.8 4.9 12.4 11.3 13.4"
+        stroke="#B17812"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <path
+        d="M46 14h4c1.7 0 3 1.3 3 3 0 6.8-4.9 12.4-11.3 13.4"
+        stroke="#B17812"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <path
+        d="M27 41h10v6c0 2.8-2.2 5-5 5s-5-2.2-5-5v-6Z"
+        fill="url(#winner-cup-base)"
+        stroke="#7A4A00"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M23 54h18"
+        stroke="#7A4A00"
+        strokeWidth="4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M20 58h24"
+        stroke="#5C3600"
+        strokeWidth="4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M26.5 18.5h11"
+        stroke="#FFF5B1"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        opacity="0.9"
+      />
+      <ellipse cx="26" cy="23" rx="3.2" ry="7.2" fill="#FFF3AE" opacity="0.35" />
+      <path
+        d="m32 19.4 1.8 3.7 4.1.6-3 2.9.7 4.1-3.6-1.9-3.6 1.9.7-4.1-3-2.9 4.1-.6 1.8-3.7Z"
+        fill="#FFF7D1"
+        stroke="#B17812"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 export function GameBoard() {
@@ -126,6 +199,7 @@ export function GameBoard() {
   const [prizeClaimed, setPrizeClaimed] = useState(false);
   const [settlementFailed, setSettlementFailed] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [rematchRequestPending, setRematchRequestPending] = useState(false);
 
   const router = useRouter();
   const { address } = useAccount();
@@ -152,6 +226,11 @@ export function GameBoard() {
   const effectiveColor = playerColor || (gameMode === "computer" ? "white" : undefined);
   const playerTurnCode = effectiveColor ? (effectiveColor === "black" ? "b" : "w") : null;
   const chessboardId = useMemo(() => `game-board-${roomId ?? gameMode ?? "local"}`, [gameMode, roomId]);
+  const isStakedMatch = !!stakeToken || !!stakeAmountRaw || onChainGameId !== null;
+  const canRequestRematch =
+    status === "finished" &&
+    isMultiplayer &&
+    !isStakedMatch;
 
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
@@ -592,6 +671,10 @@ export function GameBoard() {
     playPlayerMove(pendingMove);
   }, [fen, game, playerTurnCode, playPlayerMove, queuedPremove, status]);
 
+  useEffect(() => {
+    setRematchRequestPending(false);
+  }, [roomId, status]);
+
   // Track opponent connection status and Game Over events
   useEffect(() => {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
@@ -730,18 +813,51 @@ export function GameBoard() {
     };
   }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed, setInitialTime]);
 
+  useEffect(() => {
+    if (!socket || !roomId || !canRequestRematch) return;
+
+    const handleRematchPending = (data: { roomId: string }) => {
+      if (data.roomId !== roomId) return;
+      setRematchRequestPending(true);
+    };
+
+    const clearPendingState = (data: { roomId: string }) => {
+      if (data.roomId !== roomId) return;
+      setRematchRequestPending(false);
+    };
+
+    socket.on("rematchPending", handleRematchPending);
+    socket.on("rematchDeclined", clearPendingState);
+    socket.on("rematchUnavailable", clearPendingState);
+    socket.on("rematchExpired", clearPendingState);
+    socket.on("rematchRequested", clearPendingState);
+
+    return () => {
+      socket.off("rematchPending", handleRematchPending);
+      socket.off("rematchDeclined", clearPendingState);
+      socket.off("rematchUnavailable", clearPendingState);
+      socket.off("rematchExpired", clearPendingState);
+      socket.off("rematchRequested", clearPendingState);
+    };
+  }, [canRequestRematch, roomId, socket]);
+
+  const handleRequestRematch = useCallback(() => {
+    if (!socket || !roomId || !canRequestRematch || rematchRequestPending) return;
+    setRematchRequestPending(true);
+    socket.emit("requestRematch", { roomId });
+  }, [canRequestRematch, rematchRequestPending, roomId, socket]);
+
   const handlePostGamePlayAgain = useCallback(() => {
     if (socket && roomId) {
       socket.emit("leaveRoom", { roomId });
     }
     resetStore();
-    const isStakedMatch = !!stakeToken || !!stakeAmountRaw || onChainGameId !== null;
     if (gameMode === "online" && !isStakedMatch) {
       router.push(`/play?autoQueue=online&timeControl=${Math.max(1, Math.round(initialTime / 60))}`);
       return;
     }
     router.push("/play");
-  }, [gameMode, initialTime, onChainGameId, resetStore, roomId, router, socket, stakeAmountRaw, stakeToken]);
+  }, [gameMode, initialTime, isStakedMatch, resetStore, roomId, router, socket]);
 
   // Flash the king square red when in check and player tries an invalid action
   const flashKingCheck = useCallback(() => {
@@ -1073,17 +1189,26 @@ export function GameBoard() {
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
   const isMyTurn = !!playerTurnCode && currentTurn === playerTurnCode;
-  const ratingCategoryLabel = getRatingCategoryForTimeControl(
+  const ratingField = getRatingFieldForTimeControl(
     Math.max(1, Math.round(initialTime / 60)),
+    isStakedMatch,
   );
+  const ratingCategoryLabel =
+    ratingField === "stakedRating"
+      ? "Staked"
+      : ratingField === "bulletRating"
+        ? "Bullet"
+        : ratingField === "rapidRating"
+          ? "Rapid"
+          : "Blitz";
 
   return (
     <div className="mx-auto flex w-full max-w-full flex-col gap-0.5 sm:max-w-[clamp(480px,calc(100vh-7rem),1300px)] sm:gap-4">
      <div className="flex flex-col gap-1 rounded-none border-0 bg-transparent px-0 py-0 sm:gap-3 sm:rounded-2xl sm:border sm:border-white/5 sm:bg-[#1A1A1A]/80 sm:px-5 sm:py-4">
       {/* Top Info (Opponent) */}
-      <div className="flex items-center justify-between px-1 sm:px-1">
+      <div className="flex items-center justify-between px-0.5 sm:px-1">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full border border-white/10 bg-gradient-to-br from-amber-700/50 to-amber-900/30 sm:h-10 sm:w-10">
+          <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-white/10 bg-gradient-to-br from-amber-700/50 to-amber-900/30 sm:h-10 sm:w-10">
             {opponent?.memoji ? (
               <Image src={opponent.memoji} alt="Opponent" width={40} height={40} className="h-full w-full object-contain" />
             ) : (
@@ -1093,13 +1218,13 @@ export function GameBoard() {
             )}
           </div>
           <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <p className="truncate text-[13px] font-semibold text-white sm:text-sm">
+            <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+              <p className="truncate text-xs font-semibold text-white sm:text-sm">
                 {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
               </p>
               <PlayerRatingBadge rating={opponent?.rating} />
             </div>
-            <p className="truncate text-[10px] text-white/30 sm:text-xs">
+            <p className="truncate text-[9px] text-white/30 sm:text-xs">
               {status === 'in-progress' && !isMyTurn
                 ? 'Thinking...'
                 : opponent
@@ -1107,10 +1232,12 @@ export function GameBoard() {
                   : ''}
             </p>
             {opponentMaterialDisplay ? (
-              <MaterialBalanceStrip
-                advantage={opponentMaterialDisplay.advantage}
-                capturedPieces={opponentMaterialDisplay.capturedPieces}
-              />
+              <div className="hidden sm:block">
+                <MaterialBalanceStrip
+                  advantage={opponentMaterialDisplay.advantage}
+                  capturedPieces={opponentMaterialDisplay.capturedPieces}
+                />
+              </div>
             ) : null}
           </div>
         </div>
@@ -1122,11 +1249,11 @@ export function GameBoard() {
             const opponentTime = playerColor === 'white' ? blackTime : whiteTime;
             const low = isLowTime(opponentTime, initialTime);
             return (
-              <div className={`flex items-center gap-1 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
+              <div className={`flex items-center gap-1 rounded-lg px-1.5 py-0.5 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={low ? "text-white/80" : "text-black/60"}>
                   <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
                 </svg>
-                <span className={`text-[13px] font-mono tabular-nums font-semibold sm:text-sm ${low ? 'text-white' : 'text-black'}`}>
+                <span className={`text-xs font-mono tabular-nums font-semibold sm:text-sm ${low ? 'text-white' : 'text-black'}`}>
                   {formatTime(opponentTime)}
                 </span>
               </div>
@@ -1183,6 +1310,7 @@ export function GameBoard() {
               boardOrientation: orientation,
               showAnimations: true,
               animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              dragActivationDistance: isMobileViewport ? 8 : 1,
               allowDragging:
                 status === 'in-progress' &&
                 !!effectiveColor &&
@@ -1245,7 +1373,7 @@ export function GameBoard() {
                         {gameOver.winner === 'draw' ? (
                           <svg className="h-8 w-8 sm:h-10 sm:w-10 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                         ) : gameOver.winner === playerColor || gameOver.winner === 'opponent' ? (
-                          <svg className="h-8 w-8 sm:h-10 sm:w-10 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                          <WinnerCupIcon className="h-8 w-8 sm:h-10 sm:w-10" />
                         ) : (
                           <svg className="h-8 w-8 sm:h-10 sm:w-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                         )}
@@ -1300,12 +1428,27 @@ export function GameBoard() {
                       )
                     )}
 
+                    {canRequestRematch ? (
+                      <button
+                        onClick={handleRequestRematch}
+                        disabled={rematchRequestPending}
+                        className={`w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 ${rematchRequestPending ? "opacity-70 cursor-not-allowed" : ""}`}
+                      >
+                        <div className="absolute inset-0 bg-linear-to-r from-emerald-600 to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                        <span className="relative text-sm font-bold text-white">
+                          {rematchRequestPending ? "Rematch Requested" : "Rematch"}
+                        </span>
+                      </button>
+                    ) : null}
+
                     <button
                       onClick={handlePostGamePlayAgain}
                       className="w-full relative group overflow-hidden rounded-full py-2.5 sm:py-3 transition-transform active:scale-95 mt-1 sm:mt-2"
                     >
                       <div className="absolute inset-0 bg-linear-to-r from-blue-600 to-purple-600 opacity-90 group-hover:opacity-100 transition-opacity" />
-                      <span className="relative text-sm font-bold text-white">Play Again</span>
+                      <span className="relative text-sm font-bold text-white">
+                        New Game
+                      </span>
                     </button>
                   </div>
                 </GlassBg>
@@ -1316,9 +1459,9 @@ export function GameBoard() {
       </div>
 
       {/* Bottom Info (Player) */}
-      <div className="flex items-center justify-between px-1 sm:px-1">
+      <div className="flex items-center justify-between px-0.5 sm:px-1">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/10 sm:h-10 sm:w-10">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/10 sm:h-10 sm:w-10">
             {player?.memoji ? (
               <Image src={player.memoji} alt="You" width={40} height={40} className="h-full w-full object-contain" />
             ) : (
@@ -1326,26 +1469,26 @@ export function GameBoard() {
             )}
           </div>
           <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <p className="truncate text-[13px] font-semibold text-white sm:text-sm">You(Player)</p>
+            <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+              <p className="truncate text-xs font-semibold text-white sm:text-sm">You</p>
               <PlayerRatingBadge rating={player?.rating} />
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-white/30 sm:text-xs">
+            <div className="flex items-center gap-2 text-[9px] text-white/30 sm:text-xs">
               <p>
                 {status === 'in-progress' && isMyTurn
                   ? 'Your move'
                   : status === 'in-progress' && queuedPremove
                     ? 'Premove set'
-                    : status === 'in-progress'
-                      ? 'Waiting for opponent'
-                      : 'Online'}
+                    : 'Online'}
               </p>
             </div>
             {playerMaterialDisplay ? (
-              <MaterialBalanceStrip
-                advantage={playerMaterialDisplay.advantage}
-                capturedPieces={playerMaterialDisplay.capturedPieces}
-              />
+              <div className="hidden sm:block">
+                <MaterialBalanceStrip
+                  advantage={playerMaterialDisplay.advantage}
+                  capturedPieces={playerMaterialDisplay.capturedPieces}
+                />
+              </div>
             ) : null}
           </div>
         </div>
@@ -1357,11 +1500,11 @@ export function GameBoard() {
             const myTime = playerColor === 'white' ? whiteTime : blackTime;
             const low = isLowTime(myTime, initialTime);
             return (
-              <div className={`flex items-center gap-1 rounded-lg px-2 py-1 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
+              <div className={`flex items-center gap-1 rounded-lg px-1.5 py-0.5 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={low ? "text-white/80" : "text-black/60"}>
                   <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
                 </svg>
-                <span className={`text-[13px] font-mono tabular-nums font-semibold sm:text-sm ${low ? 'text-white' : 'text-black'}`}>
+                <span className={`text-xs font-mono tabular-nums font-semibold sm:text-sm ${low ? 'text-white' : 'text-black'}`}>
                   {formatTime(myTime)}
                 </span>
               </div>
@@ -1372,9 +1515,9 @@ export function GameBoard() {
      </div>
 
       {/* Draw / End Game Controls */}
-      {status === 'in-progress' && (
-        <div className="flex items-center gap-6 px-1 pt-1">
-          {['online', 'friend'].includes(gameMode || '') && (
+      {status === 'in-progress' && ((!isMobileViewport && ['online', 'friend'].includes(gameMode || '')) || gameMode === 'computer') && (
+        <div className="flex items-center gap-4 px-0.5 pt-0.5 sm:gap-6 sm:px-1 sm:pt-1">
+          {!isMobileViewport && ['online', 'friend'].includes(gameMode || '') && (
             <button
               onClick={() => {
                 if (!socket || !roomId) return;
@@ -1395,7 +1538,7 @@ export function GameBoard() {
               {drawOfferSent ? "Cancel Draw" : "Draw"}
             </button>
           )}
-          {['online', 'friend'].includes(gameMode || '') && (
+          {!isMobileViewport && ['online', 'friend'].includes(gameMode || '') && (
             <button
               onClick={() => setShowResignModal(true)}
               className="flex items-center gap-1.5 text-sm font-medium text-red-400 hover:text-red-300 transition-colors"
