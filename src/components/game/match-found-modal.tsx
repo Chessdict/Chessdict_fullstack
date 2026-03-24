@@ -30,7 +30,7 @@ interface MatchFoundModalProps {
     socket?: any;
 }
 
-type CreatorState = "creating" | "waiting" | "failed" | "opponent-left" | "cancelling" | "reclaimed";
+type CreatorState = "idle" | "creating" | "waiting" | "failed" | "opponent-left" | "cancelling" | "reclaimed";
 type JoinerState = "waiting-for-creator" | "creator-failed" | "idle" | "joining" | "confirmed" | "failed";
 
 export function MatchFoundModal({
@@ -50,7 +50,7 @@ export function MatchFoundModal({
     socket,
 }: MatchFoundModalProps) {
     const { address } = useAccount();
-    const [creatorState, setCreatorState] = useState<CreatorState>("creating");
+    const [creatorState, setCreatorState] = useState<CreatorState>("idle");
     const [joinerState, setJoinerState] = useState<JoinerState>("waiting-for-creator");
     const [onChainGameId, setOnChainGameId] = useState<string | null>(null);
     const [introReady, setIntroReady] = useState(false);
@@ -119,43 +119,33 @@ export function MatchFoundModal({
         return () => window.clearTimeout(timer);
     }, [autoEnter]);
 
-    // ─── Player 1 (white/creator): auto-create on-chain game on mount ───
-    useEffect(() => {
-        if (
-            !isCreator ||
-            !stakeToken ||
-            !stakeAmount ||
-            !roomId ||
-            hasStartedCreation.current ||
-            existingOnChainGameId
-        ) return;
-        // Wait for decimals to load — USDC is 6, defaulting to 18 would over-approve
-        if (tokenDecimalsData == null) return;
+    const startStakeCreation = async () => {
+        if (!stakeToken || !stakeAmount || !roomId || tokenDecimalsData == null) return;
         hasStartedCreation.current = true;
-
+        setCreatorState("creating");
         const decimals = tokenDecimalsData as number;
 
-        (async () => {
-            try {
-                const result = await createGameSingle(
-                    stakeToken as `0x${string}`,
-                    stakeAmount,
-                    decimals,
-                );
-                if (result.success && result.onChainGameId) {
-                    setOnChainGameId(result.onChainGameId);
-                    socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
-                    setCreatorState("waiting");
-                } else {
-                    socket?.emit("stakeCreationFailed", { roomId });
-                    setCreatorState("failed");
-                }
-            } catch {
+        try {
+            const result = await createGameSingle(
+                stakeToken as `0x${string}`,
+                stakeAmount,
+                decimals,
+            );
+            if (result.success && result.onChainGameId) {
+                setOnChainGameId(result.onChainGameId);
+                socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
+                setCreatorState("waiting");
+            } else {
                 socket?.emit("stakeCreationFailed", { roomId });
                 setCreatorState("failed");
+                hasStartedCreation.current = false;
             }
-        })();
-    }, [isCreator, stakeToken, stakeAmount, roomId, tokenDecimalsData, createGameSingle, existingOnChainGameId, socket]);
+        } catch {
+            socket?.emit("stakeCreationFailed", { roomId });
+            setCreatorState("failed");
+            hasStartedCreation.current = false;
+        }
+    };
 
     // ─── Player 1 (white/creator): listen for opponent leaving/declining/timeout ───
     useEffect(() => {
@@ -209,28 +199,8 @@ export function MatchFoundModal({
     }, [isJoiner, socket, roomId]);
 
     const handleRetryCreate = async () => {
-        if (!stakeToken || !stakeAmount || !roomId || tokenDecimalsData == null) return;
-        setCreatorState("creating");
-        const decimals = tokenDecimalsData as number;
-
-        try {
-            const result = await createGameSingle(
-                stakeToken as `0x${string}`,
-                stakeAmount,
-                decimals,
-            );
-            if (result.success && result.onChainGameId) {
-                setOnChainGameId(result.onChainGameId);
-                socket?.emit("stakeCreated", { roomId, onChainGameId: result.onChainGameId });
-                setCreatorState("waiting");
-            } else {
-                socket?.emit("stakeCreationFailed", { roomId });
-                setCreatorState("failed");
-            }
-        } catch {
-            socket?.emit("stakeCreationFailed", { roomId });
-            setCreatorState("failed");
-        }
+        hasStartedCreation.current = false;
+        await startStakeCreation();
     };
 
     const handleJoinStake = async () => {
@@ -334,6 +304,27 @@ export function MatchFoundModal({
                                     <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest">
                                         Waiting for opponent to confirm stake...
                                     </p>
+                                </div>
+                            )}
+
+                            {creatorState === "idle" && (
+                                <div className="w-full flex flex-col gap-2">
+                                    <button
+                                        onClick={startStakeCreation}
+                                        disabled={isLoading || tokenDecimalsData == null}
+                                        className="w-full relative group overflow-hidden rounded-full py-3 sm:py-4 transition-transform active:scale-95 disabled:opacity-50"
+                                    >
+                                        <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                        <span className="relative text-sm font-bold text-white">
+                                            Create Staked Game
+                                        </span>
+                                    </button>
+                                    <button
+                                        onClick={handleDeclineStake}
+                                        className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"
+                                    >
+                                        Cancel
+                                    </button>
                                 </div>
                             )}
 
