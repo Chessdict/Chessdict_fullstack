@@ -40,25 +40,25 @@ function getBarCount(level: SignalLevel): number {
 function getColor(level: SignalLevel, variant: "player" | "opponent"): string {
   if (variant === "opponent") {
     switch (level) {
-      case "excellent": return "#e2e8f0";
-      case "good": return "#cbd5e1";
-      case "fair": return "#facc15";
-      case "poor": return "#ef4444";
-      case "disconnected": return "#6b7280";
+      case "excellent": return "#f8fafc";
+      case "good": return "#dbe4f0";
+      case "fair": return "#fde68a";
+      case "poor": return "#fca5a5";
+      case "disconnected": return "#94a3b8";
     }
   }
   switch (level) {
-    case "excellent": return "#22c55e";
-    case "good": return "#86efac";
-    case "fair": return "#facc15";
-    case "poor": return "#ef4444";
-    case "disconnected": return "#6b7280";
+    case "excellent": return "#6ee7b7";
+    case "good": return "#a7f3d0";
+    case "fair": return "#fde68a";
+    case "poor": return "#fca5a5";
+    case "disconnected": return "#94a3b8";
   }
 }
 
 function getLabel(level: SignalLevel, ping: number): string {
   if (level === "disconnected") return "No connection";
-  return `${ping}ms`;
+  return `${level} connection (${ping}ms)`;
 }
 
 export function SignalStrength({
@@ -100,30 +100,34 @@ export function SignalStrength({
   const color = getColor(level, variant);
   const label = getLabel(level, ping);
 
-  const barHeights = [6, 10, 14, 18];
+  const barHeights = [12, 12, 12, 12];
+  const shellClasses =
+    variant === "opponent"
+      ? "border-white/12 bg-white/6"
+      : "border-emerald-200/12 bg-emerald-200/8";
 
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="flex items-end gap-[2px]">
+    <div
+      className={`flex h-7 items-center gap-[3px] rounded-full border px-2.5 ${shellClasses}`}
+      aria-label={label}
+      title={label}
+    >
         {barHeights.map((h, i) => (
           <div
             key={i}
             style={{
-              width: 3,
+              width: 6,
               height: h,
-              borderRadius: 1,
+              borderRadius: 999,
               backgroundColor: i < bars ? color : "rgba(255,255,255,0.15)",
-              transition: "background-color 0.3s ease",
+              boxShadow:
+                i < bars
+                  ? `inset 0 1px 0 rgba(255,255,255,0.35), 0 0 10px ${color}22`
+                  : "inset 0 1px 0 rgba(255,255,255,0.08)",
+              transition: "background-color 0.3s ease, box-shadow 0.3s ease",
             }}
           />
         ))}
-      </div>
-      <span
-        className="text-[10px] font-mono tabular-nums"
-        style={{ color }}
-      >
-        {label}
-      </span>
     </div>
   );
 }

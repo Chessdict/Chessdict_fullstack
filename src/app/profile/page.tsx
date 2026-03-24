@@ -162,9 +162,9 @@ export default function ProfilePage() {
                 </div>
 
                 {/* Ratings */}
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6">
-                    <p className="text-xs uppercase tracking-widest text-white/40 mb-4 text-center">Ratings</p>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-sm sm:p-6">
+                    <p className="mb-3 text-center text-[11px] uppercase tracking-[0.22em] text-white/40 sm:mb-4 sm:text-xs sm:tracking-widest">Ratings</p>
+                    <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
                         <RatingCard label="Bullet" value={profile.ratings.bullet} accent="text-sky-300" />
                         <RatingCard label="Blitz" value={profile.ratings.blitz} accent="text-amber-300" />
                         <RatingCard label="Rapid" value={profile.ratings.rapid} accent="text-emerald-300" />
@@ -312,9 +312,9 @@ function RatingCard({
     accent: string;
 }) {
     return (
-        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 text-center">
-            <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${accent}`}>{label}</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-white">{value}</p>
+        <div className="rounded-xl border border-white/10 bg-black/20 px-2.5 py-3 text-center sm:rounded-2xl sm:px-4 sm:py-4">
+            <p className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${accent} sm:text-xs sm:tracking-[0.24em]`}>{label}</p>
+            <p className="mt-1.5 text-xl font-bold tabular-nums text-white sm:mt-2 sm:text-3xl">{value}</p>
         </div>
     );
 }
