@@ -90,6 +90,7 @@ type GameState = {
       | "draw"
       | null,
   ) => void;
+  clearGameOver: () => void;
   // Rejoin state (for reconnecting after refresh)
   rejoinFen: string | null;
   rejoinMoves: MoveRecord[];
@@ -171,6 +172,7 @@ export const useGameStore = create<GameState>((set) => ({
       blackTime: state.initialTime,
     })),
   setGameOver: (winner, reason) => set({ gameOver: { winner, reason } }),
+  clearGameOver: () => set({ gameOver: null }),
   setRejoinData: (fen, moves) => set({ rejoinFen: fen, rejoinMoves: moves }),
   clearRejoinData: () => set({ rejoinFen: null, rejoinMoves: [] }),
   setRejoinChatMessages: (messages) => set({ rejoinChatMessages: messages }),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { getAutomaticDrawReason } from "@/lib/game-result-display";
@@ -73,16 +73,33 @@ export function TournamentGameBoard({
   const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
   const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const sourceSquareRef = useRef<string | null>(null);
+  const selectionModeRef = useRef<SelectionMode>(null);
+  const revalidateSelectionRef = useRef<(() => void) | null>(null);
 
   const syncState = useCallback(() => {
     setFen(game.fen());
   }, [game]);
 
   const clearSelection = useCallback(() => {
+    sourceSquareRef.current = null;
+    selectionModeRef.current = null;
     setMoveSquares({});
     setSourceSquare(null);
     setSelectionMode(null);
   }, []);
+
+  const setActiveSelection = useCallback((square: string, mode: Exclude<SelectionMode, null>) => {
+    sourceSquareRef.current = square;
+    selectionModeRef.current = mode;
+    setSourceSquare(square);
+    setSelectionMode(mode);
+  }, []);
+
+  useEffect(() => {
+    sourceSquareRef.current = sourceSquare;
+    selectionModeRef.current = selectionMode;
+  }, [sourceSquare, selectionMode]);
 
   // Reset game when gameId changes
   useEffect(() => {
@@ -103,12 +120,16 @@ export function TournamentGameBoard({
   }, [gameResult, clearSelection]);
 
   const safeMove = useCallback(
-    (move: any) => {
+    (move: any, options?: { preserveSelection?: boolean }) => {
       try {
         const result = game.move(move);
         if (result) {
           syncState();
-          clearSelection();
+          if (options?.preserveSelection) {
+            revalidateSelectionRef.current?.();
+          } else {
+            clearSelection();
+          }
           return result;
         }
       } catch {
@@ -245,7 +266,7 @@ export function TournamentGameBoard({
       gameId: string;
       move: any;
     }) => {
-      safeMove(move);
+      safeMove(move, { preserveSelection: true });
     };
 
     socket.on("tournament:opponentMove", handleOpponentMove);
@@ -374,6 +395,39 @@ export function TournamentGameBoard({
     return true;
   }, [game, playerTurnCode]);
 
+  const revalidateSelection = useCallback(() => {
+    const currentSourceSquare = sourceSquareRef.current;
+    const currentSelectionMode = selectionModeRef.current;
+
+    if (!currentSourceSquare || !currentSelectionMode || !playerTurnCode) {
+      clearSelection();
+      return;
+    }
+
+    const piece = game.get(currentSourceSquare as any);
+    if (!piece || piece.color !== playerTurnCode) {
+      clearSelection();
+      return;
+    }
+
+    const nextMode: SelectionMode = game.turn() === playerTurnCode ? "move" : "premove";
+    const selected =
+      nextMode === "move"
+        ? getMoveOptions(currentSourceSquare)
+        : getPremoveOptions(currentSourceSquare);
+
+    if (!selected) {
+      clearSelection();
+      return;
+    }
+
+    setActiveSelection(currentSourceSquare, nextMode);
+  }, [clearSelection, game, getMoveOptions, getPremoveOptions, playerTurnCode, setActiveSelection]);
+
+  useEffect(() => {
+    revalidateSelectionRef.current = revalidateSelection;
+  }, [revalidateSelection]);
+
   const tryQueuePremove = useCallback((source: string, target: string) => {
     if (!playerTurnCode || game.turn() === playerTurnCode) return false;
 
@@ -423,8 +477,7 @@ export function TournamentGameBoard({
       if (piece && piece.color === playerTurnCode) {
         const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
         if (selected) {
-          setSourceSquare(square);
-          setSelectionMode(isPlayersTurn ? "move" : "premove");
+          setActiveSelection(square, isPlayersTurn ? "move" : "premove");
         }
         return;
       }
@@ -435,8 +488,7 @@ export function TournamentGameBoard({
 
     const selected = isPlayersTurn ? getMoveOptions(square) : getPremoveOptions(square);
     if (selected) {
-      setSourceSquare(square);
-      setSelectionMode(isPlayersTurn ? "move" : "premove");
+      setActiveSelection(square, isPlayersTurn ? "move" : "premove");
     } else {
       clearSelection();
     }

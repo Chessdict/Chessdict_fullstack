@@ -166,6 +166,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     (gameMode === "online" || gameMode === "friend") &&
     !stakeToken &&
     !stakeAmountRaw;
+  const showPostGameActions = isGameFinished && gameResultModalDismissed;
   const timeControlMinutes = getTimeControlMinutesFromSeconds(initialTime);
   const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
   const showMobileMoveDock =
@@ -173,7 +174,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     activeTab === "play" &&
     activeSubTab === "moves" &&
     moves.length > 0 &&
-    !isMobileChatOpen;
+    !isMobileChatOpen &&
+    (!showPostGameActions || viewMoveIndex !== null || isAutoPlaying);
   const showMobileChatButton =
     isGameActive &&
     activeTab === "play" &&
@@ -316,8 +318,8 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     setActiveTab("play");
     setActiveSubTab("moves");
     stopAutoPlay();
-    setViewMoveIndex(null);
-  }, [setViewMoveIndex, stopAutoPlay]);
+    setViewMoveIndex(moves.length > 0 ? moves.length - 1 : null);
+  }, [moves.length, setViewMoveIndex, stopAutoPlay]);
 
   const handlePlayNewGame = useCallback(() => {
     stopAutoPlay();
@@ -447,6 +449,9 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       },
     },
   ] as const;
+  const mobileMoveNavigationButtons = moveNavigationButtons.filter(
+    ({ label }) => label === "Prev" || label === "Next",
+  );
 
   const renderChatThread = (containerRef: RefObject<HTMLDivElement | null>, maxHeightClass: string) => (
     <div
@@ -629,7 +634,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           </div>
 
           {/* Opening Name */}
-          {isGameFinished && gameResultModalDismissed && (
+          {showPostGameActions && (
             <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
               <div>
                 <h3 className="text-sm font-semibold text-white">Game Complete</h3>
@@ -756,7 +761,29 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
           {/* Move History */}
           {activeSubTab === "moves" && canReviewGame && (
             <div className="flex flex-col gap-3">
-              <div ref={movesContainerRef} className="max-h-[260px] overflow-y-auto elegant-scrollbar">
+              <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 sm:hidden">
+                {moves.length === 0 ? (
+                  <p className="text-center text-sm text-white/35">No moves yet</p>
+                ) : (
+                  <>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">
+                      Move Ribbon
+                    </p>
+                    <p className="mt-1 text-sm text-white/80">
+                      {viewMoveIndex === null
+                        ? `Live position · ${moves.length} move${moves.length === 1 ? "" : "s"} recorded`
+                        : viewMoveIndex < 0
+                          ? "Reviewing the starting position"
+                          : `Reviewing move ${viewMoveIndex + 1} of ${moves.length}`}
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/40">
+                      Use the move ribbon above the board and the back or forward controls below.
+                    </p>
+                  </>
+                )}
+              </div>
+
+              <div ref={movesContainerRef} className="hidden max-h-[260px] overflow-y-auto elegant-scrollbar sm:block">
                 {movePairs.length === 0 ? (
                   <p className="text-center text-sm text-white/30 py-8">No moves yet</p>
                 ) : (
@@ -897,24 +924,17 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
         <>
           {showMobileMoveDock && (
             <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 sm:hidden" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)" }}>
-              <div className="mx-auto flex max-w-md items-center justify-center gap-2 rounded-[26px] border border-white/10 bg-[#111111]/92 px-3 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.42)] backdrop-blur-xl">
-                {moveNavigationButtons.map(({ icon, label, onClick }) => (
+              <div className="mx-auto flex max-w-[220px] items-center justify-center gap-3 rounded-[26px] border border-white/10 bg-[#111111]/92 px-4 py-2 shadow-[0_-16px_40px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+                {mobileMoveNavigationButtons.map(({ icon, label, onClick }) => (
                   <button
                     key={label}
                     onClick={onClick}
                     className={cn(
                       "flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white",
-                      label === "Play" && isAutoPlaying && "border-blue-500/30 bg-blue-500/20 text-blue-400",
                     )}
                     title={label}
                   >
-                    {label === "Play" && isAutoPlaying ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                        <path d="M6 4h4v16H6zM14 4h4v16h-4z" />
-                      </svg>
-                    ) : (
-                      <img src={icon} alt={label} width={24} height={24} />
-                    )}
+                    <img src={icon} alt={label} width={24} height={24} />
                   </button>
                 ))}
               </div>

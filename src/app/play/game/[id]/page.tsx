@@ -213,7 +213,7 @@ export default function GamePage({
         </div>
 
         {/* Game Info Panel */}
-        <div className="w-full max-w-none flex-none px-1.5 sm:max-w-sm sm:px-0">
+        <div className="w-full max-w-none flex-none px-0 sm:max-w-sm sm:px-0">
           <GameInfoPanel isSocketConnected={isSocketConnected} />
         </div>
       </div>
