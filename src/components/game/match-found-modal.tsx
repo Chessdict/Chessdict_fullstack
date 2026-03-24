@@ -311,7 +311,7 @@ export function MatchFoundModal({
                                                     Matched at lower stake
                                                 </p>
                                                 <p className="mt-1 text-[10px] leading-relaxed text-white/60">
-                                                    Your queued amount was {requestedStakeAmount} {tokenLabel}. This game was matched at {stakeAmount} {tokenLabel} based on the lower queued amount.
+                                                    Using opponent&apos;s lower amount 🤝
                                                 </p>
                                             </div>
                                         )}
@@ -465,7 +465,7 @@ export function MatchFoundModal({
                                                     Matched at lower stake
                                                 </p>
                                                 <p className="mt-1 text-[10px] leading-relaxed text-white/60">
-                                                    Your queued amount was {requestedStakeAmount} {tokenLabel}. This game was matched at {stakeAmount} {tokenLabel} based on the lower queued amount.
+                                                    Using opponent&apos;s lower amount 🤝
                                                 </p>
                                             </div>
                                         )}
