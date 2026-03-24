@@ -23,8 +23,10 @@ interface MatchFoundModalProps {
     staked?: boolean;
     stakeToken?: string | null;
     stakeAmount?: string | null;
+    requestedStakeAmount?: string | null;
     timeControl?: number;
     roomId?: string;
+    existingOnChainGameId?: string | null;
     socket?: any;
 }
 
@@ -41,8 +43,10 @@ export function MatchFoundModal({
     staked,
     stakeToken,
     stakeAmount,
+    requestedStakeAmount,
     timeControl,
     roomId,
+    existingOnChainGameId,
     socket,
 }: MatchFoundModalProps) {
     const { address } = useAccount();
@@ -69,6 +73,14 @@ export function MatchFoundModal({
     const playerLabel = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "You";
     const timeControlMinutes = normalizeTimeControlMinutes(timeControl);
     const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
+    const tokenLabel = (tokenSymbol as string) ?? "tokens";
+    const matchedStakeValue = Number.parseFloat(stakeAmount ?? "");
+    const requestedStakeValue = Number.parseFloat(requestedStakeAmount ?? "");
+    const matchedAtLowerStake =
+        Number.isFinite(matchedStakeValue) &&
+        Number.isFinite(requestedStakeValue) &&
+        matchedStakeValue > 0 &&
+        matchedStakeValue < requestedStakeValue;
 
     useEffect(() => {
         onAcceptRef.current = onAccept;
@@ -78,6 +90,23 @@ export function MatchFoundModal({
         const frame = requestAnimationFrame(() => setIntroReady(true));
         return () => cancelAnimationFrame(frame);
     }, []);
+
+    useEffect(() => {
+        if (!staked || !existingOnChainGameId) return;
+
+        setOnChainGameId(existingOnChainGameId);
+        if (isCreator) {
+            hasStartedCreation.current = true;
+            setCreatorState((current) =>
+                current === "opponent-left" || current === "reclaimed" ? current : "waiting"
+            );
+        }
+        if (isJoiner) {
+            setJoinerState((current) =>
+                current === "confirmed" ? current : "idle"
+            );
+        }
+    }, [existingOnChainGameId, isCreator, isJoiner, staked]);
 
     useEffect(() => {
         if (!autoEnter || hasAutoEntered.current) return;
@@ -92,7 +121,14 @@ export function MatchFoundModal({
 
     // ─── Player 1 (white/creator): auto-create on-chain game on mount ───
     useEffect(() => {
-        if (!isCreator || !stakeToken || !stakeAmount || !roomId || hasStartedCreation.current) return;
+        if (
+            !isCreator ||
+            !stakeToken ||
+            !stakeAmount ||
+            !roomId ||
+            hasStartedCreation.current ||
+            existingOnChainGameId
+        ) return;
         // Wait for decimals to load — USDC is 6, defaulting to 18 would over-approve
         if (tokenDecimalsData == null) return;
         hasStartedCreation.current = true;
@@ -119,7 +155,7 @@ export function MatchFoundModal({
                 setCreatorState("failed");
             }
         })();
-    }, [isCreator, stakeToken, stakeAmount, roomId, tokenDecimalsData, createGameSingle, socket]);
+    }, [isCreator, stakeToken, stakeAmount, roomId, tokenDecimalsData, createGameSingle, existingOnChainGameId, socket]);
 
     // ─── Player 1 (white/creator): listen for opponent leaving/declining/timeout ───
     useEffect(() => {
@@ -265,9 +301,21 @@ export function MatchFoundModal({
                                     {timeControlDisplay}
                                 </p>
                                 {stakeAmount && (
-                                    <p className="text-xs text-yellow-400 mt-1">
-                                        Stake: {stakeAmount} {(tokenSymbol as string) ?? "tokens"}
-                                    </p>
+                                    <div className="mt-1 space-y-2">
+                                        <p className="text-xs text-yellow-400">
+                                            Stake: {stakeAmount} {tokenLabel}
+                                        </p>
+                                        {matchedAtLowerStake && (
+                                            <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-left">
+                                                <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-300">
+                                                    Matched at lower stake
+                                                </p>
+                                                <p className="mt-1 text-[10px] leading-relaxed text-white/60">
+                                                    Your queued amount was {requestedStakeAmount} {tokenLabel}. This game was matched at {stakeAmount} {tokenLabel} based on the lower queued amount.
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                             </div>
 
@@ -404,11 +452,23 @@ export function MatchFoundModal({
                                     You are playing as {color}
                                 </p>
                                 {stakeAmount && (
-                                    <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-                                        <p className="text-xs text-white/60">Stake required</p>
-                                        <p className="text-lg font-bold text-white">
-                                            {stakeAmount} {(tokenSymbol as string) ?? "tokens"}
-                                        </p>
+                                    <div className="mt-3 space-y-3">
+                                        <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                                            <p className="text-xs text-white/60">Stake required</p>
+                                            <p className="text-lg font-bold text-white">
+                                                {stakeAmount} {tokenLabel}
+                                            </p>
+                                        </div>
+                                        {matchedAtLowerStake && (
+                                            <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-left">
+                                                <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-300">
+                                                    Matched at lower stake
+                                                </p>
+                                                <p className="mt-1 text-[10px] leading-relaxed text-white/60">
+                                                    Your queued amount was {requestedStakeAmount} {tokenLabel}. This game was matched at {stakeAmount} {tokenLabel} based on the lower queued amount.
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

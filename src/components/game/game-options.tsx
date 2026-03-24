@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useGameStore } from "@/stores/game-store";
 import Image from "next/image";
 import { GlassButton } from "../glass-button";
 import { GlassBg } from "../glass-bg";
-import { searchUsers, getRecentOpponents } from "@/app/actions";
+import { createOpenChallengeLink, searchUsers, getRecentOpponents } from "@/app/actions";
 import { toast } from "sonner";
 import { GameInfoPanel } from "./game-info-panel";
 import { TournamentPanel } from "../tournament/tournament-panel";
@@ -123,8 +124,9 @@ function StakePanel({
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-white">Stake</span>
+        <span className="text-sm font-medium text-white">Staked game</span>
         <button
+          type="button"
           onClick={() => setStakeEnabled(!stakeEnabled)}
           className={cn(
             "relative h-6 w-11 rounded-full transition-colors duration-200",
@@ -224,6 +226,7 @@ const SelectGameDuration = ({
 
 export function GameOptions({ onStartGame, socket, userId, isSocketConnected = false }: GameOptionsProps) {
   // All hooks must be called before any early returns
+  const router = useRouter();
   const [view, setView] = useState<"home" | "setup">("home");
   const [activeTab, setActiveTab] = useState<Tab>("new-game");
   const [timeControl, setTimeControl] = useState(String(DEFAULT_QUEUE_TIME_CONTROL_MINUTES));
@@ -245,6 +248,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
   const { address } = useAccount();
   const { data: currentAllowance, refetch: refetchAllowance } = useTokenAllowance(selectedToken, address);
   const [isApproving, setIsApproving] = useState(false);
+  const [isCreatingChallengeLink, setIsCreatingChallengeLink] = useState(false);
 
   useEffect(() => {
     if (userId) {
@@ -532,6 +536,113 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
 
         {gameMode === "friend" && activeTab === "new-game" && !selectedOpponent && (
           <div className="flex flex-col gap-6">
+            <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-sm font-medium text-white">Open challenge link</p>
+                  <p className="mt-1 text-xs text-white/45">
+                    Create a shareable link and send it to anyone. For staked links, the on-chain game is only created after the other player joins.
+                  </p>
+                </div>
+
+                <SelectGameDuration
+                  timeControl={timeControl}
+                  setTimeControl={setTimeControl}
+                  stakedOnly={stakeEnabled}
+                />
+
+                <StakePanel
+                  stakeEnabled={stakeEnabled}
+                  setStakeEnabled={setStakeEnabled}
+                  selectedToken={selectedToken}
+                  setSelectedToken={setSelectedToken}
+                  stakeAmount={stakeAmount}
+                  setStakeAmount={setStakeAmount}
+                />
+
+                <GlassButton
+                  className="w-full"
+                  onClick={async () => {
+                    if (!userId) {
+                      toast.error("Please connect your wallet first");
+                      return;
+                    }
+
+                    if (stakeEnabled) {
+                      if (!selectedToken || !stakeAmount) {
+                        toast.error("Choose a stake token and amount first");
+                        return;
+                      }
+
+                      if (tokenDecimalsData == null) {
+                        toast.error("Loading token info, please try again");
+                        return;
+                      }
+
+                      const decimals = tokenDecimalsData as number;
+                      const stakeWei = parseUnits(stakeAmount, decimals);
+                      const allowance = await checkAllowance(selectedToken);
+
+                      if (allowance < stakeWei) {
+                        toast.info("Approving token spend before creating the challenge link…");
+                        setIsApproving(true);
+                        try {
+                          await ensureNetwork();
+                          await approveToken(selectedToken, stakeWei);
+                          await refetchAllowance();
+                          toast.success("Approval confirmed");
+                        } catch (error: any) {
+                          toast.error(error?.shortMessage ?? error?.message ?? "Approval failed");
+                          return;
+                        } finally {
+                          setIsApproving(false);
+                        }
+                      }
+                    }
+
+                    setIsCreatingChallengeLink(true);
+                    try {
+                      const result = await createOpenChallengeLink(
+                        userId,
+                        stakeEnabled
+                          ? clampStakedTimeControlMinutes(timeControl)
+                          : parseInt(timeControl, 10),
+                        stakeEnabled
+                          ? {
+                              staked: true,
+                              stakeToken: selectedToken,
+                              stakeAmount,
+                            }
+                          : undefined,
+                      );
+                      if (!result.success || !result.challenge) {
+                        toast.error(result.error ?? "Failed to create challenge link");
+                        return;
+                      }
+
+                      toast.success(
+                        stakeEnabled
+                          ? "Staked challenge link created"
+                          : "Challenge link created",
+                      );
+                      router.push(`/play/challenge/${result.challenge.id}`);
+                    } catch (error) {
+                      console.error("Failed to create open challenge:", error);
+                      toast.error("Failed to create challenge link");
+                    } finally {
+                      setIsCreatingChallengeLink(false);
+                    }
+                  }}
+                >
+                  {isCreatingChallengeLink
+                    ? "Creating…"
+                    : stakeEnabled
+                      ? "Create staked challenge link"
+                      : "Create challenge link"}
+                </GlassButton>
+              </div>
+            </div>
+
             <div className="w-full">
               <GlassBg className="" height={50}>
                 <div className="flex items-center gap-2.5 rounded-full p-5">
@@ -603,7 +714,11 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
         {gameMode === "friend" && activeTab === "new-game" && selectedOpponent && (
           <div className="flex flex-col items-center gap-6">
             <div className="relative">
-              <button onClick={() => setSelectedOpponent(null)} className="absolute -left-12 top-0 mt-4 h-10 w-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10">
+              <button onClick={() => {
+                setSelectedOpponent(null);
+                setStakeEnabled(false);
+                setStakeAmount("");
+              }} className="absolute -left-12 top-0 mt-4 h-10 w-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10">
                 <Image src="/icons/left-arrow.svg" alt="back" width={24} height={24} />
               </button>
               <div className="h-32 w-32 overflow-hidden rounded-full border-4 border-white/10 bg-red-400 flex items-center justify-center text-4xl font-bold uppercase">

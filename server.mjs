@@ -103,7 +103,9 @@ function calculateElo(winnerRating, loserRating, isDraw = false) {
   };
 }
 
-function getRatingFieldForTimeControl(timeControl) {
+function getRatingFieldForTimeControl(timeControl, isStaked = false) {
+  if (isStaked) return "stakedRating";
+
   const numericTimeControl = Number.parseInt(String(timeControl ?? ""), 10);
   const normalizedTimeControl = Number.isFinite(numericTimeControl)
     ? numericTimeControl
@@ -114,10 +116,10 @@ function getRatingFieldForTimeControl(timeControl) {
   return "rapidRating";
 }
 
-function getPlayerRatingForTimeControl(player, timeControl) {
+function getPlayerRatingForTimeControl(player, timeControl, isStaked = false) {
   if (!player) return 1200;
 
-  const ratingField = getRatingFieldForTimeControl(timeControl);
+  const ratingField = getRatingFieldForTimeControl(timeControl, isStaked);
   const categoryRating = player[ratingField];
 
   if (typeof categoryRating === "number" && Number.isFinite(categoryRating)) {
@@ -146,9 +148,10 @@ async function updateRatings(game, isDraw = false) {
   const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
   const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
   if (!whitePlayer || !blackPlayer) return null;
-  const ratingField = getRatingFieldForTimeControl(game.timeControl);
-  const whiteRating = getPlayerRatingForTimeControl(whitePlayer, game.timeControl);
-  const blackRating = getPlayerRatingForTimeControl(blackPlayer, game.timeControl);
+  const isStakedGame = !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
+  const ratingField = getRatingFieldForTimeControl(game.timeControl, isStakedGame);
+  const whiteRating = getPlayerRatingForTimeControl(whitePlayer, game.timeControl, isStakedGame);
+  const blackRating = getPlayerRatingForTimeControl(blackPlayer, game.timeControl, isStakedGame);
 
   if (isDraw) {
     const { newRatingA, newRatingB } = calculateElo(whiteRating, blackRating, true);
@@ -167,8 +170,8 @@ async function updateRatings(game, isDraw = false) {
   const winnerId = game.winnerId;
   const winner = winnerId === whitePlayer.id ? whitePlayer : blackPlayer;
   const loser = winnerId === whitePlayer.id ? blackPlayer : whitePlayer;
-  const winnerRating = getPlayerRatingForTimeControl(winner, game.timeControl);
-  const loserRating = getPlayerRatingForTimeControl(loser, game.timeControl);
+  const winnerRating = getPlayerRatingForTimeControl(winner, game.timeControl, isStakedGame);
+  const loserRating = getPlayerRatingForTimeControl(loser, game.timeControl, isStakedGame);
   const { newWinnerRating, newLoserRating } = calculateElo(winnerRating, loserRating);
 
   await prisma.user.update({
@@ -223,12 +226,14 @@ app.prepare().then(async () => {
   const stakeTimeouts = new Map(); // roomId -> timeout handle (120s auto-abort for staked WAITING games)
   const stakeCreationFailureDelays = new Map(); // roomId -> timeout handle (grace period before notifying joiner)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
+  const rematchRequests = new Map(); // roomId -> { requesterWallet, targetWallet, timeoutHandle }
   // ─── Server-Authoritative Game Timers ───
   const DEFAULT_QUEUE_TIME_CONTROL = 3;
   const MAX_STAKED_TIME_CONTROL = 3;
   const SUPPORTED_QUEUE_TIME_CONTROLS = new Set([1, 2, 3, 10]);
   const DEFAULT_GAME_TIME = 600; // 10 minutes in seconds
   const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
+  const REMATCH_REQUEST_TTL_MS = 120000;
   const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
 
   // ─── Reconnection / Disconnect Grace Period (regular games) ───
@@ -271,6 +276,14 @@ app.prepare().then(async () => {
       clearTimeout(delay);
       stakeCreationFailureDelays.delete(roomId);
     }
+  }
+
+  function clearRematchRequest(roomId) {
+    const request = rematchRequests.get(roomId);
+    if (request?.timeoutHandle) {
+      clearTimeout(request.timeoutHandle);
+    }
+    rematchRequests.delete(roomId);
   }
 
   function scheduleStakeCreationFailureDelay(roomId, options = {}) {
@@ -349,6 +362,73 @@ app.prepare().then(async () => {
       stakeToken: game?.stakeToken ?? null,
       stakeAmount: game?.wagerAmount != null ? String(game.wagerAmount) : null,
     };
+  }
+
+  function buildInitialRegularGameState(timeControl) {
+    return {
+      fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      moves: [],
+      chatMessages: [],
+      timeControl,
+    };
+  }
+
+  function trackActiveRegularGame({
+    roomId,
+    whiteWallet,
+    blackWallet,
+    whitePlayerRating,
+    blackPlayerRating,
+    timeControl,
+  }) {
+    userActiveGames.set(whiteWallet, {
+      roomId,
+      color: 'white',
+      opponentWallet: blackWallet,
+      playerRating: whitePlayerRating,
+      opponentRating: blackPlayerRating,
+      timeControl,
+    });
+    userActiveGames.set(blackWallet, {
+      roomId,
+      color: 'black',
+      opponentWallet: whiteWallet,
+      playerRating: blackPlayerRating,
+      opponentRating: whitePlayerRating,
+      timeControl,
+    });
+
+    const initialState = buildInitialRegularGameState(timeControl);
+    gameStateStore.set(roomId, initialState);
+    setUserActiveGame(whiteWallet, userActiveGames.get(whiteWallet)).catch(() => { });
+    setUserActiveGame(blackWallet, userActiveGames.get(blackWallet)).catch(() => { });
+    setGameState(roomId, initialState).catch(() => { });
+  }
+
+  async function hydrateActiveGame(walletAddress) {
+    const inMemory = userActiveGames.get(walletAddress);
+    if (inMemory) return inMemory;
+
+    const persisted = await getUserActiveGame(walletAddress);
+    if (persisted) {
+      userActiveGames.set(walletAddress, persisted);
+      return persisted;
+    }
+
+    return null;
+  }
+
+  async function getStoredGameState(roomId) {
+    const inMemory = gameStateStore.get(roomId);
+    if (inMemory) return inMemory;
+
+    const persisted = await getGameState(roomId);
+    if (persisted) {
+      gameStateStore.set(roomId, persisted);
+      return persisted;
+    }
+
+    return null;
   }
 
   function initGameTimer(roomId, timeInSeconds = DEFAULT_GAME_TIME) {
@@ -1335,12 +1415,14 @@ app.prepare().then(async () => {
       timeControl: matchedTimeControl,
       staked: isStaked,
       stakeToken: stakeInfo?.token ?? null,
-      stakeAmount: stakeInfo?.stakeAmount ?? null,
+      stakeAmount: isStaked
+        ? (stakeInfo?.effectiveAmount != null ? String(stakeInfo.effectiveAmount) : stakeInfo?.stakeAmount ?? null)
+        : stakeInfo?.stakeAmount ?? null,
       effectiveAmount: stakeInfo?.effectiveAmount ?? null,
     };
 
-    const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl);
-    const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl);
+    const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl, isStaked);
+    const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl, isStaked);
 
     // Emit match found to both players (include ratings + staking info)
     io.to(p1.socketId).emit("matchFound", {
@@ -1364,14 +1446,14 @@ app.prepare().then(async () => {
     if (s1) { s1.join(roomId); activeGames.set(s1.id, roomId); }
     if (s2) { s2.join(roomId); activeGames.set(s2.id, roomId); }
 
-    // Track active game for reconnection (in-memory + Redis)
-    userActiveGames.set(p1.userId, { roomId, color: 'white', opponentWallet: p2.userId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: matchedTimeControl });
-    userActiveGames.set(p2.userId, { roomId, color: 'black', opponentWallet: p1.userId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: matchedTimeControl });
-    const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [], timeControl: matchedTimeControl };
-    gameStateStore.set(roomId, initialState);
-    setUserActiveGame(p1.userId, userActiveGames.get(p1.userId)).catch(() => { });
-    setUserActiveGame(p2.userId, userActiveGames.get(p2.userId)).catch(() => { });
-    setGameState(roomId, initialState).catch(() => { });
+    trackActiveRegularGame({
+      roomId,
+      whiteWallet: p1.userId,
+      blackWallet: p2.userId,
+      whitePlayerRating,
+      blackPlayerRating,
+      timeControl: matchedTimeControl,
+    });
 
     if (!isStaked) {
       // Non-staked: start timer immediately
@@ -1384,6 +1466,83 @@ app.prepare().then(async () => {
 
   const matchmaking = createMatchmaking({ onMatch: createMatchedGame });
   const { isInAnyQueue, removeFromAllQueues } = matchmaking;
+
+  async function createDirectRegularGame({
+    whiteWallet,
+    blackWallet,
+    whiteSocketId,
+    blackSocketId,
+    timeControl,
+    emitEvent = "matchFound",
+  }) {
+    const whiteSocket = whiteSocketId ? io.sockets.sockets.get(whiteSocketId) : null;
+    const blackSocket = blackSocketId ? io.sockets.sockets.get(blackSocketId) : null;
+    if (!whiteSocket || !blackSocket) {
+      throw new Error("Both players must be connected");
+    }
+
+    const whiteUser = await prisma.user.findUnique({ where: { walletAddress: whiteWallet } });
+    const blackUser = await prisma.user.findUnique({ where: { walletAddress: blackWallet } });
+    if (!whiteUser || !blackUser) {
+      throw new Error("Players not found");
+    }
+
+    const matchedTimeControl = normalizeQueueTimeControl(timeControl);
+    const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl, false);
+    const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl, false);
+    const game = await prisma.game.create({
+      data: {
+        whitePlayerId: whiteUser.id,
+        blackPlayerId: blackUser.id,
+        fen: "start",
+        status: "IN_PROGRESS",
+        timeControl: matchedTimeControl,
+      },
+    });
+
+    const roomId = game.id;
+
+    whiteSocket.join(roomId);
+    blackSocket.join(roomId);
+    activeGames.set(whiteSocket.id, roomId);
+    activeGames.set(blackSocket.id, roomId);
+    removeFromAllQueues(whiteSocket.id);
+    removeFromAllQueues(blackSocket.id);
+
+    io.to(whiteSocket.id).emit(emitEvent, {
+      roomId,
+      color: "white",
+      opponent: blackWallet,
+      playerRating: whitePlayerRating,
+      opponentRating: blackPlayerRating,
+      timeControl: matchedTimeControl,
+    });
+    io.to(blackSocket.id).emit(emitEvent, {
+      roomId,
+      color: "black",
+      opponent: whiteWallet,
+      playerRating: blackPlayerRating,
+      opponentRating: whitePlayerRating,
+      timeControl: matchedTimeControl,
+    });
+
+    trackActiveRegularGame({
+      roomId,
+      whiteWallet,
+      blackWallet,
+      whitePlayerRating,
+      blackPlayerRating,
+      timeControl: matchedTimeControl,
+    });
+    initGameTimer(roomId, getTimeControlSeconds(matchedTimeControl));
+
+    return {
+      roomId,
+      timeControl: matchedTimeControl,
+      whitePlayerRating,
+      blackPlayerRating,
+    };
+  }
 
   io.on("connection", (socket) => {
     const userId = socket.handshake.query?.userId;
@@ -1402,44 +1561,47 @@ app.prepare().then(async () => {
       }
 
       // ─── Reconnection: rejoin active game (refresh or reconnect) ───
-      const activeGame = userActiveGames.get(userId);
-      if (activeGame) {
-        const gs = gameStateStore.get(activeGame.roomId);
+      (async () => {
+        const activeGame = await hydrateActiveGame(userId);
+        if (!activeGame) return;
+
+        const gs = await getStoredGameState(activeGame.roomId);
         const timer = gameTimers.get(activeGame.roomId);
-        getGameStakeState(activeGame.roomId).then((stakeState) => {
-          const initialTime = getActiveGameInitialTimeSeconds(activeGame);
-          let whiteTime = initialTime, blackTime = initialTime;
-          if (timer) {
-            const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
-            whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
-            blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
-          }
+        const stakeState = await getGameStakeState(activeGame.roomId);
+        const initialTime = getActiveGameInitialTimeSeconds(activeGame);
+        let whiteTime = initialTime;
+        let blackTime = initialTime;
 
-          socket.join(activeGame.roomId);
-          activeGames.set(socket.id, activeGame.roomId);
-          socket.to(activeGame.roomId).emit("opponentReconnected");
+        if (timer) {
+          const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
+          whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
+          blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
+        }
 
-          socket.emit("gameRejoined", {
-            roomId: activeGame.roomId,
-            color: activeGame.color,
-            opponentAddress: activeGame.opponentWallet,
-            opponentRating: activeGame.opponentRating,
-            playerRating: activeGame.playerRating,
-            fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-            moves: gs?.moves || [],
-            chatMessages: gs?.chatMessages || [],
-            whiteTime: Math.round(whiteTime),
-            blackTime: Math.round(blackTime),
-            timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
-            onChainGameId: stakeState.onChainGameId,
-            stakeToken: stakeState.stakeToken,
-            stakeAmount: stakeState.stakeAmount,
-          });
-          console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
-        }).catch((e) => {
-          console.error("[RECONNECT] Failed to load game stake state:", e);
+        socket.join(activeGame.roomId);
+        activeGames.set(socket.id, activeGame.roomId);
+        socket.to(activeGame.roomId).emit("opponentReconnected");
+
+        socket.emit("gameRejoined", {
+          roomId: activeGame.roomId,
+          color: activeGame.color,
+          opponentAddress: activeGame.opponentWallet,
+          opponentRating: activeGame.opponentRating,
+          playerRating: activeGame.playerRating,
+          fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+          moves: gs?.moves || [],
+          chatMessages: gs?.chatMessages || [],
+          whiteTime: Math.round(whiteTime),
+          blackTime: Math.round(blackTime),
+          timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
+          onChainGameId: stakeState.onChainGameId,
+          stakeToken: stakeState.stakeToken,
+          stakeAmount: stakeState.stakeAmount,
         });
-      }
+        console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
+      })().catch((e) => {
+        console.error("[RECONNECT] Failed to restore active game:", e);
+      });
     }
 
     socket.on("joinQueue", (data) => {
@@ -1619,13 +1781,13 @@ app.prepare().then(async () => {
 
     // Explicit rejoin for URL-based game reconnection (/play/game/[id])
     socket.on("rejoinGame", async ({ roomId: requestedRoomId }) => {
-      const activeGame = userActiveGames.get(userId);
+      const activeGame = await hydrateActiveGame(userId);
       if (!activeGame || activeGame.roomId !== requestedRoomId) {
         socket.emit("rejoinError", { error: "No active game found for this room" });
         return;
       }
 
-      const gs = gameStateStore.get(activeGame.roomId);
+      const gs = await getStoredGameState(activeGame.roomId);
       const timer = gameTimers.get(activeGame.roomId);
 
       const initialTime = getActiveGameInitialTimeSeconds(activeGame);
@@ -1665,6 +1827,207 @@ app.prepare().then(async () => {
       socket.leave(roomId);
       console.log(`Socket ${socket.id} left room ${roomId}`);
       socket.to(roomId).emit("opponentLeft", { socketId: socket.id });
+    });
+
+    socket.on("requestRematch", async ({ roomId }) => {
+      if (!userId || !roomId) {
+        socket.emit("rematchUnavailable", { roomId, error: "Invalid rematch request" });
+        return;
+      }
+
+      try {
+        const game = await prisma.game.findUnique({
+          where: { id: roomId },
+          include: {
+            whitePlayer: { select: { walletAddress: true } },
+            blackPlayer: { select: { walletAddress: true } },
+          },
+        });
+
+        if (!game || game.status !== "COMPLETED") {
+          socket.emit("rematchUnavailable", { roomId, error: "Game is not available for rematch" });
+          return;
+        }
+
+        if (game.onChainGameId || game.stakeToken || game.wagerAmount != null) {
+          socket.emit("rematchUnavailable", { roomId, error: "Staked games must start from the play page" });
+          return;
+        }
+
+        const normalizedUserId = String(userId).toLowerCase();
+        const whiteWallet = game.whitePlayer.walletAddress;
+        const blackWallet = game.blackPlayer.walletAddress;
+        let opponentWallet = null;
+
+        if (whiteWallet.toLowerCase() === normalizedUserId) {
+          opponentWallet = blackWallet;
+        } else if (blackWallet.toLowerCase() === normalizedUserId) {
+          opponentWallet = whiteWallet;
+        } else {
+          socket.emit("rematchUnavailable", { roomId, error: "You were not a player in this game" });
+          return;
+        }
+
+        if (await hydrateActiveGame(String(userId))) {
+          socket.emit("rematchUnavailable", { roomId, error: "Finish your current game before requesting a rematch" });
+          return;
+        }
+
+        if (await hydrateActiveGame(opponentWallet)) {
+          socket.emit("rematchUnavailable", { roomId, error: "Opponent is already in another game" });
+          return;
+        }
+
+        const opponentSocketId = userSocketMap.get(opponentWallet);
+        const opponentSocket = opponentSocketId ? io.sockets.sockets.get(opponentSocketId) : null;
+        if (!opponentSocket) {
+          socket.emit("rematchUnavailable", { roomId, error: "Opponent is no longer online" });
+          return;
+        }
+
+        const existingRequest = rematchRequests.get(roomId);
+        if (existingRequest) {
+          if (existingRequest.requesterWallet.toLowerCase() === normalizedUserId) {
+            socket.emit("rematchPending", { roomId });
+            return;
+          }
+
+          if (existingRequest.targetWallet.toLowerCase() === normalizedUserId) {
+            clearRematchRequest(roomId);
+
+            await createDirectRegularGame({
+              whiteWallet: blackWallet,
+              blackWallet: whiteWallet,
+              whiteSocketId: userSocketMap.get(blackWallet),
+              blackSocketId: userSocketMap.get(whiteWallet),
+              timeControl: game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL,
+            });
+            return;
+          }
+        }
+
+        const timeoutHandle = setTimeout(() => {
+          const request = rematchRequests.get(roomId);
+          if (!request || request.requesterWallet.toLowerCase() !== normalizedUserId) return;
+          clearRematchRequest(roomId);
+
+          const requesterSocketId = userSocketMap.get(request.requesterWallet);
+          const targetSocketId = userSocketMap.get(request.targetWallet);
+          if (requesterSocketId) {
+            io.to(requesterSocketId).emit("rematchExpired", { roomId });
+          }
+          if (targetSocketId) {
+            io.to(targetSocketId).emit("rematchExpired", { roomId });
+          }
+        }, REMATCH_REQUEST_TTL_MS);
+
+        rematchRequests.set(roomId, {
+          requesterWallet: String(userId),
+          targetWallet: opponentWallet,
+          timeoutHandle,
+        });
+
+        socket.emit("rematchPending", { roomId });
+        io.to(opponentSocket.id).emit("rematchRequested", {
+          roomId,
+          from: String(userId),
+        });
+      } catch (error) {
+        console.error("[REMATCH] requestRematch error:", error);
+        socket.emit("rematchUnavailable", { roomId, error: "Unable to request rematch" });
+      }
+    });
+
+    socket.on("respondRematch", async ({ roomId, accept }) => {
+      if (!userId || !roomId) {
+        socket.emit("rematchUnavailable", { roomId, error: "Invalid rematch response" });
+        return;
+      }
+
+      const existingRequest = rematchRequests.get(roomId);
+      if (!existingRequest) {
+        socket.emit("rematchUnavailable", { roomId, error: "Rematch request is no longer available" });
+        return;
+      }
+
+      if (existingRequest.targetWallet.toLowerCase() !== String(userId).toLowerCase()) {
+        socket.emit("rematchUnavailable", { roomId, error: "You cannot respond to this rematch request" });
+        return;
+      }
+
+      clearRematchRequest(roomId);
+
+      const requesterSocketId = userSocketMap.get(existingRequest.requesterWallet);
+      if (!accept) {
+        if (requesterSocketId) {
+          io.to(requesterSocketId).emit("rematchDeclined", { roomId });
+        }
+        return;
+      }
+
+      try {
+        const game = await prisma.game.findUnique({
+          where: { id: roomId },
+          include: {
+            whitePlayer: { select: { walletAddress: true } },
+            blackPlayer: { select: { walletAddress: true } },
+          },
+        });
+
+        if (!game || game.status !== "COMPLETED") {
+          socket.emit("rematchUnavailable", { roomId, error: "Game is not available for rematch" });
+          if (requesterSocketId) {
+            io.to(requesterSocketId).emit("rematchUnavailable", { roomId, error: "Game is not available for rematch" });
+          }
+          return;
+        }
+
+        if (game.onChainGameId || game.stakeToken || game.wagerAmount != null) {
+          socket.emit("rematchUnavailable", { roomId, error: "Staked games must start from the play page" });
+          if (requesterSocketId) {
+            io.to(requesterSocketId).emit("rematchUnavailable", { roomId, error: "Staked games must start from the play page" });
+          }
+          return;
+        }
+
+        const whiteWallet = game.whitePlayer.walletAddress;
+        const blackWallet = game.blackPlayer.walletAddress;
+
+        if (await hydrateActiveGame(existingRequest.requesterWallet) || await hydrateActiveGame(existingRequest.targetWallet)) {
+          const error = "One of the players already entered another game";
+          socket.emit("rematchUnavailable", { roomId, error });
+          if (requesterSocketId) {
+            io.to(requesterSocketId).emit("rematchUnavailable", { roomId, error });
+          }
+          return;
+        }
+
+        const newWhiteSocketId = userSocketMap.get(blackWallet);
+        const newBlackSocketId = userSocketMap.get(whiteWallet);
+        if (!newWhiteSocketId || !newBlackSocketId) {
+          const error = "Both players must still be online";
+          socket.emit("rematchUnavailable", { roomId, error });
+          if (requesterSocketId) {
+            io.to(requesterSocketId).emit("rematchUnavailable", { roomId, error });
+          }
+          return;
+        }
+
+        await createDirectRegularGame({
+          whiteWallet: blackWallet,
+          blackWallet: whiteWallet,
+          whiteSocketId: newWhiteSocketId,
+          blackSocketId: newBlackSocketId,
+          timeControl: game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL,
+        });
+      } catch (error) {
+        console.error("[REMATCH] respondRematch error:", error);
+        const message = "Unable to start rematch";
+        socket.emit("rematchUnavailable", { roomId, error: message });
+        if (requesterSocketId) {
+          io.to(requesterSocketId).emit("rematchUnavailable", { roomId, error: message });
+        }
+      }
     });
 
     socket.on("movePiece", ({ roomId, move, fen, moveRecord }) => {
@@ -2026,8 +2389,8 @@ app.prepare().then(async () => {
             : normalizeQueueTimeControl(timeControl ?? DEFAULT_GAME_TIME / 60);
 
           if (whiteUser && blackUser) {
-            const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, challengeTimeControl);
-            const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, challengeTimeControl);
+            const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, challengeTimeControl, !!stakeEnabled);
+            const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, challengeTimeControl, !!stakeEnabled);
             const game = await prisma.game.create({
               data: {
                 whitePlayerId: whiteUser.id,
@@ -2047,19 +2410,21 @@ app.prepare().then(async () => {
               s2.join(roomId);
               activeGames.set(s1.id, roomId);
               activeGames.set(s2.id, roomId);
+              removeFromAllQueues(s1.id);
+              removeFromAllQueues(s2.id);
 
               io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
               io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
               initGameTimer(roomId, getTimeControlSeconds(challengeTimeControl));
 
-              // Track active game for reconnection (in-memory + Redis)
-              userActiveGames.set(opponentId, { roomId, color: 'white', opponentWallet: myId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
-              userActiveGames.set(myId, { roomId, color: 'black', opponentWallet: opponentId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
-              const challengeInitState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', moves: [], chatMessages: [], timeControl: challengeTimeControl };
-              gameStateStore.set(roomId, challengeInitState);
-              setUserActiveGame(opponentId, userActiveGames.get(opponentId)).catch(() => { });
-              setUserActiveGame(myId, userActiveGames.get(myId)).catch(() => { });
-              setGameState(roomId, challengeInitState).catch(() => { });
+              trackActiveRegularGame({
+                roomId,
+                whiteWallet: opponentId,
+                blackWallet: myId,
+                whitePlayerRating,
+                blackPlayerRating,
+                timeControl: challengeTimeControl,
+              });
 
               console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
             }
@@ -2067,6 +2432,295 @@ app.prepare().then(async () => {
         } catch (error) {
           console.error("Error creating challenge game in DB:", error);
         }
+      }
+    });
+
+    socket.on("acceptOpenChallenge", async ({ challengeId }) => {
+      if (!userId || !challengeId) {
+        socket.emit("openChallengeError", { challengeId, error: "Invalid challenge request" });
+        return;
+      }
+
+      try {
+        const challengeSnapshot = await prisma.openChallenge.findUnique({
+          where: { id: challengeId },
+          include: {
+            creator: { select: { walletAddress: true } },
+          },
+        });
+
+        if (!challengeSnapshot) {
+          socket.emit("openChallengeError", { challengeId, error: "Challenge not found" });
+          return;
+        }
+
+        const joinerActiveGame = await hydrateActiveGame(String(userId));
+        if (joinerActiveGame) {
+          socket.emit("openChallengeError", {
+            challengeId,
+            error: "Finish your current game before joining a challenge",
+          });
+          return;
+        }
+
+        const creatorActiveGame = await hydrateActiveGame(challengeSnapshot.creator.walletAddress);
+        if (creatorActiveGame) {
+          await prisma.openChallenge.updateMany({
+            where: {
+              id: challengeId,
+              status: "OPEN",
+            },
+            data: {
+              status: "CANCELLED",
+              cancelledAt: new Date(),
+            },
+          });
+
+          socket.emit("openChallengeError", {
+            challengeId,
+            error: "Challenge creator is no longer available",
+          });
+          return;
+        }
+
+        const creatorSocketId = userSocketMap.get(challengeSnapshot.creator.walletAddress);
+        if (challengeSnapshot.staked && !creatorSocketId) {
+          socket.emit("openChallengeError", {
+            challengeId,
+            error: "Challenge creator must be online to complete the staked setup",
+          });
+          return;
+        }
+
+        const acceptedChallenge = await prisma.$transaction(async (tx) => {
+          const challenge = await tx.openChallenge.findUnique({
+            where: { id: challengeId },
+            include: {
+              creator: {
+                select: {
+                  id: true,
+                  walletAddress: true,
+                  rating: true,
+                  bulletRating: true,
+                  blitzRating: true,
+                  rapidRating: true,
+                  stakedRating: true,
+                },
+              },
+              acceptedBy: { select: { walletAddress: true } },
+            },
+          });
+
+          if (!challenge) {
+            throw new Error("Challenge not found");
+          }
+
+          if (challenge.creator.walletAddress.toLowerCase() === String(userId).toLowerCase()) {
+            throw new Error("You cannot accept your own challenge");
+          }
+
+          if (challenge.status === "OPEN" && challenge.expiresAt.getTime() <= Date.now()) {
+            await tx.openChallenge.update({
+              where: { id: challenge.id },
+              data: { status: "EXPIRED" },
+            });
+            throw new Error("Challenge link expired");
+          }
+
+          if (challenge.status === "CANCELLED") {
+            throw new Error("Challenge was cancelled");
+          }
+
+          if (challenge.status === "EXPIRED") {
+            throw new Error("Challenge link expired");
+          }
+
+          if (challenge.status === "ACCEPTED") {
+            if (challenge.acceptedBy?.walletAddress?.toLowerCase() === String(userId).toLowerCase() && challenge.roomId) {
+              return {
+                challenge,
+                game: null,
+                joiner: null,
+                alreadyAccepted: true,
+              };
+            }
+
+            throw new Error("Challenge is no longer available");
+          }
+
+          const joiner = await tx.user.upsert({
+            where: { walletAddress: String(userId) },
+            update: {},
+            create: { walletAddress: String(userId) },
+            select: {
+              id: true,
+              walletAddress: true,
+              rating: true,
+              bulletRating: true,
+              blitzRating: true,
+              rapidRating: true,
+              stakedRating: true,
+            },
+          });
+
+          const isStaked = !!challenge.staked;
+          const timeControl = isStaked
+            ? normalizeStakedTimeControl(challenge.timeControl)
+            : normalizeQueueTimeControl(challenge.timeControl);
+          const game = await tx.game.create({
+            data: {
+              whitePlayerId: challenge.creator.id,
+              blackPlayerId: joiner.id,
+              fen: "start",
+              status: isStaked ? "WAITING" : "IN_PROGRESS",
+              timeControl,
+              ...(isStaked
+                ? {
+                    stakeToken: challenge.stakeToken,
+                    wagerAmount: parseFloat(challenge.stakeAmount) || 0,
+                  }
+                : {}),
+            },
+          });
+
+          const updateResult = await tx.openChallenge.updateMany({
+            where: {
+              id: challenge.id,
+              status: "OPEN",
+              acceptedById: null,
+            },
+            data: {
+              status: "ACCEPTED",
+              acceptedById: joiner.id,
+              roomId: game.id,
+              acceptedAt: new Date(),
+            },
+          });
+
+          if (updateResult.count !== 1) {
+            throw new Error("Challenge is no longer available");
+          }
+
+          const finalizedChallenge = await tx.openChallenge.findUnique({
+            where: { id: challenge.id },
+            include: {
+              creator: {
+                select: {
+                  id: true,
+                  walletAddress: true,
+                  rating: true,
+                  bulletRating: true,
+                  blitzRating: true,
+                  rapidRating: true,
+                  stakedRating: true,
+                },
+              },
+              acceptedBy: { select: { walletAddress: true } },
+            },
+          });
+
+          return {
+            challenge: finalizedChallenge,
+            game,
+            joiner,
+            alreadyAccepted: false,
+          };
+        });
+
+        const acceptedRoomId = acceptedChallenge.challenge?.roomId;
+        if (!acceptedRoomId) {
+          socket.emit("openChallengeError", { challengeId, error: "Challenge room was not created" });
+          return;
+        }
+
+        const isStakedChallenge = !!acceptedChallenge.challenge.staked;
+        const timeControl = isStakedChallenge
+          ? normalizeStakedTimeControl(acceptedChallenge.challenge.timeControl)
+          : normalizeQueueTimeControl(acceptedChallenge.challenge.timeControl);
+
+        if (!acceptedChallenge.alreadyAccepted) {
+          const whitePlayerRating = getPlayerRatingForTimeControl(
+            acceptedChallenge.challenge.creator,
+            timeControl,
+            isStakedChallenge,
+          );
+          const blackPlayerRating = getPlayerRatingForTimeControl(
+            acceptedChallenge.joiner,
+            timeControl,
+            isStakedChallenge,
+          );
+
+          trackActiveRegularGame({
+            roomId: acceptedRoomId,
+            whiteWallet: acceptedChallenge.challenge.creator.walletAddress,
+            blackWallet: acceptedChallenge.joiner.walletAddress,
+            whitePlayerRating,
+            blackPlayerRating,
+            timeControl,
+          });
+          if (!isStakedChallenge) {
+            initGameTimer(acceptedRoomId, getTimeControlSeconds(timeControl));
+          }
+
+          const creatorSocket = creatorSocketId ? io.sockets.sockets.get(creatorSocketId) : null;
+          if (creatorSocket) {
+            creatorSocket.join(acceptedRoomId);
+            activeGames.set(creatorSocket.id, acceptedRoomId);
+            removeFromAllQueues(creatorSocket.id);
+          }
+
+          socket.join(acceptedRoomId);
+          activeGames.set(socket.id, acceptedRoomId);
+          removeFromAllQueues(socket.id);
+
+          const creatorPayload = {
+            challengeId,
+            roomId: acceptedRoomId,
+            color: "white",
+            opponent: acceptedChallenge.joiner.walletAddress,
+            playerRating: whitePlayerRating,
+            opponentRating: blackPlayerRating,
+            timeControl,
+            staked: isStakedChallenge,
+            stakeToken: acceptedChallenge.challenge.stakeToken ?? null,
+            stakeAmount: acceptedChallenge.challenge.stakeAmount ?? null,
+          };
+          const joinerPayload = {
+            challengeId,
+            roomId: acceptedRoomId,
+            color: "black",
+            opponent: acceptedChallenge.challenge.creator.walletAddress,
+            playerRating: blackPlayerRating,
+            opponentRating: whitePlayerRating,
+            timeControl,
+            staked: isStakedChallenge,
+            stakeToken: acceptedChallenge.challenge.stakeToken ?? null,
+            stakeAmount: acceptedChallenge.challenge.stakeAmount ?? null,
+          };
+
+          if (creatorSocketId) {
+            io.to(creatorSocketId).emit("openChallengeAccepted", creatorPayload);
+          }
+          socket.emit("openChallengeAccepted", joinerPayload);
+
+          console.log(`Open challenge accepted: ${acceptedChallenge.challenge.creator.walletAddress} vs ${acceptedChallenge.joiner.walletAddress} in ${acceptedRoomId}`);
+          return;
+        }
+
+        socket.emit("openChallengeAccepted", {
+          challengeId,
+          roomId: acceptedRoomId,
+          color: "black",
+          opponent: acceptedChallenge.challenge.creator.walletAddress,
+          timeControl,
+          staked: isStakedChallenge,
+          stakeToken: acceptedChallenge.challenge.stakeToken ?? null,
+          stakeAmount: acceptedChallenge.challenge.stakeAmount ?? null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to accept challenge";
+        socket.emit("openChallengeError", { challengeId, error: message });
+        console.error("[OPEN CHALLENGE] accept error:", error);
       }
     });
 
@@ -2453,6 +3107,20 @@ app.prepare().then(async () => {
       }
 
       if (userId) {
+        for (const [pendingRoomId, request] of rematchRequests.entries()) {
+          const normalizedUserId = String(userId).toLowerCase();
+          const requesterMatches = request.requesterWallet.toLowerCase() === normalizedUserId;
+          const targetMatches = request.targetWallet.toLowerCase() === normalizedUserId;
+          if (!requesterMatches && !targetMatches) continue;
+
+          clearRematchRequest(pendingRoomId);
+          const otherWallet = requesterMatches ? request.targetWallet : request.requesterWallet;
+          const otherSocketId = userSocketMap.get(otherWallet);
+          if (otherSocketId) {
+            io.to(otherSocketId).emit("rematchExpired", { roomId: pendingRoomId });
+          }
+        }
+
         userSocketMap.delete(userId);
         deleteUserSocket(userId).catch(() => { }); // mirror to Redis
       } else {

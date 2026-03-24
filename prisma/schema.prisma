@@ -14,6 +14,7 @@ model User {
   bulletRating  Int       @default(1200)
   blitzRating   Int       @default(1200)
   rapidRating   Int       @default(1200)
+  stakedRating  Int       @default(1200)
   accounts      Account[]
   sessions      Session[]
 
@@ -23,6 +24,8 @@ model User {
   gamesAsWhite Game[] @relation("GamesAsWhite")
   gamesAsBlack Game[] @relation("GamesAsBlack")
   gamesWon     Game[] @relation("GamesWon")
+  openChallengesCreated  OpenChallenge[] @relation("OpenChallengeCreator")
+  openChallengesAccepted OpenChallenge[] @relation("OpenChallengeAccepter")
 
   // Tournament relations
   createdTournaments  Tournament[]            @relation("TournamentCreator")
@@ -94,6 +97,36 @@ enum GameStatus {
   COMPLETED
   ABORTED
   DRAW
+}
+
+model OpenChallenge {
+  id           String              @id @default(cuid())
+  creatorId    Int
+  acceptedById Int?
+  timeControl  Int                 @default(3)
+  staked       Boolean             @default(false)
+  stakeToken   String?
+  stakeAmount  String?
+  status       OpenChallengeStatus @default(OPEN)
+  roomId       String?             @unique
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  cancelledAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  creator    User  @relation("OpenChallengeCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  acceptedBy User? @relation("OpenChallengeAccepter", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([creatorId, status])
+  @@index([status, expiresAt])
+}
+
+enum OpenChallengeStatus {
+  OPEN
+  ACCEPTED
+  CANCELLED
+  EXPIRED
 }
 
 // ─── Tournament Models ───

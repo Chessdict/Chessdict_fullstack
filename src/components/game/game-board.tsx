@@ -20,6 +20,7 @@ import {
   getAutomaticDrawReason,
 } from "@/lib/game-result-display";
 import { PromotionChooser } from "@/components/chess/promotion-chooser";
+import { PremoveGhostOverlay } from "@/components/chess/premove-ghost-overlay";
 import {
   getPromotionSelection,
   type PromotionPiece,
@@ -60,6 +61,11 @@ const pieceSymbols: Record<string, { w: string; b: string }> = {
 type SelectionMode = "move" | "premove" | null;
 const MOVE_ANIMATION_DURATION_MS = 200;
 const INITIAL_BOARD_FEN = new Chess().fen();
+
+function isPromotionDestination(square: string, color: "w" | "b") {
+  const rank = square[1];
+  return (color === "w" && rank === "8") || (color === "b" && rank === "1");
+}
 
 export function GameBoard() {
   const {
@@ -276,18 +282,24 @@ export function GameBoard() {
   }, [playPlayerMove, promotionSelection]);
 
   const premoveSquares = useMemo<Record<string, React.CSSProperties>>(() => {
-    if (!queuedPremove) return {};
+    return {};
+  }, []);
 
-    return {
-      [queuedPremove.from]: {
-        background: "rgba(59, 130, 246, 0.35)",
-      },
-      [queuedPremove.to]: {
-        background: "radial-gradient(circle, rgba(59,130,246,0.35) 28%, transparent 30%)",
-        borderRadius: "50%",
-      },
-    };
-  }, [queuedPremove]);
+  const queuedPremovePieceCode = useMemo(() => {
+    if (!queuedPremove) return null;
+
+    const sourcePiece = game.get(queuedPremove.from as any);
+    if (!sourcePiece) return null;
+
+    const promotedPiece =
+      sourcePiece.type === "p" &&
+      queuedPremove.promotion &&
+      isPromotionDestination(queuedPremove.to, sourcePiece.color)
+        ? queuedPremove.promotion
+        : sourcePiece.type;
+
+    return `${sourcePiece.color}${promotedPiece.toUpperCase()}`;
+  }, [fen, game, queuedPremove]);
 
   // Handle Game Initialization / Resets
   useEffect(() => {
@@ -794,6 +806,11 @@ export function GameBoard() {
 
     const isPlayersTurn = game.turn() === playerTurnCode;
 
+    if (!isPlayersTurn && queuedPremove) {
+      clearQueuedPremove();
+      return;
+    }
+
     if (sourceSquare) {
       if (sourceSquare === square) {
         clearSelection();
@@ -851,6 +868,10 @@ export function GameBoard() {
     if (!playerTurnCode) return false;
 
     if (game.turn() !== playerTurnCode) {
+      if (queuedPremove) {
+        clearQueuedPremove();
+        return false;
+      }
       tryQueuePremove(source, target);
       return false;
     }
@@ -859,7 +880,7 @@ export function GameBoard() {
 
     const result = playPlayerMove({ from: source, to: target, promotion: "q" });
     return !!result;
-  }, [game, playerTurnCode, playPlayerMove, promotionSelection, requestPromotion, status, tryQueuePremove]);
+  }, [clearQueuedPremove, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -1051,6 +1072,15 @@ export function GameBoard() {
             }}
           />
 
+          {queuedPremove ? (
+            <PremoveGhostOverlay
+              from={queuedPremove.from}
+              to={queuedPremove.to}
+              orientation={orientation}
+              pieceCode={queuedPremovePieceCode}
+            />
+          ) : null}
+
           {promotionSelection ? (
             <PromotionChooser
               targetSquare={promotionSelection.to}
@@ -1181,15 +1211,6 @@ export function GameBoard() {
                       ? 'Waiting for opponent'
                       : 'Online'}
               </p>
-              {status === "in-progress" && queuedPremove ? (
-                <button
-                  type="button"
-                  onClick={clearQueuedPremove}
-                  className="rounded-sm text-[11px] font-medium text-blue-300/80 transition hover:text-blue-200"
-                >
-                  Cancel premove
-                </button>
-              ) : null}
             </div>
             {playerMaterialDisplay ? (
               <MaterialBalanceStrip

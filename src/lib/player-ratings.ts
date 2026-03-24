@@ -8,9 +8,10 @@ type RatingCarrier = {
   bulletRating?: number | null;
   blitzRating?: number | null;
   rapidRating?: number | null;
+  stakedRating?: number | null;
 };
 
-export type RatingField = "bulletRating" | "blitzRating" | "rapidRating";
+export type RatingField = "bulletRating" | "blitzRating" | "rapidRating" | "stakedRating";
 
 export function getRatingCategoryForTimeControl(
   minutes?: number | string | null,
@@ -20,7 +21,12 @@ export function getRatingCategoryForTimeControl(
 
 export function getRatingFieldForTimeControl(
   minutes?: number | string | null,
+  isStaked = false,
 ): RatingField {
+  if (isStaked) {
+    return "stakedRating";
+  }
+
   const category = getRatingCategoryForTimeControl(minutes);
 
   switch (category) {
@@ -37,10 +43,11 @@ export function getRatingFieldForTimeControl(
 export function getPlayerRatingForTimeControl(
   player: RatingCarrier | null | undefined,
   minutes?: number | string | null,
+  isStaked = false,
 ): number {
   if (!player) return 1200;
 
-  const ratingField = getRatingFieldForTimeControl(minutes);
+  const ratingField = getRatingFieldForTimeControl(minutes, isStaked);
   const rating = player[ratingField];
 
   if (typeof rating === "number" && Number.isFinite(rating)) {
@@ -57,5 +64,6 @@ export function getAllRatings(player: RatingCarrier | null | undefined) {
     bullet: getPlayerRatingForTimeControl(player, 1),
     blitz: getPlayerRatingForTimeControl(player, 3),
     rapid: getPlayerRatingForTimeControl(player, 10),
+    staked: getPlayerRatingForTimeControl(player, 3, true),
   };
 }

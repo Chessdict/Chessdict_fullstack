@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, use } from "react";
+import { useEffect, use, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { GameBoard } from "@/components/game/game-board";
 import { GameInfoPanel } from "@/components/game/game-info-panel";
@@ -50,6 +50,45 @@ export default function GamePage({
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
   const setInitialTime = useGameStore((s) => s.setInitialTime);
 
+  const enterMatchedGame = useCallback((data: {
+    roomId: string;
+    color: string;
+    opponent: string;
+    opponentRating: number;
+    playerRating: number;
+    timeControl?: number;
+  }) => {
+    const timeControlMinutes = normalizeTimeControlMinutes(data.timeControl);
+    const initialSeconds = getTimeControlSeconds(timeControlMinutes);
+
+    if (socket && roomId) {
+      socket.emit("leaveRoom", { roomId });
+    }
+
+    clearMatchState();
+    setInitialTime(initialSeconds);
+    setOnChainGameId(null);
+    setStakeToken(null);
+    setStakeAmountRaw(null);
+    setRoomId(data.roomId);
+    setPlayerColor(data.color as "white" | "black");
+    setOpponent({
+      address: data.opponent,
+      rating: data.opponentRating,
+      memoji: getMemojiForAddress(data.opponent),
+    });
+    if (address) {
+      setPlayer({
+        address,
+        rating: data.playerRating,
+        memoji: getMemojiForAddress(address),
+      });
+    }
+    if (!gameMode) setGameMode("online");
+    setStatus("in-progress");
+    router.push(`/play/game/${data.roomId}`);
+  }, [address, clearMatchState, gameMode, roomId, router, setGameMode, setInitialTime, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus, socket]);
+
   // Login with wallet on mount
   useEffect(() => {
     if (isConnected && address) {
@@ -74,6 +113,17 @@ export default function GamePage({
   // This listener persists because it only depends on socket & gameId (not isSocketConnected)
   useEffect(() => {
     if (!socket || !gameId) return;
+
+    const handleMatchFound = (data: {
+      roomId: string;
+      color: string;
+      opponent: string;
+      opponentRating: number;
+      playerRating: number;
+      timeControl?: number;
+    }) => {
+      enterMatchedGame(data);
+    };
 
     const handleGameRejoined = (data: {
       roomId: string;
@@ -116,11 +166,13 @@ export default function GamePage({
       setStatus("in-progress");
     };
 
+    socket.on("matchFound", handleMatchFound);
     socket.on("gameRejoined", handleGameRejoined);
     return () => {
+      socket.off("matchFound", handleMatchFound);
       socket.off("gameRejoined", handleGameRejoined);
     };
-  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setInitialTime]);
+  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, enterMatchedGame, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setInitialTime]);
 
   // Effect 2: Emit rejoinGame on initial page load AND on every socket reconnection
   // This ensures we always get fresh game state + chat even after tab close/reopen

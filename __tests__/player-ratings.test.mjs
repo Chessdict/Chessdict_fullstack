@@ -13,6 +13,7 @@ describe("player rating helpers", () => {
     bulletRating: 1095,
     blitzRating: 1320,
     rapidRating: 1460,
+    stakedRating: 1385,
   };
 
   it("maps supported time controls to the expected category and field", () => {
@@ -24,6 +25,7 @@ describe("player rating helpers", () => {
     expect(getRatingFieldForTimeControl(1)).toBe("bulletRating");
     expect(getRatingFieldForTimeControl(3)).toBe("blitzRating");
     expect(getRatingFieldForTimeControl(10)).toBe("rapidRating");
+    expect(getRatingFieldForTimeControl(3, true)).toBe("stakedRating");
   });
 
   it("returns the per-speed rating for the requested time control", () => {
@@ -31,6 +33,8 @@ describe("player rating helpers", () => {
     expect(getPlayerRatingForTimeControl(player, 2)).toBe(1095);
     expect(getPlayerRatingForTimeControl(player, 3)).toBe(1320);
     expect(getPlayerRatingForTimeControl(player, 10)).toBe(1460);
+    expect(getPlayerRatingForTimeControl(player, 1, true)).toBe(1385);
+    expect(getPlayerRatingForTimeControl(player, 3, true)).toBe(1385);
   });
 
   it("falls back to the legacy rating when per-speed fields are missing", () => {
@@ -43,6 +47,7 @@ describe("player rating helpers", () => {
       bullet: 1095,
       blitz: 1320,
       rapid: 1460,
+      staked: 1385,
     });
   });
 });
