@@ -37,7 +37,7 @@ function TokenRow({ token }: { token: `0x${string}` }) {
 export default function AdminPage() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { switchChain } = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient({ chainId: CHESSDICT_CHAIN_ID });
   const [customToken, setCustomToken] = useState("");
@@ -69,7 +69,7 @@ export default function AdminPage() {
       setIsLoading(true);
       if (chainId !== CHESSDICT_CHAIN_ID) {
         toast.info("Switching to Base Sepolia…");
-        await switchChain({ chainId: CHESSDICT_CHAIN_ID });
+        await switchChainAsync({ chainId: CHESSDICT_CHAIN_ID });
       }
       toast.info(`Adding token ${tokenAddress.slice(0, 8)}…`);
       const hash = await writeContractAsync({

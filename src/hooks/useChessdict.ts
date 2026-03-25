@@ -7,6 +7,7 @@ import {
   useChainId,
   useSwitchChain,
   usePublicClient,
+  useConnectors,
 } from "wagmi";
 import {
   chessdictAbi,
@@ -117,21 +118,53 @@ export function useTokenAllowance(
  *  - `executeWrite`       — simple write → confirm flow (no approval needed)
  */
 export function useChessdict() {
-  const { address } = useAccount();
+  const { address, connector, status } = useAccount();
   const chainId = useChainId();
-  const { switchChain } = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
+  const connectors = useConnectors();
   const publicClient = usePublicClient({ chainId: CHESSDICT_CHAIN_ID });
   const { writeContractAsync } = useWriteContract();
 
   const [isLoading, setIsLoading] = useState(false);
 
+  const activeConnector =
+    (connector
+      ? connectors.find((item) => item.uid === connector.uid) ??
+        connectors.find((item) => item.id === connector.id)
+      : undefined) ?? connector;
+
   // ── Private helpers ─────────────────────────────────────────────────────────
 
+  const requireWalletConnector = useCallback(() => {
+    if (!address) {
+      throw new Error("Please connect your wallet first");
+    }
+
+    if (status !== "connected") {
+      throw new Error("Wallet is still reconnecting. Please wait a moment, then try again.");
+    }
+
+    if (
+      !activeConnector ||
+      typeof activeConnector.getChainId !== "function" ||
+      typeof activeConnector.getAccounts !== "function"
+    ) {
+      throw new Error("Wallet connection is stale. Disconnect and reconnect your wallet.");
+    }
+
+    return activeConnector;
+  }, [activeConnector, address, status]);
+
   const ensureNetwork = useCallback(async () => {
+    const currentConnector = requireWalletConnector();
+
     if (chainId !== CHESSDICT_CHAIN_ID) {
       toast.info(`Switching to ${TARGET_CHAIN.name}…`);
       try {
-        await switchChain({ chainId: CHESSDICT_CHAIN_ID });
+        await switchChainAsync({
+          chainId: CHESSDICT_CHAIN_ID,
+          connector: currentConnector,
+        });
       } catch (err: any) {
         // 4902 = chain not added to wallet — add it first, then switch
         if (err?.code === 4902 || err?.cause?.code === 4902) {
@@ -150,17 +183,22 @@ export function useChessdict() {
               }],
             });
             // Retry switch after adding
-            await switchChain({ chainId: CHESSDICT_CHAIN_ID });
+            await switchChainAsync({
+              chainId: CHESSDICT_CHAIN_ID,
+              connector: currentConnector,
+            });
           }
         } else {
           throw err;
         }
       }
     }
-  }, [chainId, switchChain]);
+  }, [chainId, requireWalletConnector, switchChainAsync]);
 
   const approveToken = useCallback(
     async (tokenAddress: `0x${string}`, amount: bigint) => {
+      const currentConnector = requireWalletConnector();
+
       toast.info("Step 1/2: Approving token…");
       const hash = await writeContractAsync({
         address: tokenAddress,
@@ -168,11 +206,12 @@ export function useChessdict() {
         functionName: "approve",
         args: [CHESSDICT_ADDRESS, amount],
         chainId: CHESSDICT_CHAIN_ID,
+        connector: currentConnector,
         gas: BigInt(100_000),
       });
       await publicClient?.waitForTransactionReceipt({ hash });
     },
-    [writeContractAsync, publicClient],
+    [publicClient, requireWalletConnector, writeContractAsync],
   );
 
   /** Check current allowance for the Chessdict contract. */
@@ -288,12 +327,14 @@ export function useChessdict() {
         }
 
         toast.info("Creating game on-chain…");
+        const currentConnector = requireWalletConnector();
         const hash = await writeContractAsync({
           address: CHESSDICT_ADDRESS,
           abi: chessdictAbi,
           functionName: "createGameSingle",
           args: [tokenAddress, stakeWei],
           chainId: CHESSDICT_CHAIN_ID,
+          connector: currentConnector,
           gas: BigInt(300_000),
         });
         const receipt = await publicClient?.waitForTransactionReceipt({ hash });
@@ -327,7 +368,7 @@ export function useChessdict() {
         setIsLoading(false);
       }
     },
-    [address, ensureNetwork, approveToken, checkAllowance, publicClient, writeContractAsync],
+    [address, ensureNetwork, approveToken, checkAllowance, publicClient, requireWalletConnector, writeContractAsync],
   );
 
   const joinGameSingle = useCallback(
@@ -348,12 +389,13 @@ export function useChessdict() {
             functionName: "joinGameSingle",
             args: [gameId],
             chainId: CHESSDICT_CHAIN_ID,
+            connector: requireWalletConnector(),
             gas: BigInt(300_000),
           }),
         "Step 2/2: Joining game on-chain…",
       );
     },
-    [executeStakedWrite, writeContractAsync],
+    [executeStakedWrite, requireWalletConnector, writeContractAsync],
   );
 
   const cancelGameSingle = useCallback(
@@ -366,12 +408,13 @@ export function useChessdict() {
             functionName: "cancelGameSingle",
             args: [gameId],
             chainId: CHESSDICT_CHAIN_ID,
+            connector: requireWalletConnector(),
             gas: BigInt(200_000),
           }),
         "Cancelling game…",
       );
     },
-    [executeWrite, writeContractAsync],
+    [executeWrite, requireWalletConnector, writeContractAsync],
   );
 
   const claimPrizeSingle = useCallback(
@@ -384,12 +427,13 @@ export function useChessdict() {
             functionName: "claimPrizeSingle",
             args: [gameId],
             chainId: CHESSDICT_CHAIN_ID,
+            connector: requireWalletConnector(),
             gas: BigInt(200_000),
           }),
         "Claiming prize…",
       );
     },
-    [executeWrite, writeContractAsync],
+    [executeWrite, requireWalletConnector, writeContractAsync],
   );
 
   return {
