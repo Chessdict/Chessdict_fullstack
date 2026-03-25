@@ -61,7 +61,7 @@ export function Navbar() {
   return (
     <header className="w-full">
       {/* Desktop Navbar */}
-      <div className={`${pathname === '/' ? 'fixed inset-x-0 top-6' : 'relative py-6'} pointer-events-none z-2000 justify-center px-4 hidden md:flex`}>
+      <div className={`${pathname === '/' ? 'fixed inset-x-0 top-6' : 'relative py-6'} pointer-events-none z-2000 justify-center px-4 hidden lg:flex`}>
         <motion.nav
           className="pointer-events-auto nav-glass relative flex h-21.5 w-full max-w-6xl items-center justify-between rounded-full px-8"
           initial={{ opacity: 0, y: -20 }}
@@ -112,7 +112,7 @@ export function Navbar() {
       </div>
 
       {/* Mobile Navbar */}
-      <div className="pointer-events-none relative z-30 flex justify-center py-4 md:hidden">
+      <div className={`${pathname === '/' ? 'fixed inset-x-0 top-6' : 'relative py-4'} pointer-events-none px-4 z-30 flex justify-center lg:hidden`}>
         <motion.nav
           className="pointer-events-auto nav-glass relative flex h-12.5 w-full items-center justify-between rounded-full px-2"
           initial={{ opacity: 0, y: -20 }}
