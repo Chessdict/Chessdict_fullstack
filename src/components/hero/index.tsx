@@ -184,7 +184,7 @@ export function Hero() {
           />
 
         </div>
-        <div className="absolute top-0 md:hidden">
+        <div className="w-full absolute top-0 md:hidden">
           <Image
             src="/svgs/hero-navbar-bg-color-mobile.svg"
             alt="hero-navbar-bg-color"
