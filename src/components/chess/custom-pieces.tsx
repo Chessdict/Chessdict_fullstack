@@ -1,4 +1,5 @@
 const PIECE_CODES = ["K", "Q", "R", "B", "N", "P"] as const;
+const PIECE_SCALE = 1.13;
 
 type PieceCode = `w${typeof PIECE_CODES[number]}` | `b${typeof PIECE_CODES[number]}`;
 
@@ -41,6 +42,8 @@ function renderPiece(code: PieceCode, props?: PieceProps) {
           height: layout.height,
           display: "grid",
           placeItems: "center",
+          transform: `scale(${PIECE_SCALE})`,
+          transformOrigin: "center",
         }}
       >
         <img
