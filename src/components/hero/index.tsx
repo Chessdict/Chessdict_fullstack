@@ -58,7 +58,7 @@ export function Hero() {
   return (
     <div className="w-full relative z-10 flex flex-col items-center">
       {/* ─── Hero Section ─── */}
-      <section className="w-full  flex flex-col items-center px-4 pt-28 sm:pt-36 pb-16 sm:pb-24 text-center max-w-7xl mx-auto">
+      <section className="w-full relative flex flex-col items-center px-0 md:px-4 pt-28 mb-132 md:mb-100 sm:pt-36 pb-16 sm:pb-24 text-center max-w-7xl mx-auto">
         {/* Badge */}
         <motion.div
           custom={0}
@@ -91,7 +91,7 @@ export function Hero() {
           variants={fadeUp}
           initial="hidden"
           animate="visible"
-          className="text-4xl sm:text-5xl md:text-7xl font-bold leading-[1.1] tracking-tight"
+          className="text-[50px] sm:text-5xl md:text-[82px] font-bold leading-[1.1] tracking-tight"
         >
           Chess{" "}
           <span className="text-transparent bg-clip-text bg-linear-to-r from-white to-brand-primary-200">
@@ -110,7 +110,7 @@ export function Hero() {
           variants={fadeUp}
           initial="hidden"
           animate="visible"
-          className="mt-5 max-w-lg text-sm sm:text-base text-white/60 leading-relaxed"
+          className="mt-5 max-w-lg text-sm sm:text-base text-white/60 leading-relaxed px-4 md:px-0"
         >
           Compete with players around the world, whether you&apos;re a grandmaster or
           you&apos;re just getting started there&apos;s a place to earn whilst having fun
@@ -126,21 +126,28 @@ export function Hero() {
           className="mt-8"
         >
           <Link href="/play">
-            <GlassButton className="text-sm sm:text-base">
+            <div className="hidden md:block">
+              <GlassButton className="text-sm sm:text-base">
+                Get started
+              </GlassButton>
+            </div>
+            <div className="md:hidden h-14 border-[0.8px] border-white group relative z-100 inline-flex items-center justify-center rounded-full px-14 text-sm tracking-wide text-white">
               Get started
-            </GlassButton>
+            </div>
           </Link>
         </motion.div>
 
         {/* Browser Mockup */}
-        <motion.div
-          custom={0.55}
-          variants={fadeUp}
-          initial="hidden"
-          animate="visible"
+        <div
           className="mt-0 sm:mt-0 w-full"
         >
-          <div className="hidden md:block w-full h-[603px]">
+          {/* Desktop image */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.9, delay: 0.55, ease: EASE }}
+            className="absolute z-50 right-0 left-0 -bottom-96 hidden md:block w-full h-[603px]"
+          >
             <Image
               src="/images/hero-image.svg"
               alt="hero-image"
@@ -148,21 +155,38 @@ export function Hero() {
               height={100}
               className="w-full h-full"
             />
-          </div>
-          <div className="relative md:hidden w-full h-[603px]">
+          </motion.div>
+
+          {/* Mobile image */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.9, delay: 0.55, ease: EASE }}
+            className="absolute z-50 right-0 left-0 -bottom-128 md:hidden w-full h-[603px]"
+          >
             <Image
               src="/images/hero-image-mobile.svg"
               alt="hero-image"
               width={100}
               height={100}
-              className="w-full h-full"
+              className="w-full h-full object-cover"
             />
-          </div>
-        </motion.div>
+          </motion.div>
+        </div>
 
-        <div className="absolute top-0">
+        <div className="absolute top-0 hidden md:block">
           <Image
             src="/svgs/hero-navbar-bg-color.svg"
+            alt="hero-navbar-bg-color"
+            width={100}
+            height={100}
+            className="w-full h-full"
+          />
+
+        </div>
+        <div className="absolute top-0 md:hidden">
+          <Image
+            src="/svgs/hero-navbar-bg-color-mobile.svg"
             alt="hero-navbar-bg-color"
             width={100}
             height={100}
@@ -180,7 +204,7 @@ export function Hero() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: "-80px" }}
               transition={{ duration: 0.7, ease: EASE }}
-              className="text-3xl sm:text-4xl md:text-5xl font-bold"
+              className="text-[44px] sm:text-4xl md:text-[60px] font-bold"
             >
               <span className="text-transparent bg-clip-text bg-linear-to-r from-white to-brand-primary-200">
                 How it{" "}
@@ -192,7 +216,7 @@ export function Hero() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: "-80px" }}
               transition={{ duration: 0.6, delay: 0.1, ease: EASE }}
-              className="mt-3 text-sm text-white/50 max-w-md"
+              className="mt-3 text-xs md:text-sm text-white/50 max-w-md"
             >
               Start playing competitive chess on-chain in just a few simple steps.
             </motion.p>
