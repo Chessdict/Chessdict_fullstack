@@ -246,6 +246,11 @@ export function GameBoard() {
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
+  const [boardKey, setBoardKey] = useState(0);
+
+  const resetBoardInteraction = useCallback(() => {
+    setBoardKey((previous) => previous + 1);
+  }, []);
 
   // Compute persistent check highlight from current position
   const checkSquare = useMemo<Record<string, React.CSSProperties>>(() => {
@@ -291,7 +296,7 @@ export function GameBoard() {
     selectionModeRef.current = selectionMode;
   }, [sourceSquare, selectionMode]);
 
-  const safeMove = useCallback((move: any, options?: { preserveSelection?: boolean }) => {
+  const safeMove = useCallback((move: any, options?: { preserveSelection?: boolean; resetBoardInteraction?: boolean }) => {
     try {
       const result = game.move(move);
       if (result) {
@@ -319,6 +324,10 @@ export function GameBoard() {
           clearSelection();
         }
 
+        if (options?.resetBoardInteraction) {
+          resetBoardInteraction();
+        }
+
         // Play sound based on move type
         playMoveSound(result);
 
@@ -328,7 +337,7 @@ export function GameBoard() {
       console.error(e);
     }
     return null;
-  }, [game, syncState, addMove, clearSelection, playMoveSound]);
+  }, [game, syncState, addMove, clearSelection, playMoveSound, resetBoardInteraction]);
 
   const emitPlayerMove = useCallback((move: Premove, result: Move) => {
     if (!isMultiplayer || !roomId) return;
@@ -431,8 +440,9 @@ export function GameBoard() {
       setQueuedPremove(null);
       setPromotionSelection(null);
       setLastMoveSquares({});
+      resetBoardInteraction();
     }
-  }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed]);
+  }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed, resetBoardInteraction]);
 
   const previousRoomIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -451,10 +461,11 @@ export function GameBoard() {
       setQueuedPremove(null);
       setPromotionSelection(null);
       setLastMoveSquares({});
+      resetBoardInteraction();
     }
 
     previousRoomIdRef.current = roomId;
-  }, [roomId, game, syncState, clearGameOver, clearSelection, setGameResultModalDismissed]);
+  }, [roomId, game, syncState, clearGameOver, clearSelection, setGameResultModalDismissed, resetBoardInteraction]);
 
   // Load rejoined game state (after browser refresh reconnection)
   useEffect(() => {
@@ -467,6 +478,7 @@ export function GameBoard() {
         clearSelection();
         setQueuedPremove(null);
         setPromotionSelection(null);
+        resetBoardInteraction();
         clearRejoinData();
         console.log("[CLIENT] Rejoined game state loaded, FEN:", rejoinFen);
       } catch (e) {
@@ -474,7 +486,7 @@ export function GameBoard() {
         clearRejoinData();
       }
     }
-  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData, clearSelection]);
+  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData, clearSelection, resetBoardInteraction]);
 
   useEffect(() => {
     if (status !== "in-progress" || gameOver) {
@@ -578,7 +590,7 @@ export function GameBoard() {
       const timeoutId = setTimeout(() => {
         const move = getBestMove(new Chess(game.fen()), difficulty);
         if (move) {
-          safeMove(move, { preserveSelection: true });
+          safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
         }
       }, 600);
       return () => clearTimeout(timeoutId);
@@ -652,7 +664,7 @@ export function GameBoard() {
     if (!socket || !isMultiplayer || !roomId) return;
 
     const handleOpponentMove = (move: any) => {
-      safeMove(move, { preserveSelection: true });
+      safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
     };
 
     socket.on('opponentMove', handleOpponentMove);
@@ -1065,24 +1077,41 @@ export function GameBoard() {
 
   // Primary Move Handler for Chessboard (Drag and Drop)
   const onDrop = useCallback((source: string, target: string) => {
-    if (status !== "in-progress" || promotionSelection) return false;
-    if (game.isGameOver()) return false;
-    if (!playerTurnCode) return false;
+    if (status !== "in-progress" || promotionSelection) {
+      resetBoardInteraction();
+      return false;
+    }
+    if (game.isGameOver()) {
+      resetBoardInteraction();
+      return false;
+    }
+    if (!playerTurnCode) {
+      resetBoardInteraction();
+      return false;
+    }
 
     if (game.turn() !== playerTurnCode) {
       if (queuedPremove) {
         clearQueuedPremove();
+        resetBoardInteraction();
         return false;
       }
       tryQueuePremove(source, target);
+      resetBoardInteraction();
       return false;
     }
 
-    if (requestPromotion(source, target)) return false;
+    if (requestPromotion(source, target)) {
+      resetBoardInteraction();
+      return false;
+    }
 
     const result = playPlayerMove({ from: source, to: target, promotion: "q" });
+    if (!result) {
+      resetBoardInteraction();
+    }
     return !!result;
-  }, [clearQueuedPremove, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, status, tryQueuePremove]);
+  }, [clearQueuedPremove, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -1139,13 +1168,11 @@ export function GameBoard() {
     return Math.floor(viewMoveIndex / 2);
   }, [mobileMovePairs.length, viewMoveIndex]);
 
-  // Force remount counter when color changes
-  const [boardKey, setBoardKey] = useState(0);
   useEffect(() => {
     if (playerColor) {
-      setBoardKey(prev => prev + 1);
+      resetBoardInteraction();
     }
-  }, [playerColor]);
+  }, [playerColor, resetBoardInteraction]);
 
   // Debug: Log state for resign button visibility
   useEffect(() => {
@@ -1311,6 +1338,7 @@ export function GameBoard() {
               showAnimations: true,
               animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
               dragActivationDistance: isMobileViewport ? 8 : 1,
+              allowDragOffBoard: false,
               allowDragging:
                 status === 'in-progress' &&
                 !!effectiveColor &&

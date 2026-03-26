@@ -6,17 +6,22 @@ import { GlassButton } from "./glass-button";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { User, LogOut, ChevronDown, X, Wallet } from "lucide-react";
 import { useTokenBalance, useTokenDecimals, useTokenSymbol } from "@/hooks/useChessdict";
 import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
 import { formatUnits } from "viem";
 
-export function ConnectWallet() {
+type ConnectWalletProps = {
+  onActionComplete?: () => void;
+};
+
+export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
   const { address, isConnected, connector } = useAccount();
   const { openConnectModal } = useConnectModal();
-  const { disconnectAsync, connectors } = useDisconnect();
+  const { disconnectAsync } = useDisconnect();
   const router = useRouter();
+  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const buttonRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -91,14 +96,13 @@ export function ConnectWallet() {
 
     const clearStorage = (storage: Storage) => {
       const keysToRemove = Object.keys(storage).filter((key) => {
+        const normalizedKey = key.toLowerCase();
         return (
-          key === "wagmi.store" ||
-          key === "wagmi.recentConnectorId" ||
-          key === "rk-latest-id" ||
-          key === "rk-recent" ||
-          key === "WALLETCONNECT_DEEPLINK_CHOICE" ||
-          key.startsWith("wc@") ||
-          key.toLowerCase().includes("walletconnect")
+          (normalizedKey.startsWith("wagmi") && !normalizedKey.endsWith(".disconnected")) ||
+          normalizedKey.startsWith("rk-") ||
+          normalizedKey === "walletconnect_deeplink_choice" ||
+          normalizedKey.startsWith("wc@") ||
+          normalizedKey.includes("walletconnect")
         );
       });
 
@@ -111,35 +115,77 @@ export function ConnectWallet() {
     clearStorage(window.sessionStorage);
   }, []);
 
+  const inlineMobileActions = isMobile && !!onActionComplete;
+
+  const ensureDisconnectedShim = useCallback(() => {
+    if (typeof window === "undefined" || !connector?.id) return;
+
+    const disconnectKey = `wagmi.${connector.id}.disconnected`;
+    window.localStorage.setItem(disconnectKey, "true");
+    window.sessionStorage.setItem(disconnectKey, "true");
+    window.localStorage.removeItem("wagmi.injected.connected");
+    window.sessionStorage.removeItem("wagmi.injected.connected");
+    window.localStorage.removeItem("wagmi.recentConnectorId");
+    window.sessionStorage.removeItem("wagmi.recentConnectorId");
+  }, [connector?.id]);
+
   if (isConnected && address) {
     const shortenedAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
 
     const handleDisconnect = async () => {
       setIsOpen(false);
+      onActionComplete?.();
+      ensureDisconnectedShim();
 
-      const activeConnectors = [...connectors];
       if (connector) {
-        activeConnectors.push(connector);
-      }
-
-      const seen = new Set<string>();
-      const uniqueConnectors = activeConnectors.filter((item) => {
-        if (seen.has(item.uid)) return false;
-        seen.add(item.uid);
-        return true;
-      });
-
-      if (uniqueConnectors.length > 0) {
-        await Promise.allSettled(
-          uniqueConnectors.map((item) => disconnectAsync({ connector: item })),
-        );
+        await disconnectAsync({ connector }).catch(() => undefined);
       } else {
         await disconnectAsync().catch(() => undefined);
       }
 
+      ensureDisconnectedShim();
       clearWalletPersistence();
+      if (typeof window !== "undefined" && isMobile) {
+        window.location.replace("/");
+        return;
+      }
+
+      if (pathname === "/profile") {
+        router.replace("/");
+        return;
+      }
+
       router.refresh();
     };
+
+    if (inlineMobileActions) {
+      return (
+        <div className="w-full rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-widest text-white/35">Wallet</p>
+              <p className="truncate font-mono text-sm text-white/80">{shortenedAddress}</p>
+            </div>
+            {formattedBalance !== null ? (
+              <div className="shrink-0 text-right">
+                <p className="text-[11px] uppercase tracking-widest text-white/35">Balance</p>
+                <p className="font-mono text-sm text-white">
+                  {formattedBalance} {(symbol as string) ?? ""}
+                </p>
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={handleDisconnect}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-300 transition active:bg-red-400/15"
+          >
+            <LogOut className="h-4 w-4" />
+            Disconnect
+          </button>
+        </div>
+      );
+    }
 
     return (
       <div ref={buttonRef}>
@@ -194,16 +240,8 @@ export function ConnectWallet() {
                     <div className="border-t border-white/10" />
                   </>
                 )}
-                <Link
-                  href="/profile"
-                  onClick={() => setIsOpen(false)}
-                  className="flex w-full items-center gap-3 px-4 py-4 text-base text-white/80 transition active:bg-white/10"
-                >
-                  <User className="h-5 w-5" />
-                  Profile
-                </Link>
-                <div className="border-t border-white/10" />
                 <button
+                  type="button"
                   onClick={handleDisconnect}
                   className="flex w-full items-center gap-3 px-4 py-4 text-base text-red-400 transition active:bg-white/10"
                 >
@@ -235,7 +273,10 @@ export function ConnectWallet() {
               )}
               <Link
                 href="/profile"
-                onClick={() => setIsOpen(false)}
+                onClick={() => {
+                  setIsOpen(false);
+                  onActionComplete?.();
+                }}
                 className="flex items-center gap-3 px-4 py-3 text-sm text-white/80 transition hover:bg-white/10 hover:text-white"
               >
                 <User className="h-4 w-4" />
@@ -243,6 +284,7 @@ export function ConnectWallet() {
               </Link>
               <div className="border-t border-white/10" />
               <button
+                type="button"
                 onClick={handleDisconnect}
                 className="flex w-full items-center gap-3 px-4 py-3 text-sm text-red-400 transition hover:bg-white/10 hover:text-red-300"
               >

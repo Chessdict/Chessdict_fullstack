@@ -190,9 +190,10 @@ app.prepare().then(async () => {
   console.log("[STARTUP] app.prepare() done");
   console.log("[STARTUP] REDIS_URL set:", !!process.env.REDIS_URL);
   console.log("[STARTUP] Connecting Redis...");
+  let redisStatus = { mainReady: false, adapterReady: false };
   try {
-    await connectRedis();
-    console.log("[STARTUP] Redis connected");
+    redisStatus = await connectRedis();
+    console.log("[STARTUP] Redis startup complete");
   } catch (err) {
     console.error("[REDIS] Failed to connect — running without Redis:", err.message);
   }
@@ -211,11 +212,15 @@ app.prepare().then(async () => {
   });
 
   // Attach Redis adapter for multi-instance Socket.IO support
-  try {
-    io.adapter(createAdapter(redisPub, redisSub));
-    console.log("[SOCKET.IO] Redis adapter attached");
-  } catch (err) {
-    console.error("[SOCKET.IO] Redis adapter failed — using in-memory:", err.message);
+  if (redisStatus.adapterReady) {
+    try {
+      io.adapter(createAdapter(redisPub, redisSub));
+      console.log("[SOCKET.IO] Redis adapter attached");
+    } catch (err) {
+      console.error("[SOCKET.IO] Redis adapter failed — using in-memory:", err.message);
+    }
+  } else {
+    console.warn("[SOCKET.IO] Redis adapter skipped — using in-memory adapter");
   }
 
   // Expose io globally so server actions can emit events
@@ -223,7 +228,8 @@ app.prepare().then(async () => {
 
   const userSocketMap = new Map(); // userId -> socketId
   const activeGames = new Map(); // socketId -> roomId
-  const stakeTimeouts = new Map(); // roomId -> timeout handle (120s auto-abort for staked WAITING games)
+  const stakeTimeouts = new Map(); // roomId -> timeout handle (post-create staked confirm timeout)
+  const stakeCreationTimeouts = new Map(); // roomId -> timeout handle (pre-create staked setup timeout)
   const stakeCreationFailureDelays = new Map(); // roomId -> timeout handle (grace period before notifying joiner)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
   const rematchRequests = new Map(); // roomId -> { requesterWallet, targetWallet, timeoutHandle }
@@ -232,7 +238,9 @@ app.prepare().then(async () => {
   const MAX_STAKED_TIME_CONTROL = 3;
   const SUPPORTED_QUEUE_TIME_CONTROLS = new Set([1, 2, 3, 10]);
   const DEFAULT_GAME_TIME = 600; // 10 minutes in seconds
+  const STAKE_CREATE_TIMEOUT_MS = 45000;
   const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
+  const STAKE_CONFIRM_TIMEOUT_MS = 45000;
   const REMATCH_REQUEST_TTL_MS = 120000;
   const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
 
@@ -278,6 +286,35 @@ app.prepare().then(async () => {
     }
   }
 
+  function clearStakeCreationTimeout(roomId) {
+    const timeout = stakeCreationTimeouts.get(roomId);
+    if (timeout) {
+      clearTimeout(timeout);
+      stakeCreationTimeouts.delete(roomId);
+    }
+  }
+
+  function scheduleStakeCreationTimeout(roomId) {
+    clearStakeCreationTimeout(roomId);
+
+    const creationTimeout = setTimeout(async () => {
+      stakeCreationTimeouts.delete(roomId);
+      try {
+        const waitingGame = await prisma.game.findUnique({ where: { id: roomId } });
+        if (!waitingGame || waitingGame.status !== "WAITING" || waitingGame.onChainGameId) return;
+
+        await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+        io.to(roomId).emit("stakeCreationExpired", { roomId });
+        console.log(`[STAKE] ${Math.round(STAKE_CREATE_TIMEOUT_MS / 1000)}s pre-create timeout — room ${roomId} expired before on-chain game creation`);
+        cleanupRegularGame(roomId);
+      } catch (e) {
+        console.error("[STAKE] Pre-create timeout cleanup error:", e);
+      }
+    }, STAKE_CREATE_TIMEOUT_MS);
+
+    stakeCreationTimeouts.set(roomId, creationTimeout);
+  }
+
   function clearRematchRequest(roomId) {
     const request = rematchRequests.get(roomId);
     if (request?.timeoutHandle) {
@@ -310,7 +347,7 @@ app.prepare().then(async () => {
           await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
         }
 
-        const blackSid = userSocketMap.get(blackPlayer.walletAddress);
+        const blackSid = getSocketIdForWallet(blackPlayer.walletAddress);
         if (blackSid) {
           io.to(blackSid).emit("stakeCreationFailed", { roomId });
         }
@@ -328,6 +365,7 @@ app.prepare().then(async () => {
   }
 
   function cleanupRegularGame(roomId) {
+    clearStakeCreationTimeout(roomId);
     clearStakeCreationFailureDelay(roomId);
     gameStateStore.delete(roomId);
     deleteGameState(roomId).catch(() => { });
@@ -351,6 +389,7 @@ app.prepare().then(async () => {
     const game = await prisma.game.findUnique({
       where: { id: roomId },
       select: {
+        status: true,
         onChainGameId: true,
         stakeToken: true,
         wagerAmount: true,
@@ -358,6 +397,7 @@ app.prepare().then(async () => {
     });
 
     return {
+      status: game?.status ?? null,
       onChainGameId: game?.onChainGameId ?? null,
       stakeToken: game?.stakeToken ?? null,
       stakeAmount: game?.wagerAmount != null ? String(game.wagerAmount) : null,
@@ -549,12 +589,13 @@ app.prepare().then(async () => {
 
   function getSocketIdForWallet(walletAddress) {
     const target = normalizeWalletAddress(walletAddress);
+    let matchedSocketId;
     for (const [connectedWallet, socketId] of userSocketMap.entries()) {
       if (normalizeWalletAddress(connectedWallet) === target) {
-        return socketId;
+        matchedSocketId = socketId;
       }
     }
-    return undefined;
+    return matchedSocketId;
   }
 
   function hasConnectedTournamentPlayer(state, walletAddress) {
@@ -1458,8 +1499,9 @@ app.prepare().then(async () => {
     if (!isStaked) {
       // Non-staked: start timer immediately
       initGameTimer(roomId, getTimeControlSeconds(matchedTimeControl));
+    } else {
+      scheduleStakeCreationTimeout(roomId);
     }
-    // Staked: no timeout yet — 120s countdown starts when Player 1 emits stakeCreated
 
     console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId} (staked=${isStaked})`);
   }
@@ -1549,6 +1591,16 @@ app.prepare().then(async () => {
     console.log("Client connected:", socket.id, "User:", userId);
 
     if (userId) {
+      const normalizedUserId = normalizeWalletAddress(userId);
+      for (const [connectedWallet, existingSocketId] of userSocketMap.entries()) {
+        if (
+          normalizeWalletAddress(connectedWallet) === normalizedUserId &&
+          existingSocketId !== socket.id &&
+          connectedWallet !== userId
+        ) {
+          userSocketMap.delete(connectedWallet);
+        }
+      }
       userSocketMap.set(userId, socket.id);
       setUserSocket(userId, socket.id).catch(() => { }); // mirror to Redis
 
@@ -1583,6 +1635,7 @@ app.prepare().then(async () => {
         socket.to(activeGame.roomId).emit("opponentReconnected");
 
         socket.emit("gameRejoined", {
+          status: stakeState.status,
           roomId: activeGame.roomId,
           color: activeGame.color,
           opponentAddress: activeGame.opponentWallet,
@@ -1632,12 +1685,13 @@ app.prepare().then(async () => {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
 
+        clearStakeCreationTimeout(roomId);
         clearStakeCreationFailureDelay(roomId);
 
         // Store the on-chain game ID
         await prisma.game.update({ where: { id: roomId }, data: { onChainGameId: String(onChainGameId) } });
 
-        // Start 120s timeout for Player 2 to confirm
+        // Start post-create timeout for Player 2 to confirm
         const timeout = setTimeout(async () => {
           stakeTimeouts.delete(roomId);
           try {
@@ -1645,27 +1699,29 @@ app.prepare().then(async () => {
             if (g && g.status === "WAITING") {
               await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
               io.to(roomId).emit("stakeTimeout", { roomId, onChainGameId: g.onChainGameId });
-              console.log(`[STAKE] 120s timeout — game ${roomId} aborted (Player 1 must cancel on-chain to reclaim)`);
+              console.log(`[STAKE] ${Math.round(STAKE_CONFIRM_TIMEOUT_MS / 1000)}s timeout — game ${roomId} aborted (Player 1 must cancel on-chain to reclaim)`);
               cleanupRegularGame(roomId);
             }
           } catch (e) {
             console.error("[STAKE] Timeout cleanup error:", e);
           }
-        }, 120000);
+        }, STAKE_CONFIRM_TIMEOUT_MS);
         stakeTimeouts.set(roomId, timeout);
 
         // Forward onChainGameId to Player 2 (black) via stakeReady
         const blackPlayer = await prisma.user.findUnique({ where: { id: game.blackPlayerId } });
         if (blackPlayer) {
-          const blackSid = userSocketMap.get(blackPlayer.walletAddress);
+          const blackSid = getSocketIdForWallet(blackPlayer.walletAddress);
           if (blackSid) {
             io.to(blackSid).emit("stakeReady", {
               roomId,
               onChainGameId: String(onChainGameId),
               stakeToken: game.stakeToken,
               stakeAmount: game.wagerAmount ? String(game.wagerAmount) : null,
-              timeControl: userActiveGames.get(blackPlayer.walletAddress)?.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL,
+              timeControl: normalizeQueueTimeControl(game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL),
             });
+          } else {
+            console.warn(`[STAKE] Could not find live socket for joiner ${blackPlayer.walletAddress} in room ${roomId}`);
           }
         }
 
@@ -1687,9 +1743,10 @@ app.prepare().then(async () => {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
 
+        clearStakeCreationTimeout(roomId);
         clearStakeCreationFailureDelay(roomId);
 
-        // Clear the 120s timeout
+        // Clear the post-create confirm timeout
         const timeout = stakeTimeouts.get(roomId);
         if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(roomId); }
 
@@ -1720,9 +1777,10 @@ app.prepare().then(async () => {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
 
+        clearStakeCreationTimeout(roomId);
         clearStakeCreationFailureDelay(roomId);
 
-        // Clear the 120s timeout
+        // Clear the post-create confirm timeout
         const timeout = stakeTimeouts.get(roomId);
         if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(roomId); }
 
@@ -1749,7 +1807,7 @@ app.prepare().then(async () => {
 
         // Notify Player1 (white) so they can cancel on-chain and reclaim stake
         if (whitePlayer) {
-          const whiteSid = userSocketMap.get(whitePlayer.walletAddress);
+          const whiteSid = getSocketIdForWallet(whitePlayer.walletAddress);
           if (whiteSid) {
             io.to(whiteSid).emit("opponentDeclinedStake", { roomId, onChainGameId: game.onChainGameId });
           }
@@ -1805,6 +1863,7 @@ app.prepare().then(async () => {
       socket.to(activeGame.roomId).emit("opponentReconnected");
 
       socket.emit("gameRejoined", {
+        status: stakeState.status,
         roomId: activeGame.roomId,
         color: activeGame.color,
         opponentAddress: activeGame.opponentWallet,
@@ -2660,6 +2719,8 @@ app.prepare().then(async () => {
           });
           if (!isStakedChallenge) {
             initGameTimer(acceptedRoomId, getTimeControlSeconds(timeControl));
+          } else {
+            scheduleStakeCreationTimeout(acceptedRoomId);
           }
 
           const creatorSocket = creatorSocketId ? io.sockets.sockets.get(creatorSocketId) : null;
@@ -3002,11 +3063,16 @@ app.prepare().then(async () => {
               try {
                 const game = await prisma.game.findUnique({ where: { id: activeRoomId } });
 
-                // ─── WAITING staked game: Player 2 disconnected before confirming stake ───
+                // ─── WAITING staked game: preserve the room once the on-chain game exists ───
                 if (game && game.status === "WAITING") {
+                  if (game.onChainGameId) {
+                    console.log(`[DISCONNECT] Player disconnected from WAITING game ${activeRoomId} after on-chain creation — preserving room for reconnect/confirm`);
+                    return;
+                  }
+
                   console.log(`[DISCONNECT] Player disconnected from WAITING game ${activeRoomId} — aborting`);
 
-                  // Clear the 120s stake timeout if it exists
+                  // Clear the post-create staked confirm timeout if it exists
                   const timeout = stakeTimeouts.get(activeRoomId);
                   if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(activeRoomId); }
 
@@ -3015,7 +3081,7 @@ app.prepare().then(async () => {
                   // Notify Player 1 (white) so they can cancel on-chain and reclaim stake
                   const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
                   if (whitePlayer) {
-                    const whiteSid = userSocketMap.get(whitePlayer.walletAddress);
+                    const whiteSid = getSocketIdForWallet(whitePlayer.walletAddress);
                     if (whiteSid) {
                       io.to(whiteSid).emit("opponentDeclinedStake", { roomId: activeRoomId, onChainGameId: game.onChainGameId });
                     }
@@ -3121,8 +3187,18 @@ app.prepare().then(async () => {
           }
         }
 
-        userSocketMap.delete(userId);
-        deleteUserSocket(userId).catch(() => { }); // mirror to Redis
+        const currentSocketId = getSocketIdForWallet(userId);
+        if (currentSocketId === socket.id) {
+          for (const [connectedWallet, mappedSocketId] of userSocketMap.entries()) {
+            if (
+              normalizeWalletAddress(connectedWallet) === normalizeWalletAddress(userId) &&
+              mappedSocketId === socket.id
+            ) {
+              userSocketMap.delete(connectedWallet);
+              deleteUserSocket(connectedWallet).catch(() => { }); // mirror to Redis
+            }
+          }
+        }
       } else {
         for (const [uid, sid] of userSocketMap.entries()) {
           if (sid === socket.id) {

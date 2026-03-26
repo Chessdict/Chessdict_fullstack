@@ -76,6 +76,11 @@ export function TournamentGameBoard({
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
+  const [boardKey, setBoardKey] = useState(0);
+
+  const resetBoardInteraction = useCallback(() => {
+    setBoardKey((previous) => previous + 1);
+  }, []);
 
   const syncState = useCallback(() => {
     setFen(game.fen());
@@ -109,18 +114,20 @@ export function TournamentGameBoard({
     setQueuedPremove(null);
     setPromotionSelection(null);
     setShowResignConfirm(false);
-  }, [gameId, game, clearSelection]);
+    resetBoardInteraction();
+  }, [gameId, game, clearSelection, resetBoardInteraction]);
 
   useEffect(() => {
     if (gameResult) {
       clearSelection();
       setQueuedPremove(null);
       setPromotionSelection(null);
+      resetBoardInteraction();
     }
-  }, [gameResult, clearSelection]);
+  }, [gameResult, clearSelection, resetBoardInteraction]);
 
   const safeMove = useCallback(
-    (move: any, options?: { preserveSelection?: boolean }) => {
+    (move: any, options?: { preserveSelection?: boolean; resetBoardInteraction?: boolean }) => {
       try {
         const result = game.move(move);
         if (result) {
@@ -130,6 +137,9 @@ export function TournamentGameBoard({
           } else {
             clearSelection();
           }
+          if (options?.resetBoardInteraction) {
+            resetBoardInteraction();
+          }
           return result;
         }
       } catch {
@@ -137,7 +147,7 @@ export function TournamentGameBoard({
       }
       return null;
     },
-    [clearSelection, game, syncState],
+    [clearSelection, game, resetBoardInteraction, syncState],
   );
 
   const playPlayerMove = useCallback((move: Premove) => {
@@ -266,7 +276,7 @@ export function TournamentGameBoard({
       gameId: string;
       move: any;
     }) => {
-      safeMove(move, { preserveSelection: true });
+      safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
     };
 
     socket.on("tournament:opponentMove", handleOpponentMove);
@@ -496,25 +506,42 @@ export function TournamentGameBoard({
 
   const onDrop = useCallback(
     (source: string, target: string) => {
-      if (gameResult || promotionSelection) return false;
-      if (game.isGameOver()) return false;
-      if (!playerTurnCode) return false;
+      if (gameResult || promotionSelection) {
+        resetBoardInteraction();
+        return false;
+      }
+      if (game.isGameOver()) {
+        resetBoardInteraction();
+        return false;
+      }
+      if (!playerTurnCode) {
+        resetBoardInteraction();
+        return false;
+      }
 
       if (game.turn() !== playerTurnCode) {
         if (queuedPremove) {
           clearQueuedPremove();
+          resetBoardInteraction();
           return false;
         }
         tryQueuePremove(source, target);
+        resetBoardInteraction();
         return false;
       }
 
-      if (requestPromotion(source, target)) return false;
+      if (requestPromotion(source, target)) {
+        resetBoardInteraction();
+        return false;
+      }
 
       const result = playPlayerMove({ from: source, to: target, promotion: "q" });
+      if (!result) {
+        resetBoardInteraction();
+      }
       return !!result;
     },
-    [clearQueuedPremove, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, tryQueuePremove],
+    [clearQueuedPremove, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, tryQueuePremove],
   );
 
   const handleResign = () => {
@@ -637,13 +664,14 @@ export function TournamentGameBoard({
       <div className="relative w-full aspect-square">
         <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#1a1816]">
           <Chessboard
-            key={`tboard-${gameId}-${orientation}`}
+            key={`tboard-${gameId}-${orientation}-${boardKey}`}
             options={{
               id: chessboardId,
               position: fen,
               boardOrientation: orientation,
               showAnimations: true,
               animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              allowDragOffBoard: false,
               allowDragging: !gameResult && !promotionSelection,
               boardStyle: { borderRadius: "4px" },
               darkSquareStyle: { backgroundColor: "#B58863" },
