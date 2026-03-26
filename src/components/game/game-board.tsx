@@ -246,10 +246,15 @@ export function GameBoard() {
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
+  const dragInteractionRef = useRef(false);
   const [boardKey, setBoardKey] = useState(0);
 
   const resetBoardInteraction = useCallback(() => {
     setBoardKey((previous) => previous + 1);
+  }, []);
+
+  const clearDragInteraction = useCallback(() => {
+    dragInteractionRef.current = false;
   }, []);
 
   // Compute persistent check highlight from current position
@@ -324,9 +329,10 @@ export function GameBoard() {
           clearSelection();
         }
 
-        if (options?.resetBoardInteraction) {
+        if (options?.resetBoardInteraction && dragInteractionRef.current) {
           resetBoardInteraction();
         }
+        clearDragInteraction();
 
         // Play sound based on move type
         playMoveSound(result);
@@ -337,7 +343,7 @@ export function GameBoard() {
       console.error(e);
     }
     return null;
-  }, [game, syncState, addMove, clearSelection, playMoveSound, resetBoardInteraction]);
+  }, [game, syncState, addMove, clearSelection, playMoveSound, resetBoardInteraction, clearDragInteraction]);
 
   const emitPlayerMove = useCallback((move: Premove, result: Move) => {
     if (!isMultiplayer || !roomId) return;
@@ -440,9 +446,10 @@ export function GameBoard() {
       setQueuedPremove(null);
       setPromotionSelection(null);
       setLastMoveSquares({});
+      clearDragInteraction();
       resetBoardInteraction();
     }
-  }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed, resetBoardInteraction]);
+  }, [status, game, syncState, clearMoves, resetTimers, clearSelection, setGameResultModalDismissed, resetBoardInteraction, clearDragInteraction]);
 
   const previousRoomIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -461,11 +468,12 @@ export function GameBoard() {
       setQueuedPremove(null);
       setPromotionSelection(null);
       setLastMoveSquares({});
+      clearDragInteraction();
       resetBoardInteraction();
     }
 
     previousRoomIdRef.current = roomId;
-  }, [roomId, game, syncState, clearGameOver, clearSelection, setGameResultModalDismissed, resetBoardInteraction]);
+  }, [roomId, game, syncState, clearGameOver, clearSelection, setGameResultModalDismissed, resetBoardInteraction, clearDragInteraction]);
 
   // Load rejoined game state (after browser refresh reconnection)
   useEffect(() => {
@@ -478,6 +486,7 @@ export function GameBoard() {
         clearSelection();
         setQueuedPremove(null);
         setPromotionSelection(null);
+        clearDragInteraction();
         resetBoardInteraction();
         clearRejoinData();
         console.log("[CLIENT] Rejoined game state loaded, FEN:", rejoinFen);
@@ -486,7 +495,7 @@ export function GameBoard() {
         clearRejoinData();
       }
     }
-  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData, clearSelection, resetBoardInteraction]);
+  }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData, clearSelection, resetBoardInteraction, clearDragInteraction]);
 
   useEffect(() => {
     if (status !== "in-progress" || gameOver) {
@@ -1078,14 +1087,17 @@ export function GameBoard() {
   // Primary Move Handler for Chessboard (Drag and Drop)
   const onDrop = useCallback((source: string, target: string) => {
     if (status !== "in-progress" || promotionSelection) {
+      clearDragInteraction();
       resetBoardInteraction();
       return false;
     }
     if (game.isGameOver()) {
+      clearDragInteraction();
       resetBoardInteraction();
       return false;
     }
     if (!playerTurnCode) {
+      clearDragInteraction();
       resetBoardInteraction();
       return false;
     }
@@ -1093,25 +1105,29 @@ export function GameBoard() {
     if (game.turn() !== playerTurnCode) {
       if (queuedPremove) {
         clearQueuedPremove();
+        clearDragInteraction();
         resetBoardInteraction();
         return false;
       }
       tryQueuePremove(source, target);
+      clearDragInteraction();
       resetBoardInteraction();
       return false;
     }
 
     if (requestPromotion(source, target)) {
+      clearDragInteraction();
       resetBoardInteraction();
       return false;
     }
 
     const result = playPlayerMove({ from: source, to: target, promotion: "q" });
     if (!result) {
+      clearDragInteraction();
       resetBoardInteraction();
     }
     return !!result;
-  }, [clearQueuedPremove, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, status, tryQueuePremove]);
+  }, [clearQueuedPremove, clearDragInteraction, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -1349,6 +1365,15 @@ export function GameBoard() {
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: { ...lastMoveSquares, ...checkSquare, ...premoveSquares, ...moveSquares, ...checkFlash },
               pieces: customPieces,
+              onPieceDrag: () => {
+                dragInteractionRef.current = true;
+              },
+              onSquareMouseDown: () => {
+                dragInteractionRef.current = true;
+              },
+              onSquareMouseUp: () => {
+                clearDragInteraction();
+              },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
                 if (!sourceSquare || !targetSquare) return false;

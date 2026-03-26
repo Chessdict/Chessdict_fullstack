@@ -76,10 +76,15 @@ export function TournamentGameBoard({
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
+  const dragInteractionRef = useRef(false);
   const [boardKey, setBoardKey] = useState(0);
 
   const resetBoardInteraction = useCallback(() => {
     setBoardKey((previous) => previous + 1);
+  }, []);
+
+  const clearDragInteraction = useCallback(() => {
+    dragInteractionRef.current = false;
   }, []);
 
   const syncState = useCallback(() => {
@@ -114,17 +119,19 @@ export function TournamentGameBoard({
     setQueuedPremove(null);
     setPromotionSelection(null);
     setShowResignConfirm(false);
+    clearDragInteraction();
     resetBoardInteraction();
-  }, [gameId, game, clearSelection, resetBoardInteraction]);
+  }, [gameId, game, clearSelection, resetBoardInteraction, clearDragInteraction]);
 
   useEffect(() => {
     if (gameResult) {
       clearSelection();
       setQueuedPremove(null);
       setPromotionSelection(null);
+      clearDragInteraction();
       resetBoardInteraction();
     }
-  }, [gameResult, clearSelection, resetBoardInteraction]);
+  }, [gameResult, clearSelection, resetBoardInteraction, clearDragInteraction]);
 
   const safeMove = useCallback(
     (move: any, options?: { preserveSelection?: boolean; resetBoardInteraction?: boolean }) => {
@@ -137,9 +144,10 @@ export function TournamentGameBoard({
           } else {
             clearSelection();
           }
-          if (options?.resetBoardInteraction) {
+          if (options?.resetBoardInteraction && dragInteractionRef.current) {
             resetBoardInteraction();
           }
+          clearDragInteraction();
           return result;
         }
       } catch {
@@ -147,7 +155,7 @@ export function TournamentGameBoard({
       }
       return null;
     },
-    [clearSelection, game, resetBoardInteraction, syncState],
+    [clearSelection, game, resetBoardInteraction, syncState, clearDragInteraction],
   );
 
   const playPlayerMove = useCallback((move: Premove) => {
@@ -507,14 +515,17 @@ export function TournamentGameBoard({
   const onDrop = useCallback(
     (source: string, target: string) => {
       if (gameResult || promotionSelection) {
+        clearDragInteraction();
         resetBoardInteraction();
         return false;
       }
       if (game.isGameOver()) {
+        clearDragInteraction();
         resetBoardInteraction();
         return false;
       }
       if (!playerTurnCode) {
+        clearDragInteraction();
         resetBoardInteraction();
         return false;
       }
@@ -522,26 +533,30 @@ export function TournamentGameBoard({
       if (game.turn() !== playerTurnCode) {
         if (queuedPremove) {
           clearQueuedPremove();
+          clearDragInteraction();
           resetBoardInteraction();
           return false;
         }
         tryQueuePremove(source, target);
+        clearDragInteraction();
         resetBoardInteraction();
         return false;
       }
 
       if (requestPromotion(source, target)) {
+        clearDragInteraction();
         resetBoardInteraction();
         return false;
       }
 
       const result = playPlayerMove({ from: source, to: target, promotion: "q" });
       if (!result) {
+        clearDragInteraction();
         resetBoardInteraction();
       }
       return !!result;
     },
-    [clearQueuedPremove, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, tryQueuePremove],
+    [clearQueuedPremove, clearDragInteraction, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, tryQueuePremove],
   );
 
   const handleResign = () => {
@@ -678,6 +693,15 @@ export function TournamentGameBoard({
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: { ...premoveSquares, ...moveSquares },
               pieces: customPieces,
+              onPieceDrag: () => {
+                dragInteractionRef.current = true;
+              },
+              onSquareMouseDown: () => {
+                dragInteractionRef.current = true;
+              },
+              onSquareMouseUp: () => {
+                clearDragInteraction();
+              },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string | null }) => {
                 if (!sourceSquare || !targetSquare) return false;
