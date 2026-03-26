@@ -37,6 +37,8 @@ type ChallengeDetails = {
 };
 
 const POLL_INTERVAL_MS = 5000;
+const INITIAL_LOAD_RETRY_MS = 1000;
+const EXIT_REDIRECT_DELAY_MS = 1200;
 
 export default function OpenChallengePage({
   params,
@@ -56,6 +58,10 @@ export default function OpenChallengePage({
   const [isAccepting, setIsAccepting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const hasNavigatedRef = useRef(false);
+  const hasRedirectedRef = useRef(false);
+  const retriedInitialLoadRef = useRef(false);
+  const redirectTimeoutRef = useRef<number | null>(null);
+  const challengeExpiryTimeoutRef = useRef<number | null>(null);
   const stakeTokenAddress =
     challenge?.staked && challenge.stakeToken
       ? (challenge.stakeToken as `0x${string}`)
@@ -63,8 +69,25 @@ export default function OpenChallengePage({
   const { data: stakeTokenSymbol } = useTokenSymbol(stakeTokenAddress);
   const { data: stakeTokenDecimals } = useTokenDecimals(stakeTokenAddress);
 
+  const redirectToPlay = useCallback((message?: string) => {
+    if (hasNavigatedRef.current || hasRedirectedRef.current) return;
+    hasRedirectedRef.current = true;
+
+    if (message) {
+      toast.info(message);
+    }
+
+    if (redirectTimeoutRef.current) {
+      window.clearTimeout(redirectTimeoutRef.current);
+    }
+
+    redirectTimeoutRef.current = window.setTimeout(() => {
+      router.replace("/play");
+    }, EXIT_REDIRECT_DELAY_MS);
+  }, [router]);
+
   const loadChallenge = useCallback(
-    async (options?: { silent?: boolean }) => {
+    async (options?: { silent?: boolean; allowRetry?: boolean }) => {
       if (!options?.silent) {
         setIsLoading(true);
       }
@@ -72,22 +95,43 @@ export default function OpenChallengePage({
       try {
         const result = await getOpenChallenge(challengeId);
         if (!result.success || !result.challenge) {
-          toast.error(result.error ?? "Challenge not found");
-          setChallenge(null);
+          if (!options?.silent && options?.allowRetry !== false && !retriedInitialLoadRef.current) {
+            retriedInitialLoadRef.current = true;
+            window.setTimeout(() => {
+              void loadChallenge({ allowRetry: false });
+            }, INITIAL_LOAD_RETRY_MS);
+            return;
+          }
+
+          if (!options?.silent) {
+            const errorMessage = result.error ?? "Challenge not found";
+            toast.error(errorMessage);
+            setChallenge(null);
+            redirectToPlay("Challenge link unavailable. Redirecting to play...");
+          }
           return;
         }
 
+        retriedInitialLoadRef.current = false;
         setChallenge(result.challenge);
       } catch (error) {
         console.error("Failed to load challenge:", error);
+        if (!options?.silent && options?.allowRetry !== false && !retriedInitialLoadRef.current) {
+          retriedInitialLoadRef.current = true;
+          window.setTimeout(() => {
+            void loadChallenge({ allowRetry: false });
+          }, INITIAL_LOAD_RETRY_MS);
+          return;
+        }
         if (!options?.silent) {
           toast.error("Failed to load challenge");
+          redirectToPlay("Challenge link could not be loaded. Redirecting to play...");
         }
       } finally {
         setIsLoading(false);
       }
     },
-    [challengeId],
+    [challengeId, redirectToPlay],
   );
 
   const navigateToGame = useCallback((roomId: string) => {
@@ -101,6 +145,17 @@ export default function OpenChallengePage({
   useEffect(() => {
     loadChallenge();
   }, [loadChallenge]);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        window.clearTimeout(redirectTimeoutRef.current);
+      }
+      if (challengeExpiryTimeoutRef.current) {
+        window.clearTimeout(challengeExpiryTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -121,6 +176,38 @@ export default function OpenChallengePage({
 
     return () => window.clearInterval(interval);
   }, [challenge, loadChallenge]);
+
+  useEffect(() => {
+    if (challengeExpiryTimeoutRef.current) {
+      window.clearTimeout(challengeExpiryTimeoutRef.current);
+      challengeExpiryTimeoutRef.current = null;
+    }
+
+    if (!challenge || challenge.status !== "OPEN") return;
+
+    const remainingMs = new Date(challenge.expiresAt).getTime() - Date.now();
+    if (remainingMs <= 0) {
+      setChallenge((current) =>
+        current ? { ...current, status: "EXPIRED" } : current,
+      );
+      redirectToPlay("Challenge link expired. Redirecting to play...");
+      return;
+    }
+
+    challengeExpiryTimeoutRef.current = window.setTimeout(() => {
+      setChallenge((current) =>
+        current ? { ...current, status: "EXPIRED" } : current,
+      );
+      redirectToPlay("Challenge link expired. Redirecting to play...");
+    }, remainingMs);
+
+    return () => {
+      if (challengeExpiryTimeoutRef.current) {
+        window.clearTimeout(challengeExpiryTimeoutRef.current);
+        challengeExpiryTimeoutRef.current = null;
+      }
+    };
+  }, [challenge, redirectToPlay]);
 
   useEffect(() => {
     if (!socket) return;

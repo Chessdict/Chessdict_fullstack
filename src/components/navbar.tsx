@@ -168,7 +168,7 @@ export function Navbar() {
                     ))}
                   </div>
                   <div className="border flex justify-center rounded-lg">
-                    <ConnectWallet />
+                    <ConnectWallet onActionComplete={() => setSheetOpen(false)} />
                   </div>
                 </div>
               </SheetContent>

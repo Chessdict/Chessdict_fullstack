@@ -2,11 +2,17 @@
 
 import { useState } from "react";
 import { useAccount, useReadContract, useWriteContract, usePublicClient, useSwitchChain, useChainId } from "wagmi";
-import { chessdictAbi, CHESSDICT_ADDRESS, CHESSDICT_CHAIN_ID } from "@/lib/contract";
+import {
+  chessdictAbi,
+  CHESSDICT_ADDRESS,
+  CHESSDICT_CHAIN_ID,
+  DEFAULT_STAKE_TOKEN,
+} from "@/lib/contract";
+import { networkConfig } from "@/lib/network-config";
 import { toast } from "sonner";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 
-const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+const DEFAULT_USDC = DEFAULT_STAKE_TOKEN;
 
 function TokenRow({ token }: { token: `0x${string}` }) {
   const { data: isSupported } = useReadContract({
@@ -21,7 +27,7 @@ function TokenRow({ token }: { token: `0x${string}` }) {
     <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-4 py-3">
       <div className="flex flex-col gap-0.5">
         <span className="font-mono text-sm text-white">{token}</span>
-        <span className="text-xs text-white/40">Base Mainnet USDC</span>
+        <span className="text-xs text-white/40">{networkConfig.networkLabel} USDC</span>
       </div>
       <span
         className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -68,7 +74,7 @@ export default function AdminPage() {
     try {
       setIsLoading(true);
       if (chainId !== CHESSDICT_CHAIN_ID) {
-        toast.info("Switching to Base Sepolia…");
+        toast.info(`Switching to ${networkConfig.networkLabel}…`);
         await switchChainAsync({ chainId: CHESSDICT_CHAIN_ID });
       }
       toast.info(`Adding token ${tokenAddress.slice(0, 8)}…`);
@@ -124,10 +130,10 @@ export default function AdminPage() {
               <h2 className="text-sm font-semibold text-white">Supported Tokens</h2>
 
               {/* Default USDC */}
-              <TokenRow token={BASE_USDC} />
+              <TokenRow token={DEFAULT_USDC} />
 
               {(supportedTokens as string[] | undefined)?.filter(
-                (t) => t.toLowerCase() !== BASE_USDC.toLowerCase()
+                (t) => t.toLowerCase() !== DEFAULT_USDC.toLowerCase()
               ).map((t) => (
                 <TokenRow key={t} token={t as `0x${string}`} />
               ))}
@@ -139,10 +145,10 @@ export default function AdminPage() {
                 <h2 className="text-sm font-semibold text-white">Quick Add</h2>
                 <button
                   disabled={isLoading}
-                  onClick={() => addToken(BASE_USDC)}
+                  onClick={() => addToken(DEFAULT_USDC)}
                   className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
                 >
-                  {isLoading ? "Adding…" : "Add Base Mainnet USDC"}
+                  {isLoading ? "Adding…" : `Add ${networkConfig.networkLabel} USDC`}
                 </button>
               </div>
             )}

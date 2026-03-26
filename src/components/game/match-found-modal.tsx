@@ -30,8 +30,75 @@ interface MatchFoundModalProps {
     socket?: any;
 }
 
-type CreatorState = "idle" | "creating" | "waiting" | "failed" | "opponent-left" | "cancelling" | "reclaimed";
-type JoinerState = "waiting-for-creator" | "creator-failed" | "idle" | "joining" | "confirmed" | "failed";
+type CreatorState = "idle" | "creating" | "waiting" | "failed" | "expired" | "opponent-left" | "cancelling" | "reclaimed";
+type JoinerState = "waiting-for-creator" | "creator-failed" | "expired" | "idle" | "joining" | "confirmed" | "failed";
+
+function formatAmountDisplay(value: number | null) {
+    if (value == null || !Number.isFinite(value)) return null;
+    const rounded = value.toFixed(value % 1 === 0 ? 0 : 4);
+    return rounded.replace(/\.?0+$/, "");
+}
+
+function MatchFaceoffHero({
+    introReady,
+    playerMemoji,
+    opponentMemoji,
+    playerLabel,
+    opponentLabel,
+}: {
+    introReady: boolean;
+    playerMemoji: string;
+    opponentMemoji: string;
+    playerLabel: string;
+    opponentLabel: string;
+}) {
+    return (
+        <div className="relative flex h-36 w-full items-center justify-center overflow-hidden">
+            <div
+                className={cn(
+                    "absolute left-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-500 ease-out",
+                    introReady ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0",
+                )}
+            >
+                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10 overflow-hidden">
+                    <Image src={playerMemoji} alt="You" width={96} height={96} className="h-full w-full object-contain" />
+                </div>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-green-300/80">You</p>
+                <p className="max-w-full truncate text-[11px] text-white/55">{playerLabel}</p>
+            </div>
+
+            <div className="absolute inset-0 flex items-center justify-center">
+                <div
+                    className={cn(
+                        "absolute h-18 w-18 rounded-full bg-blue-500/20 blur-xl transition-all duration-500",
+                        introReady ? "scale-110 opacity-100" : "scale-50 opacity-0",
+                    )}
+                />
+                <div
+                    className={cn(
+                        "relative z-10 flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-black tracking-[0.35em] text-white shadow-lg backdrop-blur-xl transition-all duration-500",
+                        introReady ? "scale-100 opacity-100" : "scale-75 opacity-0",
+                    )}
+                >
+                    VS
+                </div>
+            </div>
+
+            <div
+                className={cn(
+                    "absolute right-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-500 ease-out",
+                    introReady ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
+                )}
+            >
+                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10 overflow-hidden">
+                    <Image src={opponentMemoji} alt="Opponent" width={96} height={96} className="h-full w-full object-contain" />
+                </div>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-blue-300/80">Opponent</p>
+                <p className="max-w-full truncate text-[11px] text-white/55">{opponentLabel}</p>
+            </div>
+        </div>
+    );
+}
 
 export function MatchFoundModal({
     opponent,
@@ -76,6 +143,9 @@ export function MatchFoundModal({
     const tokenLabel = (tokenSymbol as string) ?? "tokens";
     const matchedStakeValue = Number.parseFloat(stakeAmount ?? "");
     const requestedStakeValue = Number.parseFloat(requestedStakeAmount ?? "");
+    const totalPrizeDisplay = formatAmountDisplay(
+        Number.isFinite(matchedStakeValue) ? matchedStakeValue * 2 : null,
+    );
     const matchedAtLowerStake =
         Number.isFinite(matchedStakeValue) &&
         Number.isFinite(requestedStakeValue) &&
@@ -94,6 +164,7 @@ export function MatchFoundModal({
     useEffect(() => {
         if (!staked || !existingOnChainGameId) return;
 
+        // Reconnects into a WAITING staked room should reopen the setup state, not restart creation.
         setOnChainGameId(existingOnChainGameId);
         if (isCreator) {
             hasStartedCreation.current = true;
@@ -165,11 +236,20 @@ export function MatchFoundModal({
             }
         };
 
+        const handleStakeCreationExpired = (data: { roomId: string }) => {
+            if (data.roomId === roomId) {
+                hasStartedCreation.current = false;
+                setCreatorState("expired");
+            }
+        };
+
         socket.on("opponentDeclinedStake", handleOpponentLeft);
         socket.on("stakeTimeout", handleStakeTimeout);
+        socket.on("stakeCreationExpired", handleStakeCreationExpired);
         return () => {
             socket.off("opponentDeclinedStake", handleOpponentLeft);
             socket.off("stakeTimeout", handleStakeTimeout);
+            socket.off("stakeCreationExpired", handleStakeCreationExpired);
         };
     }, [isCreator, socket, roomId]);
 
@@ -190,11 +270,19 @@ export function MatchFoundModal({
             }
         };
 
+        const handleStakeCreationExpired = (data: { roomId: string }) => {
+            if (data.roomId === roomId) {
+                setJoinerState("expired");
+            }
+        };
+
         socket.on("stakeReady", handleStakeReady);
         socket.on("stakeCreationFailed", handleStakeCreationFailed);
+        socket.on("stakeCreationExpired", handleStakeCreationExpired);
         return () => {
             socket.off("stakeReady", handleStakeReady);
             socket.off("stakeCreationFailed", handleStakeCreationFailed);
+            socket.off("stakeCreationExpired", handleStakeCreationExpired);
         };
     }, [isJoiner, socket, roomId]);
 
@@ -246,6 +334,67 @@ export function MatchFoundModal({
         }
     };
 
+    if (staked && autoEnter) {
+        return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+                <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
+                    <GlassBg className="p-5 sm:p-8 text-center" height="auto">
+                        <div className="flex flex-col items-center gap-5 sm:gap-6">
+                            <div className="space-y-1">
+                                <h2 className="text-lg sm:text-xl font-bold text-white">Staked Game Ready</h2>
+                                <p className="text-xs sm:text-sm text-white/60">
+                                    Both stakes confirmed on-chain
+                                </p>
+                            </div>
+
+                            <MatchFaceoffHero
+                                introReady={introReady}
+                                playerMemoji={playerMemoji}
+                                opponentMemoji={opponentMemoji}
+                                playerLabel={playerLabel}
+                                opponentLabel={formatName(opponent)}
+                            />
+
+                            <div className="space-y-2">
+                                <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest">
+                                    You are playing as {color}
+                                </p>
+                                <p className="text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
+                                    {timeControlDisplay}
+                                </p>
+                                {stakeAmount ? (
+                                    <div className="space-y-1">
+                                        <p className="text-xs text-yellow-400">
+                                            Stake: {stakeAmount} {tokenLabel}
+                                        </p>
+                                        {totalPrizeDisplay && (
+                                            <p className="text-xs text-white/55">
+                                                Total prize: {totalPrizeDisplay} {tokenLabel}
+                                            </p>
+                                        )}
+                                    </div>
+                                ) : null}
+                                <p className="text-xs text-white/45">
+                                    Starting the board...
+                                </p>
+                            </div>
+
+                            <button
+                                onClick={onAccept}
+                                className="w-full relative group overflow-hidden rounded-full py-3 sm:py-4 transition-transform active:scale-95"
+                            >
+                                <div className="absolute inset-0 bg-linear-to-r from-green-600 to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                <span className="relative text-sm font-bold text-white">
+                                    Battle of Chessdicts ⚔️
+                                </span>
+                            </button>
+                        </div>
+                    </GlassBg>
+                </div>
+            </div>
+        );
+    }
+
     // ─── Staked + Creator (white): create on-chain then wait ───
     if (isCreator) {
         return (
@@ -267,6 +416,12 @@ export function MatchFoundModal({
                                 <p className="text-xs sm:text-sm text-white/60">
                                     Opponent: {formatName(opponent)}
                                 </p>
+                                <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest mt-2">
+                                    You are playing as {color}
+                                </p>
+                            </div>
+
+                            <div className="space-y-1">
                                 <p className="mt-2 text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
                                     {timeControlDisplay}
                                 </p>
@@ -275,6 +430,11 @@ export function MatchFoundModal({
                                         <p className="text-xs text-yellow-400">
                                             Stake: {stakeAmount} {tokenLabel}
                                         </p>
+                                        {totalPrizeDisplay && (
+                                            <p className="text-[11px] text-white/55">
+                                                Total prize: {totalPrizeDisplay} {tokenLabel}
+                                            </p>
+                                        )}
                                         {matchedAtLowerStake && (
                                             <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-left">
                                                 <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-300">
@@ -344,6 +504,24 @@ export function MatchFoundModal({
                                         className="w-full rounded-full py-3 text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition border border-white/10"
                                     >
                                         Cancel
+                                    </button>
+                                </div>
+                            )}
+
+                            {creatorState === "expired" && (
+                                <div className="w-full flex flex-col gap-3">
+                                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3">
+                                        <p className="text-xs text-red-400 font-medium">Match expired before game creation</p>
+                                        <p className="text-[10px] text-white/50 mt-1">
+                                            The staked setup timed out before the on-chain game was created.
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => onDecline?.()}
+                                        className="w-full relative group overflow-hidden rounded-full py-3 transition-transform active:scale-95"
+                                    >
+                                        <div className="absolute inset-0 bg-linear-to-r from-yellow-600 to-orange-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                                        <span className="relative text-sm font-bold text-white">Close</span>
                                     </button>
                                 </div>
                             )}
@@ -436,11 +614,14 @@ export function MatchFoundModal({
                                 <p className="text-xs sm:text-sm text-white/60">
                                     Opponent: {formatName(opponent)}
                                 </p>
-                                <p className="mt-2 text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
-                                    {timeControlDisplay}
-                                </p>
                                 <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest mt-2">
                                     You are playing as {color}
+                                </p>
+                            </div>
+
+                            <div className="space-y-1">
+                                <p className="mt-2 text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
+                                    {timeControlDisplay}
                                 </p>
                                 {stakeAmount && (
                                     <div className="mt-3 space-y-3">
@@ -449,6 +630,11 @@ export function MatchFoundModal({
                                             <p className="text-lg font-bold text-white">
                                                 {stakeAmount} {tokenLabel}
                                             </p>
+                                            {totalPrizeDisplay && (
+                                                <p className="mt-1 text-[11px] text-white/50">
+                                                    Total prize: {totalPrizeDisplay} {tokenLabel}
+                                                </p>
+                                            )}
                                         </div>
                                         {matchedAtLowerStake && (
                                             <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-left">
@@ -479,6 +665,23 @@ export function MatchFoundModal({
                                         <p className="text-xs text-red-400 font-medium">Opponent failed to create the staked game</p>
                                         <p className="text-[10px] text-white/50 mt-1">
                                             You can wait for them to retry, or leave this match now.
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={handleDeclineStake}
+                                        className="w-full rounded-full py-3 text-sm font-medium text-white/80 hover:text-white hover:bg-white/5 transition border border-white/10"
+                                    >
+                                        Leave Match
+                                    </button>
+                                </div>
+                            )}
+
+                            {joinerState === "expired" && (
+                                <div className="w-full flex flex-col gap-3">
+                                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-left">
+                                        <p className="text-xs text-red-400 font-medium">Creator did not create the staked game in time</p>
+                                        <p className="text-[10px] text-white/50 mt-1">
+                                            This staked setup expired before the on-chain game was created.
                                         </p>
                                     </div>
                                     <button
@@ -566,50 +769,13 @@ export function MatchFoundModal({
                             </p>
                         </div>
 
-                        <div className="relative flex h-36 w-full items-center justify-center overflow-hidden">
-                            <div
-                                className={cn(
-                                    "absolute left-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-500 ease-out",
-                                    introReady ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0",
-                                )}
-                            >
-                                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10 overflow-hidden">
-                                    <Image src={playerMemoji} alt="You" width={96} height={96} className="h-full w-full object-contain" />
-                                </div>
-                                <p className="text-[10px] uppercase tracking-[0.2em] text-green-300/80">You</p>
-                                <p className="text-[11px] text-white/55">{playerLabel}</p>
-                            </div>
-
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div
-                                    className={cn(
-                                        "absolute h-18 w-18 rounded-full bg-blue-500/20 blur-xl transition-all duration-500",
-                                        introReady ? "scale-110 opacity-100" : "scale-50 opacity-0",
-                                    )}
-                                />
-                                <div
-                                    className={cn(
-                                        "relative z-10 flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-black tracking-[0.35em] text-white shadow-lg backdrop-blur-xl transition-all duration-500",
-                                        introReady ? "scale-100 opacity-100" : "scale-75 opacity-0",
-                                    )}
-                                >
-                                    VS
-                                </div>
-                            </div>
-
-                            <div
-                                className={cn(
-                                    "absolute right-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-500 ease-out",
-                                    introReady ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
-                                )}
-                            >
-                                <div className="h-18 w-18 sm:h-24 sm:w-24 rounded-full bg-linear-to-br from-green-500/20 to-blue-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-green-500/10 overflow-hidden">
-                                    <Image src={opponentMemoji} alt="Opponent" width={96} height={96} className="h-full w-full object-contain" />
-                                </div>
-                                <p className="text-[10px] uppercase tracking-[0.2em] text-blue-300/80">Opponent</p>
-                                <p className="max-w-full truncate text-[11px] text-white/55">{formatName(opponent)}</p>
-                            </div>
-                        </div>
+                        <MatchFaceoffHero
+                            introReady={introReady}
+                            playerMemoji={playerMemoji}
+                            opponentMemoji={opponentMemoji}
+                            playerLabel={playerLabel}
+                            opponentLabel={formatName(opponent)}
+                        />
 
                         <div className="space-y-2">
                             <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest">

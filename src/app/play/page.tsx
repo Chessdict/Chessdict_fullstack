@@ -34,6 +34,8 @@ type PendingMatch = {
   stakeToken?: string | null;
   stakeAmount?: string | null;
   requestedStakeAmount?: string | null;
+  onChainGameId?: string | null;
+  readyToEnter?: boolean;
 };
 
 type IncomingChallenge = {
@@ -169,13 +171,12 @@ export default function PlayPage() {
       console.log("GAME READY EVENT:", data);
       setPendingMatch(prev => {
         if (!prev || prev.roomId !== data.roomId) return prev;
-        enterMatchedGame({
+        return {
           ...prev,
           timeControl: normalizeTimeControlMinutes(data.timeControl ?? prev.timeControl),
-        }, {
-          onChainGameId: data.onChainGameId ? BigInt(data.onChainGameId) : null,
-        });
-        return null;
+          onChainGameId: data.onChainGameId ?? prev.onChainGameId ?? null,
+          readyToEnter: true,
+        };
       });
     });
 
@@ -206,17 +207,57 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
-    socket.on('gameRejoined', (data: { roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
+    socket.on('gameRejoined', (data: { status?: string | null; roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
       console.log("GAME REJOINED EVENT:", data);
-      if (roomId !== data.roomId || status !== "in-progress") {
-        clearMatchState();
-      }
       const timeControlMinutes = normalizeTimeControlMinutes(
         data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
       );
       const initialSeconds = getTimeControlSeconds(timeControlMinutes);
       selectedTimeRef.current = timeControlMinutes;
       setInitialTime(initialSeconds);
+
+      const isWaitingStakedSetup =
+        data.status === "WAITING" &&
+        (!!data.stakeToken || !!data.stakeAmount || !!data.onChainGameId);
+
+      if (isWaitingStakedSetup) {
+        // Restore the staked setup modal instead of dropping the player into a live board prematurely.
+        clearMatchState();
+        setIsSearchOpen(false);
+        setPendingMatch({
+          roomId: data.roomId,
+          color: data.color as "white" | "black",
+          opponent: data.opponentAddress,
+          opponentRating: data.opponentRating,
+          playerRating: data.playerRating,
+          timeControl: timeControlMinutes,
+          staked: true,
+          stakeToken: data.stakeToken ?? null,
+          stakeAmount: data.stakeAmount ?? null,
+          requestedStakeAmount: null,
+          onChainGameId: data.onChainGameId ?? null,
+          readyToEnter: false,
+        });
+        setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
+        setStakeToken(data.stakeToken ?? null);
+        setStakeAmountRaw(data.stakeAmount ?? null);
+        setRoomId(data.roomId);
+        setPlayerColor(data.color as "white" | "black");
+        setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
+        if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
+        if (!gameMode) setGameMode("online");
+        setStatus("matched");
+        toast.info(
+          data.onChainGameId
+            ? "Rejoined staked setup. Waiting to finish confirmation."
+            : "Rejoined staked match setup.",
+        );
+        return;
+      }
+
+      if (roomId !== data.roomId || status !== "in-progress") {
+        clearMatchState();
+      }
       setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
       setStakeToken(data.stakeToken ?? null);
       setStakeAmountRaw(data.stakeAmount ?? null);
@@ -318,12 +359,13 @@ export default function PlayPage() {
             opponent={pendingMatch.opponent}
             color={pendingMatch.color}
             memoji={searchMemojiRef.current}
-            autoEnter={!pendingMatch.staked}
+            autoEnter={!pendingMatch.staked || !!pendingMatch.readyToEnter}
             staked={pendingMatch.staked}
             stakeToken={pendingMatch.stakeToken}
             stakeAmount={pendingMatch.stakeAmount}
             requestedStakeAmount={pendingMatch.requestedStakeAmount}
             timeControl={pendingMatch.timeControl}
+            existingOnChainGameId={pendingMatch.onChainGameId ?? null}
             roomId={pendingMatch.roomId}
             socket={socket}
             onAccept={() => {
@@ -332,7 +374,12 @@ export default function PlayPage() {
                 color: pendingMatch.color,
                 opponent: pendingMatch.opponent
               });
-              enterMatchedGame(pendingMatch);
+              enterMatchedGame(pendingMatch, {
+                onChainGameId:
+                  pendingMatch.onChainGameId != null
+                    ? BigInt(pendingMatch.onChainGameId)
+                    : undefined,
+              });
             }}
             onDecline={() => {
               queuedStakeAmountRef.current = null;
