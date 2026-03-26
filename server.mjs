@@ -297,6 +297,7 @@ app.prepare().then(async () => {
   function scheduleStakeCreationTimeout(roomId) {
     clearStakeCreationTimeout(roomId);
 
+    // Abort staked setup if the creator never gets as far as creating the on-chain game.
     const creationTimeout = setTimeout(async () => {
       stakeCreationTimeouts.delete(roomId);
       try {
@@ -592,6 +593,7 @@ app.prepare().then(async () => {
     let matchedSocketId;
     for (const [connectedWallet, socketId] of userSocketMap.entries()) {
       if (normalizeWalletAddress(connectedWallet) === target) {
+        // Reconnects can leave an older socket entry behind temporarily.
         matchedSocketId = socketId;
       }
     }
@@ -1500,6 +1502,7 @@ app.prepare().then(async () => {
       // Non-staked: start timer immediately
       initGameTimer(roomId, getTimeControlSeconds(matchedTimeControl));
     } else {
+      // Staked games wait for the creator to create on-chain before the confirm window starts.
       scheduleStakeCreationTimeout(roomId);
     }
 
@@ -2720,6 +2723,7 @@ app.prepare().then(async () => {
           if (!isStakedChallenge) {
             initGameTimer(acceptedRoomId, getTimeControlSeconds(timeControl));
           } else {
+            // Apply the same pre-create expiry to staked share-link games.
             scheduleStakeCreationTimeout(acceptedRoomId);
           }
 
@@ -3189,6 +3193,7 @@ app.prepare().then(async () => {
 
         const currentSocketId = getSocketIdForWallet(userId);
         if (currentSocketId === socket.id) {
+          // A stale socket disconnect should not remove a newer live socket for the same wallet.
           for (const [connectedWallet, mappedSocketId] of userSocketMap.entries()) {
             if (
               normalizeWalletAddress(connectedWallet) === normalizeWalletAddress(userId) &&

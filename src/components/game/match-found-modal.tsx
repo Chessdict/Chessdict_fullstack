@@ -164,6 +164,7 @@ export function MatchFoundModal({
     useEffect(() => {
         if (!staked || !existingOnChainGameId) return;
 
+        // Reconnects into a WAITING staked room should reopen the setup state, not restart creation.
         setOnChainGameId(existingOnChainGameId);
         if (isCreator) {
             hasStartedCreation.current = true;

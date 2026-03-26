@@ -221,6 +221,7 @@ export default function PlayPage() {
         (!!data.stakeToken || !!data.stakeAmount || !!data.onChainGameId);
 
       if (isWaitingStakedSetup) {
+        // Restore the staked setup modal instead of dropping the player into a live board prematurely.
         clearMatchState();
         setIsSearchOpen(false);
         setPendingMatch({
