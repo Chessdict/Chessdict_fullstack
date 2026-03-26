@@ -1,6 +1,6 @@
 "use client";
 
-import { useAccount, useDisconnect } from "wagmi";
+import { useAccount, useChainId, useDisconnect } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { GlassButton } from "./glass-button";
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -10,6 +10,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { User, LogOut, ChevronDown, X, Wallet } from "lucide-react";
 import { useTokenBalance, useTokenDecimals, useTokenSymbol } from "@/hooks/useChessdict";
 import { DEFAULT_STAKE_TOKEN } from "@/lib/contract";
+import { networkConfig } from "@/lib/network-config";
 import { formatUnits } from "viem";
 
 type ConnectWalletProps = {
@@ -18,6 +19,7 @@ type ConnectWalletProps = {
 
 export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
   const { address, isConnected, connector } = useAccount();
+  const chainId = useChainId();
   const { openConnectModal } = useConnectModal();
   const { disconnectAsync } = useDisconnect();
   const router = useRouter();
@@ -36,6 +38,9 @@ export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
   const formattedBalance = balanceRaw !== undefined && decimals !== undefined
     ? parseFloat(formatUnits(balanceRaw as bigint, decimals as number)).toFixed(2)
     : null;
+  const activeChainLabel = chainId === networkConfig.chainId
+    ? networkConfig.networkLabel
+    : `Chain ${chainId}`;
 
   const updatePosition = useCallback(() => {
     if (!buttonRef.current) return;
@@ -178,10 +183,15 @@ export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
           <button
             type="button"
             onClick={handleDisconnect}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-300 transition active:bg-red-400/15"
+            className="mt-4 flex w-full items-center justify-between gap-3 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-300 transition active:bg-red-400/15"
           >
-            <LogOut className="h-4 w-4" />
-            Disconnect
+            <span className="flex items-center gap-2">
+              <LogOut className="h-4 w-4" />
+              Disconnect
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-white/65">
+              {activeChainLabel}
+            </span>
           </button>
         </div>
       );
@@ -243,10 +253,15 @@ export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
                 <button
                   type="button"
                   onClick={handleDisconnect}
-                  className="flex w-full items-center gap-3 px-4 py-4 text-base text-red-400 transition active:bg-white/10"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-4 text-base text-red-400 transition active:bg-white/10"
                 >
-                  <LogOut className="h-5 w-5" />
-                  Disconnect
+                  <span className="flex items-center gap-3">
+                    <LogOut className="h-5 w-5" />
+                    Disconnect
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-white/60">
+                    {activeChainLabel}
+                  </span>
                 </button>
               </div>
             </div>
@@ -255,7 +270,7 @@ export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
             <div
               ref={dropdownRef}
               style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right }}
-              className="w-52 overflow-hidden rounded-xl border border-white/10 bg-black/90 backdrop-blur-xl shadow-2xl z-9999"
+              className="w-60 overflow-hidden rounded-xl border border-white/10 bg-black/90 backdrop-blur-xl shadow-2xl z-9999"
             >
               {formattedBalance !== null && (
                 <>
@@ -271,6 +286,13 @@ export function ConnectWallet({ onActionComplete }: ConnectWalletProps) {
                   <div className="border-t border-white/10" />
                 </>
               )}
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <span className="text-sm text-white/50">Network</span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-white/70">
+                  {activeChainLabel}
+                </span>
+              </div>
+              <div className="border-t border-white/10" />
               <Link
                 href="/profile"
                 onClick={() => {

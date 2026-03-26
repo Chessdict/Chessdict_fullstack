@@ -11,7 +11,7 @@ import {
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 60 * 24;
+const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 2;
 
 function normalizeStakeAmountString(value: unknown) {
   const numericAmount = Number.parseFloat(String(value ?? ""));

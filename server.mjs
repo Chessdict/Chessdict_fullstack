@@ -2545,7 +2545,7 @@ app.prepare().then(async () => {
           return;
         }
 
-        const creatorSocketId = userSocketMap.get(challengeSnapshot.creator.walletAddress);
+        const creatorSocketId = getSocketIdForWallet(challengeSnapshot.creator.walletAddress);
         if (challengeSnapshot.staked && !creatorSocketId) {
           socket.emit("openChallengeError", {
             challengeId,
