@@ -233,6 +233,7 @@ app.prepare().then(async () => {
   const stakeCreationFailureDelays = new Map(); // roomId -> timeout handle (grace period before notifying joiner)
   const recentlyCompletedGames = new Set(); // Track games that just ended to prevent false disconnect forfeits
   const rematchRequests = new Map(); // roomId -> { requesterWallet, targetWallet, timeoutHandle }
+  const spectatorJoinAttempts = new Map(); // socketId -> { count, windowStartedAt }
   // ─── Server-Authoritative Game Timers ───
   const DEFAULT_QUEUE_TIME_CONTROL = 3;
   const MAX_STAKED_TIME_CONTROL = 3;
@@ -242,12 +243,16 @@ app.prepare().then(async () => {
   const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
   const STAKE_CONFIRM_TIMEOUT_MS = 45000;
   const REMATCH_REQUEST_TTL_MS = 120000;
+  const SPECTATOR_JOIN_WINDOW_MS = 10000;
+  const SPECTATOR_JOIN_LIMIT = 12;
+  const SPECTATOR_ROOM_PREFIX = "spectators:";
   const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
 
   // ─── Reconnection / Disconnect Grace Period (regular games) ───
   const userActiveGames = new Map(); // walletAddress -> { roomId, color, opponentWallet, opponentRating, playerRating }
   const gameDisconnectTimers = new Map(); // walletAddress -> { roomId, timer, deadline }
   const gameStateStore = new Map(); // roomId -> { fen, moves[] }
+  const INITIAL_BOARD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
   function normalizeQueueTimeControl(timeControl) {
     const numericValue = Number.parseInt(String(timeControl ?? ""), 10);
@@ -276,6 +281,241 @@ app.prepare().then(async () => {
       blackTime: Math.round(timer.blackTime),
       initialTime: timer.initialTime,
     };
+  }
+
+  function getPublicTimerSnapshot(timer) {
+    const baseSnapshot = getTimerSnapshot(timer);
+    return {
+      ...baseSnapshot,
+      turn: timer.turn === 'b' ? 'b' : 'w',
+    };
+  }
+
+  function persistGameTimer(roomId, timer) {
+    setGameTimer(roomId, {
+      initialTime: timer.initialTime,
+      whiteTime: timer.whiteTime,
+      blackTime: timer.blackTime,
+      turn: timer.turn,
+      lastMoveTimestamp: timer.lastMoveTimestamp,
+    }).catch(() => { });
+  }
+
+  function isUuidRoomId(roomId) {
+    return typeof roomId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomId);
+  }
+
+  function getSpectatorRoomId(roomId) {
+    return `${SPECTATOR_ROOM_PREFIX}${roomId}`;
+  }
+
+  function canJoinSpectatorRoom(socketId) {
+    const now = Date.now();
+    const existing = spectatorJoinAttempts.get(socketId);
+
+    if (!existing || now - existing.windowStartedAt > SPECTATOR_JOIN_WINDOW_MS) {
+      spectatorJoinAttempts.set(socketId, { count: 1, windowStartedAt: now });
+      return true;
+    }
+
+    if (existing.count >= SPECTATOR_JOIN_LIMIT) {
+      return false;
+    }
+
+    existing.count += 1;
+    spectatorJoinAttempts.set(socketId, existing);
+    return true;
+  }
+
+  function getFenTurn(fen) {
+    return String(fen || "").split(" ")[1] === "b" ? "b" : "w";
+  }
+
+  function sanitizePublicMoveRecord(move) {
+    if (
+      !move ||
+      typeof move.san !== "string" ||
+      typeof move.from !== "string" ||
+      typeof move.to !== "string" ||
+      (move.color !== "w" && move.color !== "b") ||
+      typeof move.piece !== "string"
+    ) {
+      return null;
+    }
+
+    const numericTimestamp =
+      typeof move.timestamp === "number"
+        ? move.timestamp
+        : Number.parseInt(String(move.timestamp ?? ""), 10);
+
+    return {
+      san: move.san,
+      from: move.from,
+      to: move.to,
+      color: move.color,
+      piece: move.piece,
+      timestamp: Number.isFinite(numericTimestamp) ? numericTimestamp : Date.now(),
+    };
+  }
+
+  function formatShortAddress(address) {
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  }
+
+  function getWalletDisplayName(username, walletAddress, fallback = "Player") {
+    if (typeof username === "string" && username.trim()) {
+      return username.trim();
+    }
+    if (typeof walletAddress === "string" && walletAddress.startsWith("0x")) {
+      return formatShortAddress(walletAddress);
+    }
+    return fallback;
+  }
+
+  function buildPublicPlayerInfo(player, timeControl, isStakedGame) {
+    return {
+      address: player.walletAddress,
+      shortAddress: formatShortAddress(player.walletAddress),
+      username: player.username ?? null,
+      displayName: getWalletDisplayName(player.username, player.walletAddress),
+      rating: getPlayerRatingForTimeControl(player, timeControl, isStakedGame),
+    };
+  }
+
+  async function getPublicTimerState(roomId) {
+    return gameTimers.get(roomId) ?? await getGameTimer(roomId);
+  }
+
+  async function buildPublicSpectatorSnapshot(roomId) {
+    if (!isUuidRoomId(roomId)) return null;
+
+    const game = await prisma.game.findUnique({
+      where: { id: roomId },
+      include: {
+        whitePlayer: true,
+        blackPlayer: true,
+      },
+    });
+
+    if (!game || !game.whitePlayer || !game.blackPlayer) return null;
+
+    const liveState = await getStoredGameState(roomId);
+    const hasLiveMoves = Array.isArray(liveState?.moves) && liveState.moves.length > 0;
+
+    if (!["IN_PROGRESS", "COMPLETED", "DRAW"].includes(game.status)) {
+      return null;
+    }
+
+    if (game.status !== "IN_PROGRESS" && !hasLiveMoves && !game.pgn) {
+      return null;
+    }
+
+    const timeControl = normalizeQueueTimeControl(game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
+    const isStakedGame = !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
+    const fen =
+      typeof liveState?.fen === "string"
+        ? liveState.fen
+        : game.fen === "start"
+          ? INITIAL_BOARD_FEN
+          : game.fen || INITIAL_BOARD_FEN;
+    const persistedTimer = await getPublicTimerState(roomId);
+    const timerSnapshot = persistedTimer
+      ? (() => {
+          const initialTime =
+            typeof persistedTimer.initialTime === "number"
+              ? persistedTimer.initialTime
+              : getTimeControlSeconds(timeControl);
+          const whiteTime =
+            typeof persistedTimer.whiteTime === "number"
+              ? persistedTimer.whiteTime
+              : initialTime;
+          const blackTime =
+            typeof persistedTimer.blackTime === "number"
+              ? persistedTimer.blackTime
+              : initialTime;
+          const lastMoveTimestamp =
+            typeof persistedTimer.lastMoveTimestamp === "number"
+              ? persistedTimer.lastMoveTimestamp
+              : Date.now();
+          const turn = persistedTimer.turn === "b" ? "b" : "w";
+          const elapsedSeconds = Math.max(0, (Date.now() - lastMoveTimestamp) / 1000);
+          return {
+            initialTime: Math.round(initialTime),
+            whiteTime: Math.round(
+              turn === "w"
+                ? Math.max(0, whiteTime - elapsedSeconds)
+                : whiteTime,
+            ),
+            blackTime: Math.round(
+              turn === "b"
+                ? Math.max(0, blackTime - elapsedSeconds)
+                : blackTime,
+            ),
+            turn,
+          };
+        })()
+      : {
+          initialTime: getTimeControlSeconds(timeControl),
+          whiteTime: getTimeControlSeconds(timeControl),
+          blackTime: getTimeControlSeconds(timeControl),
+          turn: getFenTurn(fen),
+        };
+
+    let result = null;
+    if (game.status === "DRAW") {
+      result = "draw";
+    } else if (game.winnerId && game.winnerId === game.whitePlayerId) {
+      result = "white";
+    } else if (game.winnerId && game.winnerId === game.blackPlayerId) {
+      result = "black";
+    }
+
+    return {
+      roomId: game.id,
+      status: game.status,
+      result,
+      timeControl,
+      initialTime: timerSnapshot.initialTime,
+      whiteTime: timerSnapshot.whiteTime,
+      blackTime: timerSnapshot.blackTime,
+      turn: timerSnapshot.turn,
+      fen,
+      pgn: game.pgn ?? null,
+      moves: Array.isArray(liveState?.moves)
+        ? liveState.moves
+            .map((move) => sanitizePublicMoveRecord(move))
+            .filter(Boolean)
+        : [],
+      white: buildPublicPlayerInfo(game.whitePlayer, timeControl, isStakedGame),
+      black: buildPublicPlayerInfo(game.blackPlayer, timeControl, isStakedGame),
+      createdAt: game.createdAt.toISOString(),
+      endedAt: game.status === "IN_PROGRESS" ? null : game.updatedAt.toISOString(),
+      isStaked: isStakedGame,
+    };
+  }
+
+  function emitToSpectators(roomId, eventName, payload) {
+    io.to(getSpectatorRoomId(roomId)).emit(eventName, payload);
+  }
+
+  async function requireActivePlayerInRoom(socket, roomId, eventName) {
+    const socketUserId = typeof socket.handshake.query?.userId === "string"
+      ? socket.handshake.query.userId
+      : null;
+
+    if (!socketUserId || !isUuidRoomId(roomId)) {
+      socket.emit("roomAccessDenied", { event: eventName });
+      return null;
+    }
+
+    // Player room membership is checked on the server so spectators cannot mutate via raw room IDs.
+    const activeGame = await hydrateActiveGame(socketUserId);
+    if (!activeGame || activeGame.roomId !== roomId) {
+      socket.emit("roomAccessDenied", { event: eventName });
+      return null;
+    }
+
+    return activeGame;
   }
 
   function clearStakeCreationFailureDelay(roomId) {
@@ -420,6 +660,8 @@ app.prepare().then(async () => {
     blackWallet,
     whitePlayerRating,
     blackPlayerRating,
+    whitePlayerName,
+    blackPlayerName,
     timeControl,
   }) {
     userActiveGames.set(whiteWallet, {
@@ -428,6 +670,8 @@ app.prepare().then(async () => {
       opponentWallet: blackWallet,
       playerRating: whitePlayerRating,
       opponentRating: blackPlayerRating,
+      playerName: whitePlayerName ?? null,
+      opponentName: blackPlayerName ?? null,
       timeControl,
     });
     userActiveGames.set(blackWallet, {
@@ -436,6 +680,8 @@ app.prepare().then(async () => {
       opponentWallet: whiteWallet,
       playerRating: blackPlayerRating,
       opponentRating: whitePlayerRating,
+      playerName: blackPlayerName ?? null,
+      opponentName: whitePlayerName ?? null,
       timeControl,
     });
 
@@ -449,6 +695,15 @@ app.prepare().then(async () => {
   async function hydrateActiveGame(walletAddress) {
     const inMemory = userActiveGames.get(walletAddress);
     if (inMemory) return inMemory;
+
+    const normalizedWallet = normalizeWalletAddress(walletAddress);
+    for (const [storedWallet, activeGame] of userActiveGames.entries()) {
+      if (normalizeWalletAddress(storedWallet) === normalizedWallet) {
+        // Player sockets and wallet UIs do not always preserve case, so room auth must match canonically.
+        userActiveGames.set(walletAddress, activeGame);
+        return activeGame;
+      }
+    }
 
     const persisted = await getUserActiveGame(walletAddress);
     if (persisted) {
@@ -486,6 +741,7 @@ app.prepare().then(async () => {
     };
     timerState.timeoutHandle = setTimeout(() => handleServerTimeout(roomId), timeInSeconds * 1000);
     gameTimers.set(roomId, timerState);
+    persistGameTimer(roomId, timerState);
     console.log(`[TIMER] Initialized for room ${roomId}: ${timeInSeconds}s each`);
   }
 
@@ -502,11 +758,16 @@ app.prepare().then(async () => {
     const loserColor = timer.turn === 'w' ? 'white' : 'black';
     const winnerColor = timer.turn === 'w' ? 'black' : 'white';
     if (timer.turn === 'w') timer.whiteTime = 0; else timer.blackTime = 0;
+    persistGameTimer(roomId, timer);
 
     console.log(`[TIMER] Server timeout in room ${roomId}: ${loserColor} ran out of time`);
 
     // Emit timeSync so both clients see 0
     io.to(roomId).emit('timeSync', getTimerSnapshot(timer));
+    emitToSpectators(roomId, 'spectatorTimeSync', {
+      roomId,
+      ...getPublicTimerSnapshot(timer),
+    });
 
     (async () => {
       try {
@@ -537,6 +798,12 @@ app.prepare().then(async () => {
 
         const payload = { winner: winnerColor, reason: 'timeout', ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
         io.to(roomId).emit('gameOver', payload);
+        emitToSpectators(roomId, 'spectatorGameOver', {
+          roomId,
+          winner: winnerColor,
+          reason: 'timeout',
+          endedAt: new Date().toISOString(),
+        });
 
         const wSid = userSocketMap.get(whitePlayer?.walletAddress);
         const bSid = userSocketMap.get(blackPlayer?.walletAddress);
@@ -577,6 +844,7 @@ app.prepare().then(async () => {
     }
 
     timer.timeoutHandle = setTimeout(() => handleServerTimeout(roomId), nextPlayerTime * 1000);
+    persistGameTimer(roomId, timer);
     return getTimerSnapshot(timer);
   }
 
@@ -1466,12 +1734,16 @@ app.prepare().then(async () => {
 
     const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl, isStaked);
     const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl, isStaked);
+    const whitePlayerName = getWalletDisplayName(whiteUser.username, whiteUser.walletAddress);
+    const blackPlayerName = getWalletDisplayName(blackUser.username, blackUser.walletAddress);
 
     // Emit match found to both players (include ratings + staking info)
     io.to(p1.socketId).emit("matchFound", {
       ...matchPayload,
       color: "white",
       opponent: p2.userId,
+      playerName: whitePlayerName,
+      opponentName: blackPlayerName,
       playerRating: whitePlayerRating,
       opponentRating: blackPlayerRating,
     });
@@ -1479,6 +1751,8 @@ app.prepare().then(async () => {
       ...matchPayload,
       color: "black",
       opponent: p1.userId,
+      playerName: blackPlayerName,
+      opponentName: whitePlayerName,
       playerRating: blackPlayerRating,
       opponentRating: whitePlayerRating,
     });
@@ -1495,6 +1769,8 @@ app.prepare().then(async () => {
       blackWallet: p2.userId,
       whitePlayerRating,
       blackPlayerRating,
+      whitePlayerName,
+      blackPlayerName,
       timeControl: matchedTimeControl,
     });
 
@@ -1535,6 +1811,8 @@ app.prepare().then(async () => {
     const matchedTimeControl = normalizeQueueTimeControl(timeControl);
     const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl, false);
     const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl, false);
+    const whitePlayerName = getWalletDisplayName(whiteUser.username, whiteUser.walletAddress);
+    const blackPlayerName = getWalletDisplayName(blackUser.username, blackUser.walletAddress);
     const game = await prisma.game.create({
       data: {
         whitePlayerId: whiteUser.id,
@@ -1558,6 +1836,8 @@ app.prepare().then(async () => {
       roomId,
       color: "white",
       opponent: blackWallet,
+      playerName: whitePlayerName,
+      opponentName: blackPlayerName,
       playerRating: whitePlayerRating,
       opponentRating: blackPlayerRating,
       timeControl: matchedTimeControl,
@@ -1566,6 +1846,8 @@ app.prepare().then(async () => {
       roomId,
       color: "black",
       opponent: whiteWallet,
+      playerName: blackPlayerName,
+      opponentName: whitePlayerName,
       playerRating: blackPlayerRating,
       opponentRating: whitePlayerRating,
       timeControl: matchedTimeControl,
@@ -1577,6 +1859,8 @@ app.prepare().then(async () => {
       blackWallet,
       whitePlayerRating,
       blackPlayerRating,
+      whitePlayerName,
+      blackPlayerName,
       timeControl: matchedTimeControl,
     });
     initGameTimer(roomId, getTimeControlSeconds(matchedTimeControl));
@@ -1661,7 +1945,7 @@ app.prepare().then(async () => {
     }
 
     socket.on("joinQueue", (data) => {
-      const uid = data?.userId || userId;
+      const uid = typeof userId === "string" ? userId : null;
       if (!uid) return;
 
       const normalizedData = {
@@ -1682,8 +1966,38 @@ app.prepare().then(async () => {
       console.log(`Player ${userId} left queue`);
     });
 
+    socket.on("joinSpectatorRoom", async ({ roomId }) => {
+      if (!isUuidRoomId(roomId)) {
+        socket.emit("spectatorUnavailable", { roomId });
+        return;
+      }
+
+      if (!canJoinSpectatorRoom(socket.id)) {
+        socket.emit("spectatorUnavailable", { roomId });
+        return;
+      }
+
+      const snapshot = await buildPublicSpectatorSnapshot(roomId);
+      if (!snapshot) {
+        socket.emit("spectatorUnavailable", { roomId });
+        return;
+      }
+
+      // Spectators use a separate room so they never trigger player presence or active-game tracking.
+      socket.join(getSpectatorRoomId(roomId));
+      socket.emit("spectatorSnapshot", snapshot);
+    });
+
+    socket.on("leaveSpectatorRoom", ({ roomId }) => {
+      if (!isUuidRoomId(roomId)) return;
+      socket.leave(getSpectatorRoomId(roomId));
+    });
+
     // ─── Staked game: Player1 (white) created game on-chain ───
     socket.on("stakeCreated", async ({ roomId, onChainGameId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "stakeCreated");
+      if (!activeGame || activeGame.color !== "white") return;
+
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
@@ -1735,13 +2049,20 @@ app.prepare().then(async () => {
     });
 
     socket.on("stakeCreationFailed", ({ roomId }) => {
-      if (!roomId) return;
-      scheduleStakeCreationFailureDelay(roomId);
-      console.log(`[STAKE] Creator failed to create on-chain game for room ${roomId}; delaying joiner notice for ${STAKE_CREATION_FAILURE_GRACE_MS}ms`);
+      requireActivePlayerInRoom(socket, roomId, "stakeCreationFailed").then((activeGame) => {
+        if (!activeGame || activeGame.color !== "white" || !roomId) return;
+        scheduleStakeCreationFailureDelay(roomId);
+        console.log(`[STAKE] Creator failed to create on-chain game for room ${roomId}; delaying joiner notice for ${STAKE_CREATION_FAILURE_GRACE_MS}ms`);
+      }).catch((e) => {
+        console.error("[STAKE] stakeCreationFailed auth error:", e);
+      });
     });
 
     // ─── Staked game: Player2 confirmed stake on-chain ───
     socket.on("stakeConfirmed", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "stakeConfirmed");
+      if (!activeGame || activeGame.color !== "black") return;
+
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
@@ -1776,6 +2097,9 @@ app.prepare().then(async () => {
 
     // ─── Staked game: Player2 declined stake ───
     socket.on("stakeDeclined", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "stakeDeclined");
+      if (!activeGame) return;
+
       try {
         const game = await prisma.game.findUnique({ where: { id: roomId } });
         if (!game || game.status !== "WAITING") return;
@@ -1823,14 +2147,17 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on("joinRoom", ({ roomId }) => {
-      socket.join(roomId);
-      activeGames.set(socket.id, roomId);
-      console.log(`Socket ${socket.id} joined room ${roomId}`);
-      socket.to(roomId).emit("opponentJoined", { socketId: socket.id });
+    socket.on("joinRoom", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "joinRoom");
+      if (!activeGame) return;
+
+      socket.join(activeGame.roomId);
+      activeGames.set(socket.id, activeGame.roomId);
+      console.log(`Socket ${socket.id} joined room ${activeGame.roomId}`);
+      socket.to(activeGame.roomId).emit("opponentJoined", { socketId: socket.id });
 
       // Send current timer state so late-joining players sync immediately
-      const timer = gameTimers.get(roomId);
+      const timer = gameTimers.get(activeGame.roomId);
       if (timer) {
         const now = Date.now();
         const elapsed = (now - timer.lastMoveTimestamp) / 1000;
@@ -1870,6 +2197,8 @@ app.prepare().then(async () => {
         roomId: activeGame.roomId,
         color: activeGame.color,
         opponentAddress: activeGame.opponentWallet,
+        opponentName: activeGame.opponentName ?? null,
+        playerName: activeGame.playerName ?? null,
         opponentRating: activeGame.opponentRating,
         playerRating: activeGame.playerRating,
         fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -1885,10 +2214,13 @@ app.prepare().then(async () => {
       console.log(`[REJOIN] Player ${userId} explicitly rejoined game ${activeGame.roomId}`);
     });
 
-    socket.on("leaveRoom", ({ roomId }) => {
-      socket.leave(roomId);
-      console.log(`Socket ${socket.id} left room ${roomId}`);
-      socket.to(roomId).emit("opponentLeft", { socketId: socket.id });
+    socket.on("leaveRoom", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "leaveRoom");
+      if (!activeGame) return;
+
+      socket.leave(activeGame.roomId);
+      console.log(`Socket ${socket.id} left room ${activeGame.roomId}`);
+      socket.to(activeGame.roomId).emit("opponentLeft", { socketId: socket.id });
     });
 
     socket.on("requestRematch", async ({ roomId }) => {
@@ -2092,25 +2424,58 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on("movePiece", ({ roomId, move, fen, moveRecord }) => {
-      console.log(`Move in ${roomId}:`, move);
-      socket.to(roomId).emit("opponentMove", move);
+    socket.on("movePiece", async ({ roomId, move, fen, moveRecord }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "movePiece");
+      if (!activeGame) return;
+
+      console.log(`Move in ${activeGame.roomId}:`, move);
+      socket.to(activeGame.roomId).emit("opponentMove", move);
+      const opponentSocketId = getSocketIdForWallet(activeGame.opponentWallet);
+      if (opponentSocketId && opponentSocketId !== socket.id) {
+        // Direct opponent emit keeps live play resilient if room membership briefly lags behind reconnects.
+        io.to(opponentSocketId).emit("opponentMove", move);
+      }
 
       // Store game state for reconnection
-      const gs = gameStateStore.get(roomId);
+      const gs = await getStoredGameState(activeGame.roomId) ??
+        buildInitialRegularGameState(activeGame.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
       if (gs) {
         if (fen) gs.fen = fen;
         if (moveRecord) gs.moves.push(moveRecord);
+        gameStateStore.set(activeGame.roomId, gs);
+        setGameState(activeGame.roomId, gs).catch(() => { });
       }
 
+      emitToSpectators(activeGame.roomId, "spectatorMove", {
+        roomId: activeGame.roomId,
+        fen: typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN,
+        moves: Array.isArray(gs?.moves)
+          ? gs.moves.map((entry) => sanitizePublicMoveRecord(entry)).filter(Boolean)
+          : [],
+        turn: getFenTurn(typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN),
+      });
+
       // Update server-authoritative timer and broadcast synced times
-      const times = processMoveTiming(roomId);
+      const times = processMoveTiming(activeGame.roomId);
       if (times) {
-        io.to(roomId).emit("timeSync", times);
+        io.to(activeGame.roomId).emit("timeSync", times);
+        io.to(socket.id).emit("timeSync", times);
+        if (opponentSocketId && opponentSocketId !== socket.id) {
+          io.to(opponentSocketId).emit("timeSync", times);
+        }
+        const timer = gameTimers.get(activeGame.roomId);
+        emitToSpectators(activeGame.roomId, "spectatorTimeSync", {
+          roomId: activeGame.roomId,
+          ...(timer ? getPublicTimerSnapshot(timer) : { ...times, turn: getFenTurn(typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN) }),
+        });
       }
     });
 
     socket.on("sendChallenge", ({ toUserId, fromUserId, stakeEnabled, stakeToken, stakeAmount, timeControl }) => {
+      if (!userId || normalizeWalletAddress(fromUserId) !== normalizeWalletAddress(userId)) {
+        socket.emit("challengeError", { error: "Unauthorized challenge request", toUserId });
+        return;
+      }
       const targetSocketId = userSocketMap.get(toUserId);
       const normalizedTimeControl = stakeEnabled
         ? normalizeStakedTimeControl(timeControl)
@@ -2130,21 +2495,28 @@ app.prepare().then(async () => {
     });
 
     // ─── In-Game Chat ───
-    socket.on("chatMessage", ({ roomId, message }) => {
-      if (!roomId || !message || !userId) return;
+    socket.on("chatMessage", async ({ roomId, message }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "chatMessage");
+      if (!activeGame || !message || !userId) return;
       const text = String(message).slice(0, 500);
       const payload = { sender: userId, text, timestamp: Date.now() };
       // Store chat message for reconnection
-      const gs = gameStateStore.get(roomId);
+      const gs = await getStoredGameState(activeGame.roomId) ??
+        buildInitialRegularGameState(activeGame.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
       if (gs) {
         if (!gs.chatMessages) gs.chatMessages = [];
         gs.chatMessages.push(payload);
+        gameStateStore.set(activeGame.roomId, gs);
+        setGameState(activeGame.roomId, gs).catch(() => { });
       }
       // Broadcast to others in room only; sender adds message optimistically
-      socket.to(roomId).emit("chatMessage", payload);
+      socket.to(activeGame.roomId).emit("chatMessage", payload);
     });
 
     socket.on("declineChallenge", ({ toUserId, fromUserId }) => {
+      if (!userId || normalizeWalletAddress(fromUserId) !== normalizeWalletAddress(userId)) {
+        return;
+      }
       const targetSocketId = userSocketMap.get(toUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit("challengeDeclined", { from: fromUserId });
@@ -2170,11 +2542,14 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on("offerDraw", ({ roomId }) => {
-      const roomSockets = io.sockets.adapter.rooms.get(roomId);
-      console.log(`[SERVER] Draw offered in room ${roomId} by socket ${socket.id}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
+    socket.on("offerDraw", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "offerDraw");
+      if (!activeGame) return;
+
+      const roomSockets = io.sockets.adapter.rooms.get(activeGame.roomId);
+      console.log(`[SERVER] Draw offered in room ${activeGame.roomId} by socket ${socket.id}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
       // Use socket.to to send to all room members except the sender
-      socket.to(roomId).emit("drawOffered");
+      socket.to(activeGame.roomId).emit("drawOffered");
       // Also broadcast via io.to for reliability (sender will also get it, but they already know)
       if (roomSockets) {
         roomSockets.forEach(sid => {
@@ -2186,26 +2561,29 @@ app.prepare().then(async () => {
     });
 
     socket.on("acceptDraw", async ({ roomId }) => {
-      console.log(`[SERVER] Draw accepted in room ${roomId} by socket ${socket.id}`);
-      cleanupRegularGame(roomId);
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "acceptDraw");
+      if (!activeGame) return;
+
+      console.log(`[SERVER] Draw accepted in room ${activeGame.roomId} by socket ${socket.id}`);
+      cleanupRegularGame(activeGame.roomId);
       try {
-        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        const game = await prisma.game.findUnique({ where: { id: activeGame.roomId } });
         if (!game || game.status !== "IN_PROGRESS") {
-          console.log(`[SERVER] Game ${roomId} not valid for draw`);
+          console.log(`[SERVER] Game ${activeGame.roomId} not valid for draw`);
           return;
         }
 
         await prisma.game.update({
-          where: { id: roomId },
+          where: { id: activeGame.roomId },
           data: { status: "COMPLETED", winnerId: null },
         });
 
         // Update ELO ratings for draw
         const newRatings = await updateRatings(game, true);
 
-        recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => { });
-        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
+        recentlyCompletedGames.add(activeGame.roomId);
+        markGameCompleted(activeGame.roomId, 10).catch(() => { });
+        setTimeout(() => recentlyCompletedGames.delete(activeGame.roomId), 10000);
 
         // Also emit directly to both player sockets for reliability
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
@@ -2219,23 +2597,32 @@ app.prepare().then(async () => {
         }
 
         const gameOverPayload = { winner: "draw", reason: "draw", ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
-        io.to(roomId).emit("gameOver", gameOverPayload);
+        io.to(activeGame.roomId).emit("gameOver", gameOverPayload);
+        emitToSpectators(activeGame.roomId, "spectatorGameOver", {
+          roomId: activeGame.roomId,
+          winner: "draw",
+          reason: "draw",
+          endedAt: new Date().toISOString(),
+        });
 
         const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
         const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
         if (whiteSocketId) io.to(whiteSocketId).emit("gameOver", gameOverPayload);
         if (blackSocketId) io.to(blackSocketId).emit("gameOver", gameOverPayload);
 
-        console.log(`[SERVER] Game ${roomId} ended in draw by agreement`);
+        console.log(`[SERVER] Game ${activeGame.roomId} ended in draw by agreement`);
       } catch (error) {
         console.error("Error processing draw acceptance:", error);
       }
     });
 
-    socket.on("cancelDraw", ({ roomId }) => {
-      console.log(`[SERVER] Draw offer cancelled in room ${roomId} by socket ${socket.id}`);
-      socket.to(roomId).emit("drawCancelled");
-      const roomSockets = io.sockets.adapter.rooms.get(roomId);
+    socket.on("cancelDraw", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "cancelDraw");
+      if (!activeGame) return;
+
+      console.log(`[SERVER] Draw offer cancelled in room ${activeGame.roomId} by socket ${socket.id}`);
+      socket.to(activeGame.roomId).emit("drawCancelled");
+      const roomSockets = io.sockets.adapter.rooms.get(activeGame.roomId);
       if (roomSockets) {
         roomSockets.forEach(sid => {
           if (sid !== socket.id) {
@@ -2245,11 +2632,14 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on("declineDraw", ({ roomId }) => {
-      console.log(`[SERVER] Draw declined in room ${roomId} by socket ${socket.id}`);
-      socket.to(roomId).emit("drawDeclined");
+    socket.on("declineDraw", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "declineDraw");
+      if (!activeGame) return;
+
+      console.log(`[SERVER] Draw declined in room ${activeGame.roomId} by socket ${socket.id}`);
+      socket.to(activeGame.roomId).emit("drawDeclined");
       // Also send directly for reliability
-      const roomSockets = io.sockets.adapter.rooms.get(roomId);
+      const roomSockets = io.sockets.adapter.rooms.get(activeGame.roomId);
       if (roomSockets) {
         roomSockets.forEach(sid => {
           if (sid !== socket.id) {
@@ -2259,21 +2649,24 @@ app.prepare().then(async () => {
       }
     });
 
-    socket.on("resign", async ({ roomId, userId }) => {
-      console.log(`[SERVER] Resignation received from ${userId} in room ${roomId}`);
+    socket.on("resign", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "resign");
+      if (!activeGame) return;
+
+      console.log(`[SERVER] Resignation received from ${userId} in room ${activeGame.roomId}`);
       console.log(`[SERVER] Socket ${socket.id} rooms:`, Array.from(socket.rooms));
-      cleanupRegularGame(roomId);
+      cleanupRegularGame(activeGame.roomId);
       try {
-        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        const game = await prisma.game.findUnique({ where: { id: activeGame.roomId } });
         console.log(`[SERVER] Game found:`, game ? { id: game.id, status: game.status, whitePlayerId: game.whitePlayerId, blackPlayerId: game.blackPlayerId } : null);
         if (!game) {
-          console.error(`Game not found for roomId: ${roomId}`);
+          console.error(`Game not found for roomId: ${activeGame.roomId}`);
           socket.emit("resignError", { error: "Game not found" });
           return;
         }
 
         if (game.status !== "IN_PROGRESS") {
-          console.log(`Game ${roomId} is not in progress, status: ${game.status}`);
+          console.log(`Game ${activeGame.roomId} is not in progress, status: ${game.status}`);
           socket.emit("resignError", { error: "Game is not in progress" });
           return;
         }
@@ -2302,7 +2695,7 @@ app.prepare().then(async () => {
 
         // Update game in database
         await prisma.game.update({
-          where: { id: roomId },
+          where: { id: activeGame.roomId },
           data: {
             status: "COMPLETED",
             winnerId: winnerId
@@ -2313,16 +2706,16 @@ app.prepare().then(async () => {
         const updatedGame = { ...game, winnerId };
         const newRatings = await updateRatings(updatedGame);
 
-        console.log(`[SERVER] Game ${roomId} ended by resignation. Winner: ${winnerColor}`);
+        console.log(`[SERVER] Game ${activeGame.roomId} ended by resignation. Winner: ${winnerColor}`);
 
         // Mark game as recently completed to prevent false disconnect forfeits
-        recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => { });
-        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
+        recentlyCompletedGames.add(activeGame.roomId);
+        markGameCompleted(activeGame.roomId, 10).catch(() => { });
+        setTimeout(() => recentlyCompletedGames.delete(activeGame.roomId), 10000); // Clean up after 10 seconds
 
         // Emit gameOver to all players in the room
-        const roomSockets = io.sockets.adapter.rooms.get(roomId);
-        console.log(`[SERVER] Emitting gameOver to room ${roomId}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
+        const roomSockets = io.sockets.adapter.rooms.get(activeGame.roomId);
+        console.log(`[SERVER] Emitting gameOver to room ${activeGame.roomId}. Sockets in room:`, roomSockets ? Array.from(roomSockets) : "none");
 
         // Also emit directly to both players via their socket IDs for reliability
         const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
@@ -2340,7 +2733,13 @@ app.prepare().then(async () => {
         const gameOverPayload = { winner: winnerColor, reason: "resignation", ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
 
         // Emit to room (backup)
-        io.to(roomId).emit("gameOver", gameOverPayload);
+        io.to(activeGame.roomId).emit("gameOver", gameOverPayload);
+        emitToSpectators(activeGame.roomId, "spectatorGameOver", {
+          roomId: activeGame.roomId,
+          winner: winnerColor,
+          reason: "resignation",
+          endedAt: new Date().toISOString(),
+        });
 
         // Also emit directly to both player sockets
         if (whiteSocketId) {
@@ -2358,17 +2757,20 @@ app.prepare().then(async () => {
     });
 
     socket.on("gameComplete", async ({ roomId, winner, reason }) => {
-      console.log(`[SERVER] Game complete received for room ${roomId}: winner=${winner}, reason=${reason}`);
-      cleanupRegularGame(roomId);
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "gameComplete");
+      if (!activeGame) return;
+
+      console.log(`[SERVER] Game complete received for room ${activeGame.roomId}: winner=${winner}, reason=${reason}`);
+      cleanupRegularGame(activeGame.roomId);
       try {
-        const game = await prisma.game.findUnique({ where: { id: roomId } });
+        const game = await prisma.game.findUnique({ where: { id: activeGame.roomId } });
         if (!game) {
-          console.error(`[SERVER] Game not found for roomId: ${roomId}`);
+          console.error(`[SERVER] Game not found for roomId: ${activeGame.roomId}`);
           return;
         }
 
         if (game.status !== "IN_PROGRESS") {
-          console.log(`[SERVER] Game ${roomId} is not in progress, status: ${game.status}`);
+          console.log(`[SERVER] Game ${activeGame.roomId} is not in progress, status: ${game.status}`);
           return;
         }
 
@@ -2383,7 +2785,7 @@ app.prepare().then(async () => {
 
         // Update game in database
         await prisma.game.update({
-          where: { id: roomId },
+          where: { id: activeGame.roomId },
           data: {
             status: "COMPLETED",
             winnerId: winnerId
@@ -2395,12 +2797,12 @@ app.prepare().then(async () => {
         const updatedGame = { ...game, winnerId };
         const newRatings = await updateRatings(updatedGame, isDraw);
 
-        console.log(`[SERVER] Game ${roomId} marked as COMPLETED. Winner: ${winner}, Reason: ${reason}`);
+        console.log(`[SERVER] Game ${activeGame.roomId} marked as COMPLETED. Winner: ${winner}, Reason: ${reason}`);
 
         // Mark game as recently completed to prevent false disconnect forfeits
-        recentlyCompletedGames.add(roomId);
-        markGameCompleted(roomId, 10).catch(() => { });
-        setTimeout(() => recentlyCompletedGames.delete(roomId), 10000); // Clean up after 10 seconds
+        recentlyCompletedGames.add(activeGame.roomId);
+        markGameCompleted(activeGame.roomId, 10).catch(() => { });
+        setTimeout(() => recentlyCompletedGames.delete(activeGame.roomId), 10000); // Clean up after 10 seconds
 
         // Also emit directly to both player sockets for reliability
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
@@ -2416,7 +2818,13 @@ app.prepare().then(async () => {
 
         // Emit gameOver to both players
         const gameOverPayload = { winner, reason, ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
-        io.to(roomId).emit("gameOver", gameOverPayload);
+        io.to(activeGame.roomId).emit("gameOver", gameOverPayload);
+        emitToSpectators(activeGame.roomId, "spectatorGameOver", {
+          roomId: activeGame.roomId,
+          winner,
+          reason,
+          endedAt: new Date().toISOString(),
+        });
 
         const whiteSocketId = userSocketMap.get(whitePlayer?.walletAddress);
         const blackSocketId = userSocketMap.get(blackPlayer?.walletAddress);
@@ -2440,6 +2848,11 @@ app.prepare().then(async () => {
     });
 
     socket.on("acceptChallenge", async ({ opponentId, userId: myId, stakeEnabled, timeControl }) => {
+      if (!userId || normalizeWalletAddress(myId) !== normalizeWalletAddress(userId)) {
+        socket.emit("challengeError", { error: "Unauthorized challenge request", toUserId: opponentId });
+        return;
+      }
+
       const targetSocketId = userSocketMap.get(opponentId);
 
       if (targetSocketId) {
@@ -2453,6 +2866,8 @@ app.prepare().then(async () => {
           if (whiteUser && blackUser) {
             const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, challengeTimeControl, !!stakeEnabled);
             const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, challengeTimeControl, !!stakeEnabled);
+            const whitePlayerName = getWalletDisplayName(whiteUser.username, whiteUser.walletAddress);
+            const blackPlayerName = getWalletDisplayName(blackUser.username, blackUser.walletAddress);
             const game = await prisma.game.create({
               data: {
                 whitePlayerId: whiteUser.id,
@@ -2475,8 +2890,8 @@ app.prepare().then(async () => {
               removeFromAllQueues(s1.id);
               removeFromAllQueues(s2.id);
 
-              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
-              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
+              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerName: blackPlayerName, opponentName: whitePlayerName, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
+              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerName: whitePlayerName, opponentName: blackPlayerName, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
               initGameTimer(roomId, getTimeControlSeconds(challengeTimeControl));
 
               trackActiveRegularGame({
@@ -2485,6 +2900,8 @@ app.prepare().then(async () => {
                 blackWallet: myId,
                 whitePlayerRating,
                 blackPlayerRating,
+                whitePlayerName,
+                blackPlayerName,
                 timeControl: challengeTimeControl,
               });
 
@@ -2562,6 +2979,7 @@ app.prepare().then(async () => {
                 select: {
                   id: true,
                   walletAddress: true,
+                  username: true,
                   rating: true,
                   bulletRating: true,
                   blitzRating: true,
@@ -2617,6 +3035,7 @@ app.prepare().then(async () => {
             select: {
               id: true,
               walletAddress: true,
+              username: true,
               rating: true,
               bulletRating: true,
               blitzRating: true,
@@ -2670,6 +3089,7 @@ app.prepare().then(async () => {
                 select: {
                   id: true,
                   walletAddress: true,
+                  username: true,
                   rating: true,
                   bulletRating: true,
                   blitzRating: true,
@@ -2711,6 +3131,14 @@ app.prepare().then(async () => {
             timeControl,
             isStakedChallenge,
           );
+          const whitePlayerName = getWalletDisplayName(
+            acceptedChallenge.challenge.creator.username,
+            acceptedChallenge.challenge.creator.walletAddress,
+          );
+          const blackPlayerName = getWalletDisplayName(
+            acceptedChallenge.joiner.username,
+            acceptedChallenge.joiner.walletAddress,
+          );
 
           trackActiveRegularGame({
             roomId: acceptedRoomId,
@@ -2718,6 +3146,8 @@ app.prepare().then(async () => {
             blackWallet: acceptedChallenge.joiner.walletAddress,
             whitePlayerRating,
             blackPlayerRating,
+            whitePlayerName,
+            blackPlayerName,
             timeControl,
           });
           if (!isStakedChallenge) {
@@ -2743,6 +3173,8 @@ app.prepare().then(async () => {
             roomId: acceptedRoomId,
             color: "white",
             opponent: acceptedChallenge.joiner.walletAddress,
+            playerName: whitePlayerName,
+            opponentName: blackPlayerName,
             playerRating: whitePlayerRating,
             opponentRating: blackPlayerRating,
             timeControl,
@@ -2755,6 +3187,8 @@ app.prepare().then(async () => {
             roomId: acceptedRoomId,
             color: "black",
             opponent: acceptedChallenge.challenge.creator.walletAddress,
+            playerName: blackPlayerName,
+            opponentName: whitePlayerName,
             playerRating: blackPlayerRating,
             opponentRating: whitePlayerRating,
             timeControl,
@@ -2777,6 +3211,11 @@ app.prepare().then(async () => {
           roomId: acceptedRoomId,
           color: "black",
           opponent: acceptedChallenge.challenge.creator.walletAddress,
+          playerName: getWalletDisplayName(null, String(userId), "Player"),
+          opponentName: getWalletDisplayName(
+            acceptedChallenge.challenge.creator.username,
+            acceptedChallenge.challenge.creator.walletAddress,
+          ),
           timeControl,
           staked: isStakedChallenge,
           stakeToken: acceptedChallenge.challenge.stakeToken ?? null,
@@ -3041,6 +3480,7 @@ app.prepare().then(async () => {
       }
 
       // (Moved userSocketMap cleanup to end to allow forfeit processing)
+      spectatorJoinAttempts.delete(socket.id);
 
       // Remove from all matchmaking queues
       removeFromAllQueues(socket.id);
@@ -3157,6 +3597,12 @@ app.prepare().then(async () => {
                       const opponentWallet = whiteUser?.walletAddress === disconnectedUserId ? blackUser?.walletAddress : whiteUser?.walletAddress;
                       const opponentSid = opponentWallet ? userSocketMap.get(opponentWallet) : null;
                       if (opponentSid) io.to(opponentSid).emit("gameOver", gameOverPayload);
+                      emitToSpectators(activeRoomId, "spectatorGameOver", {
+                        roomId: activeRoomId,
+                        winner: winnerColor,
+                        reason: "disconnection",
+                        endedAt: new Date().toISOString(),
+                      });
 
                       console.log(`[DISCONNECT] Game ${activeRoomId} forfeited by ${disconnectedUserId}. Winner: ${winnerColor}`);
                     }

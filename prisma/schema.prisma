@@ -10,6 +10,7 @@ datasource db {
 model User {
   id            Int       @id @default(autoincrement())
   walletAddress String    @unique
+  username      String?   @unique
   rating        Int       @default(1200)
   bulletRating  Int       @default(1200)
   blitzRating   Int       @default(1200)

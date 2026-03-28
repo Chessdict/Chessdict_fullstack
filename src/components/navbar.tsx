@@ -18,6 +18,7 @@ import {
 
 const navItems = [
   { href: "/play", label: "Play" },
+  { href: "/watch", label: "Watch" },
   { href: "/play", label: "Tournaments" },
   { href: "/", label: "Creator program" },
   { href: "/", label: "Markets" },

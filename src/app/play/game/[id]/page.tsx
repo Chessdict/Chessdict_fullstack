@@ -54,6 +54,8 @@ export default function GamePage({
     roomId: string;
     color: string;
     opponent: string;
+    opponentName?: string | null;
+    playerName?: string | null;
     opponentRating: number;
     playerRating: number;
     timeControl?: number;
@@ -74,12 +76,14 @@ export default function GamePage({
     setPlayerColor(data.color as "white" | "black");
     setOpponent({
       address: data.opponent,
+      username: data.opponentName ?? null,
       rating: data.opponentRating,
       memoji: getMemojiForAddress(data.opponent),
     });
     if (address) {
       setPlayer({
         address,
+        username: data.playerName ?? null,
         rating: data.playerRating,
         memoji: getMemojiForAddress(address),
       });
@@ -97,6 +101,7 @@ export default function GamePage({
           if (result.success && result.user) {
             setPlayer({
               address,
+              username: result.user.username ?? null,
               rating: getPlayerRatingForTimeControl(
                 result.user,
                 DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
@@ -129,6 +134,8 @@ export default function GamePage({
       roomId: string;
       color: string;
       opponentAddress: string;
+      opponentName?: string | null;
+      playerName?: string | null;
       opponentRating: number;
       playerRating: number;
       fen: string;
@@ -154,8 +161,8 @@ export default function GamePage({
       setStakeAmountRaw(data.stakeAmount ?? null);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
-      setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
-      if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
+      setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
+      if (address) setPlayer({ address, username: data.playerName ?? null, rating: data.playerRating, memoji: getMemojiForAddress(address) });
       setWhiteTime(Math.min(data.whiteTime, initialSeconds));
       setBlackTime(Math.min(data.blackTime, initialSeconds));
       setRejoinData(data.fen, data.moves);

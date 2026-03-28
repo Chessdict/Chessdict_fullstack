@@ -47,6 +47,7 @@ interface GameOptionsProps {
 interface Opponent {
   id: any;
   walletAddress: string;
+  username?: string | null;
   name?: string;
   avatar?: string;
 }
@@ -649,7 +650,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                   <Image src="/icons/search-icon.svg" alt="search" width={18} height={18} />
                   <input
                     type="text"
-                    placeholder="Search wallet address..."
+                    placeholder="Search username or wallet..."
                     value={searchQuery}
                     onChange={(e) => handleSearch(e.target.value)}
                     className="w-full bg-transparent text-xs text-white outline-none"
@@ -668,13 +669,20 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                     className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10"
                   >
                     <div className="relative h-10 w-10 flex items-center justify-center rounded-full bg-white/10 text-xs font-bold uppercase">
-                      {user.walletAddress.slice(2, 4)}
+                      {(user.username ?? user.walletAddress.slice(2, 4)).slice(0, 2).toUpperCase()}
                       <div className={cn(
                         "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#121212]",
                         onlineStatus[user.walletAddress] === "online" ? "bg-green-500" : "bg-gray-500"
                       )} />
                     </div>
-                    <span className="text-sm text-white truncate">{user.walletAddress}</span>
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate text-sm text-white">
+                        {user.username ?? user.walletAddress}
+                      </span>
+                      <span className="truncate text-xs text-white/35">
+                        {user.walletAddress}
+                      </span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -700,7 +708,8 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
                     )} />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm text-white">{opp.walletAddress.slice(0, 8)}...</span>
+                    <span className="text-sm text-white">{opp.name || opp.username || opp.walletAddress.slice(0, 8)}</span>
+                    <span className="text-xs text-white/35">{opp.walletAddress}</span>
                     <span className="text-xs text-white/40">{onlineStatus[opp.walletAddress] || "offline"}</span>
                   </div>
                 </button>
@@ -731,7 +740,7 @@ export function GameOptions({ onStartGame, socket, userId, isSocketConnected = f
             </div>
 
             <div className="text-center">
-              <h3 className="text-lg font-medium text-white">{selectedOpponent.name || "Opponent"}</h3>
+              <h3 className="text-lg font-medium text-white">{selectedOpponent.name || selectedOpponent.username || "Opponent"}</h3>
               <p className="text-xs text-white/40">{selectedOpponent.walletAddress}</p>
             </div>
 

@@ -14,6 +14,8 @@ import {
 
 interface MatchFoundModalProps {
     opponent: string;
+    opponentName?: string | null;
+    playerName?: string | null;
     color: "white" | "black";
     onAccept: () => void;
     onDecline?: () => void;
@@ -102,6 +104,8 @@ function MatchFaceoffHero({
 
 export function MatchFoundModal({
     opponent,
+    opponentName,
+    playerName,
     color,
     onAccept,
     onDecline,
@@ -137,7 +141,8 @@ export function MatchFoundModal({
     const isJoiner = staked && color === "black";
     const opponentMemoji = memoji ?? getMemojiForAddress(opponent);
     const playerMemoji = getMemojiForAddress(address ?? "player");
-    const playerLabel = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "You";
+    const playerLabel = formatName(playerName ?? address ?? "You");
+    const opponentLabel = formatName(opponentName ?? opponent);
     const timeControlMinutes = normalizeTimeControlMinutes(timeControl);
     const timeControlDisplay = getTimeControlDisplay(timeControlMinutes);
     const tokenLabel = (tokenSymbol as string) ?? "tokens";
@@ -352,7 +357,7 @@ export function MatchFoundModal({
                                 playerMemoji={playerMemoji}
                                 opponentMemoji={opponentMemoji}
                                 playerLabel={playerLabel}
-                                opponentLabel={formatName(opponent)}
+                                opponentLabel={opponentLabel}
                             />
 
                             <div className="space-y-2">
@@ -414,7 +419,7 @@ export function MatchFoundModal({
                             <div className="space-y-1">
                                 <h2 className="text-lg sm:text-xl font-bold text-white">Match Found!</h2>
                                 <p className="text-xs sm:text-sm text-white/60">
-                                    Opponent: {formatName(opponent)}
+                                    Opponent: {opponentLabel}
                                 </p>
                                 <p className="text-[10px] sm:text-xs font-medium text-yellow-400 uppercase tracking-widest mt-2">
                                     You are playing as {color}
@@ -612,7 +617,7 @@ export function MatchFoundModal({
                             <div className="space-y-1">
                                 <h2 className="text-lg sm:text-xl font-bold text-white">Match Found!</h2>
                                 <p className="text-xs sm:text-sm text-white/60">
-                                    Opponent: {formatName(opponent)}
+                                    Opponent: {opponentLabel}
                                 </p>
                                 <p className="text-[10px] sm:text-xs font-medium text-blue-400 uppercase tracking-widest mt-2">
                                     You are playing as {color}
@@ -765,7 +770,7 @@ export function MatchFoundModal({
                         <div className="space-y-1">
                             <h2 className="text-lg sm:text-xl font-bold text-white">Match Found!</h2>
                             <p className="text-xs sm:text-sm text-white/60">
-                                Pairing you against {formatName(opponent)}
+                                Pairing you against {opponentLabel}
                             </p>
                         </div>
 
@@ -774,7 +779,7 @@ export function MatchFoundModal({
                             playerMemoji={playerMemoji}
                             opponentMemoji={opponentMemoji}
                             playerLabel={playerLabel}
-                            opponentLabel={formatName(opponent)}
+                            opponentLabel={opponentLabel}
                         />
 
                         <div className="space-y-2">

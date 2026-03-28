@@ -144,6 +144,7 @@ export function TournamentGameBoard({
           } else {
             clearSelection();
           }
+          // Mirror the main board: only recover from stale real drags, not tap selection.
           if (options?.resetBoardInteraction && dragInteractionRef.current) {
             resetBoardInteraction();
           }
@@ -694,9 +695,6 @@ export function TournamentGameBoard({
               squareStyles: { ...premoveSquares, ...moveSquares },
               pieces: customPieces,
               onPieceDrag: () => {
-                dragInteractionRef.current = true;
-              },
-              onSquareMouseDown: () => {
                 dragInteractionRef.current = true;
               },
               onSquareMouseUp: () => {
