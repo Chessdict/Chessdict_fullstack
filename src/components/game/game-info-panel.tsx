@@ -7,6 +7,7 @@ import Image from "next/image";
 import { useGameStore } from "@/stores/game-store";
 import { cn, formatWalletAddress, getDisplayName } from "@/lib/utils";
 import { useSocket } from "@/hooks/useSocket";
+import { useChessSounds } from "@/hooks/useChessSounds";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
 import { RematchOfferModal } from "./rematch-offer-modal";
@@ -98,6 +99,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
+  const { playMove, playOpponentMove } = useChessSounds();
   const [showResignModal, setShowResignModal] = useState(false);
   const [rematchRequestPending, setRematchRequestPending] = useState(false);
   const [incomingRematchRequester, setIncomingRematchRequester] = useState<string | null>(null);
@@ -132,6 +134,34 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     }
   }, []);
 
+  // Review navigation is read-only, so keep its sound handling local here
+  // instead of touching the live board move pipeline.
+  const playReviewNavigationSound = useCallback(
+    (targetIndex: number | null) => {
+      if (moves.length === 0) return;
+
+      const resolvedIndex = targetIndex === null ? moves.length - 1 : targetIndex;
+      if (resolvedIndex < 0) {
+        playMove();
+        return;
+      }
+
+      const move = moves[resolvedIndex];
+      if (!move) {
+        playMove();
+        return;
+      }
+
+      const myColorCode = playerColor === "black" ? "b" : "w";
+      if (move.color === myColorCode) {
+        playMove();
+      } else {
+        playOpponentMove();
+      }
+    },
+    [moves, playMove, playOpponentMove, playerColor],
+  );
+
   useEffect(() => {
     if (!isAutoPlaying || viewMoveIndex === null) {
       stopAutoPlay();
@@ -141,10 +171,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       const currentIndex = useGameStore.getState().viewMoveIndex;
       const totalMoves = useGameStore.getState().moves.length;
       if (currentIndex === null || currentIndex >= totalMoves - 1) {
+        playReviewNavigationSound(null);
         setViewMoveIndex(null);
         stopAutoPlay();
       } else {
-        setViewMoveIndex(currentIndex + 1);
+        const nextIndex = currentIndex + 1;
+        playReviewNavigationSound(nextIndex);
+        setViewMoveIndex(nextIndex);
       }
     }, 600);
     return () => {
@@ -153,7 +186,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
         autoPlayRef.current = null;
       }
     };
-  }, [isAutoPlaying, viewMoveIndex, setViewMoveIndex, stopAutoPlay]);
+  }, [isAutoPlaying, viewMoveIndex, setViewMoveIndex, stopAutoPlay, playReviewNavigationSound]);
 
   // Handle resign action
   const handleResign = useCallback(() => {
@@ -484,6 +517,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       label: "First",
       onClick: () => {
         stopAutoPlay();
+        playReviewNavigationSound(-1);
         setViewMoveIndex(-1);
       },
     },
@@ -492,8 +526,15 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       label: "Prev",
       onClick: () => {
         stopAutoPlay();
-        if (viewMoveIndex === null) setViewMoveIndex(moves.length - 1);
-        else if (viewMoveIndex > -1) setViewMoveIndex(viewMoveIndex - 1);
+        if (viewMoveIndex === null) {
+          const targetIndex = moves.length - 1;
+          playReviewNavigationSound(targetIndex);
+          setViewMoveIndex(targetIndex);
+        } else if (viewMoveIndex > -1) {
+          const targetIndex = viewMoveIndex - 1;
+          playReviewNavigationSound(targetIndex);
+          setViewMoveIndex(targetIndex);
+        }
       },
     },
     {
@@ -512,8 +553,14 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       label: "Next",
       onClick: () => {
         stopAutoPlay();
-        if (viewMoveIndex !== null && viewMoveIndex < moves.length - 1) setViewMoveIndex(viewMoveIndex + 1);
-        else setViewMoveIndex(null);
+        if (viewMoveIndex !== null && viewMoveIndex < moves.length - 1) {
+          const targetIndex = viewMoveIndex + 1;
+          playReviewNavigationSound(targetIndex);
+          setViewMoveIndex(targetIndex);
+        } else {
+          playReviewNavigationSound(null);
+          setViewMoveIndex(null);
+        }
       },
     },
     {
@@ -521,6 +568,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       label: "Last",
       onClick: () => {
         stopAutoPlay();
+        playReviewNavigationSound(null);
         setViewMoveIndex(null);
       },
     },
