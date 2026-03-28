@@ -1,0 +1,553 @@
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { Chessboard } from "react-chessboard";
+import { useAccount } from "wagmi";
+import { useSocket } from "@/hooks/useSocket";
+import { getMemojiForAddress } from "@/lib/memoji";
+import { getTimeControlDisplay } from "@/lib/time-control";
+import { formatWalletAddress, getDisplayName } from "@/lib/utils";
+import type {
+  PublicGameSnapshot,
+  PublicMoveRecord,
+} from "@/lib/server/public-game";
+import { customPieces } from "@/components/chess/custom-pieces";
+import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
+
+type PublicGameSpectatorProps = {
+  initialGame: PublicGameSnapshot;
+  mode?: "full" | "wall";
+};
+
+type SpectatorSocketSnapshot = Omit<PublicGameSnapshot, "white" | "black"> & {
+  white: {
+    address: string;
+    shortAddress?: string;
+    username?: string | null;
+    displayName?: string;
+    rating: number;
+    memoji?: string;
+  };
+  black: {
+    address: string;
+    shortAddress?: string;
+    username?: string | null;
+    displayName?: string;
+    rating: number;
+    memoji?: string;
+  };
+};
+
+type SpectatorState = PublicGameSnapshot & {
+  syncedAtMs: number;
+};
+
+const MOVE_ANIMATION_DURATION_MS = 150;
+
+function formatClock(seconds: number) {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const mins = Math.floor(safeSeconds / 60);
+  const secs = safeSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function getFenTurn(fen: string) {
+  return fen.split(" ")[1] === "b" ? "b" : "w";
+}
+
+function normalizeSnapshot(
+  snapshot: SpectatorSocketSnapshot | PublicGameSnapshot,
+): SpectatorState {
+  return {
+    ...snapshot,
+    white: {
+      ...snapshot.white,
+      username: snapshot.white.username ?? null,
+      shortAddress:
+        snapshot.white.shortAddress ?? formatWalletAddress(snapshot.white.address),
+      displayName:
+        snapshot.white.displayName ??
+        getDisplayName(snapshot.white.username, snapshot.white.address, "White"),
+      memoji: snapshot.white.memoji ?? getMemojiForAddress(snapshot.white.address),
+    },
+    black: {
+      ...snapshot.black,
+      username: snapshot.black.username ?? null,
+      shortAddress:
+        snapshot.black.shortAddress ?? formatWalletAddress(snapshot.black.address),
+      displayName:
+        snapshot.black.displayName ??
+        getDisplayName(snapshot.black.username, snapshot.black.address, "Black"),
+      memoji: snapshot.black.memoji ?? getMemojiForAddress(snapshot.black.address),
+    },
+    syncedAtMs: Date.now(),
+  };
+}
+
+function resultLabel(snapshot: SpectatorState) {
+  if (snapshot.result === "white") return "White won";
+  if (snapshot.result === "black") return "Black won";
+  if (snapshot.result === "draw") return "Draw";
+  return snapshot.status === "IN_PROGRESS" ? "Live" : "Awaiting result";
+}
+
+function PlayerHeader({
+  label,
+  player,
+  time,
+  isTurn,
+}: {
+  label: string;
+  player: SpectatorState["white"];
+  time: number;
+  isTurn: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2.5">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="h-10 w-10 overflow-hidden rounded-full border border-white/10 bg-white/5">
+          <Image
+            src={player.memoji}
+            alt={player.shortAddress}
+            width={40}
+            height={40}
+            className="h-full w-full object-contain"
+          />
+        </div>
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-sm font-semibold text-white">
+              {player.displayName}
+            </p>
+            <PlayerRatingBadge rating={player.rating} />
+          </div>
+          <p className="truncate text-[11px] text-white/45">
+            {label} · {player.shortAddress}
+            {isTurn ? " · thinking" : ""}
+          </p>
+        </div>
+      </div>
+      <div className="rounded-xl bg-black/50 px-2.5 py-1.5 text-sm font-semibold tabular-nums text-white">
+        {formatClock(time)}
+      </div>
+    </div>
+  );
+}
+
+export function PublicGameSpectator({
+  initialGame,
+  mode = "full",
+}: PublicGameSpectatorProps) {
+  const [game, setGame] = useState<SpectatorState>(() =>
+    normalizeSnapshot(initialGame),
+  );
+  const [now, setNow] = useState(() => Date.now());
+  const [isUnavailable, setIsUnavailable] = useState(false);
+  const [isWallDismissed, setIsWallDismissed] = useState(false);
+  const { address } = useAccount();
+  const { socket, isConnected } = useSocket(address ?? undefined);
+
+  useEffect(() => {
+    setGame(normalizeSnapshot(initialGame));
+    setIsUnavailable(false);
+    setIsWallDismissed(false);
+  }, [initialGame]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const joinSpectatorRoom = () => {
+      socket.emit("joinSpectatorRoom", { roomId: initialGame.roomId });
+    };
+
+    const handleSnapshot = (snapshot: SpectatorSocketSnapshot) => {
+      if (snapshot.roomId !== initialGame.roomId) return;
+      setGame(normalizeSnapshot(snapshot));
+      setIsUnavailable(false);
+    };
+
+    const handleMove = (payload: {
+      roomId: string;
+      fen: string;
+      moves: PublicMoveRecord[];
+      turn?: "w" | "b";
+    }) => {
+      if (payload.roomId !== initialGame.roomId) return;
+      setGame((current) => ({
+        ...current,
+        fen: payload.fen,
+        moves: payload.moves,
+        turn: payload.turn ?? getFenTurn(payload.fen),
+      }));
+    };
+
+    const handleTimeSync = (payload: {
+      roomId: string;
+      whiteTime: number;
+      blackTime: number;
+      initialTime?: number;
+      turn?: "w" | "b";
+    }) => {
+      if (payload.roomId !== initialGame.roomId) return;
+      setGame((current) => ({
+        ...current,
+        initialTime: payload.initialTime ?? current.initialTime,
+        whiteTime: payload.whiteTime,
+        blackTime: payload.blackTime,
+        turn: payload.turn ?? current.turn,
+        syncedAtMs: Date.now(),
+      }));
+    };
+
+    const handleGameOver = (payload: {
+      roomId: string;
+      winner: "white" | "black" | "draw";
+      reason: string;
+      endedAt: string;
+    }) => {
+      if (payload.roomId !== initialGame.roomId) return;
+      setGame((current) => ({
+        ...current,
+        status: payload.winner === "draw" ? "DRAW" : "COMPLETED",
+        result: payload.winner,
+        endedAt: payload.endedAt,
+      }));
+    };
+
+    const handleUnavailable = (payload: { roomId?: string }) => {
+      if (payload.roomId && payload.roomId !== initialGame.roomId) return;
+      setIsUnavailable(true);
+    };
+
+    socket.on("spectatorSnapshot", handleSnapshot);
+    socket.on("spectatorMove", handleMove);
+    socket.on("spectatorTimeSync", handleTimeSync);
+    socket.on("spectatorGameOver", handleGameOver);
+    socket.on("spectatorUnavailable", handleUnavailable);
+    socket.on("connect", joinSpectatorRoom);
+
+    if (socket.connected) {
+      joinSpectatorRoom();
+    }
+
+    return () => {
+      socket.emit("leaveSpectatorRoom", { roomId: initialGame.roomId });
+      socket.off("spectatorSnapshot", handleSnapshot);
+      socket.off("spectatorMove", handleMove);
+      socket.off("spectatorTimeSync", handleTimeSync);
+      socket.off("spectatorGameOver", handleGameOver);
+      socket.off("spectatorUnavailable", handleUnavailable);
+      socket.off("connect", joinSpectatorRoom);
+    };
+  }, [initialGame.roomId, socket]);
+
+  const displayedTimes = useMemo(() => {
+    let whiteTime = game.whiteTime;
+    let blackTime = game.blackTime;
+
+    if (game.status === "IN_PROGRESS") {
+      const elapsedSeconds = Math.max(
+        0,
+        Math.floor((now - game.syncedAtMs) / 1000),
+      );
+      if (game.turn === "w") {
+        whiteTime = Math.max(0, whiteTime - elapsedSeconds);
+      } else {
+        blackTime = Math.max(0, blackTime - elapsedSeconds);
+      }
+    }
+
+    return { whiteTime, blackTime };
+  }, [game.blackTime, game.status, game.syncedAtMs, game.turn, game.whiteTime, now]);
+
+  const lastMoveStyles = useMemo(() => {
+    const lastMove = game.moves[game.moves.length - 1];
+    if (!lastMove) return {};
+
+    return {
+      [lastMove.from]: { backgroundColor: "rgba(251, 191, 36, 0.25)" },
+      [lastMove.to]: { backgroundColor: "rgba(251, 191, 36, 0.4)" },
+    };
+  }, [game.moves]);
+
+  const isWallMode = mode === "wall";
+
+  useEffect(() => {
+    if (!isWallMode) return;
+    if (game.status === "IN_PROGRESS") {
+      setIsWallDismissed(false);
+      return;
+    }
+
+    // Spectator wall cards should linger briefly for the result, then clear themselves.
+    const timeout = window.setTimeout(() => {
+      setIsWallDismissed(true);
+    }, 10000);
+
+    return () => window.clearTimeout(timeout);
+  }, [game.status, isWallMode]);
+
+  if (isUnavailable) {
+    return (
+      <div className={`${isWallMode ? "w-full" : "mx-auto max-w-5xl"} flex flex-col items-center gap-4 rounded-3xl border border-white/10 bg-white/[0.03] px-6 py-10 text-center`}>
+        <p className="text-lg font-semibold text-white">Game unavailable</p>
+        <p className="max-w-md text-sm text-white/55">
+          This game is no longer available for live public spectating.
+        </p>
+        {isWallMode ? null : (
+          <Link
+            href="/play"
+            className="rounded-full border border-white/15 bg-white/8 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/12"
+          >
+            Go To Play
+          </Link>
+        )}
+      </div>
+    );
+  }
+
+  if (isWallMode && isWallDismissed) {
+    return null;
+  }
+
+  if (isWallMode) {
+    return (
+      <div className="flex h-full flex-col gap-3 rounded-3xl border border-white/10 bg-white/[0.03] p-3 sm:p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-emerald-300/70">
+              Live Game
+            </p>
+            <p className="mt-1 text-sm font-semibold text-white">
+              {resultLabel(game)}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-white/45">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                isConnected ? "bg-emerald-400" : "bg-amber-400"
+              }`}
+            />
+            {isConnected ? "Live" : "Reconnecting"}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs text-white/45">Black</p>
+            <div className="mt-1 flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold text-white">
+                {game.black.displayName}
+              </span>
+              <PlayerRatingBadge rating={game.black.rating} />
+            </div>
+            <p className="mt-1 truncate text-[11px] text-white/35">
+              {game.black.shortAddress}
+            </p>
+          </div>
+          <div className="rounded-xl bg-black/50 px-2 py-1 text-sm font-semibold tabular-nums text-white">
+            {formatClock(displayedTimes.blackTime)}
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#1A1A1A]/80 p-2">
+          <Chessboard
+            options={{
+              id: `spectator-wall-board-${game.roomId}`,
+              position: game.fen,
+              boardOrientation: "white",
+              showAnimations: true,
+              animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              allowDragging: false,
+              boardStyle: { borderRadius: "14px" },
+              darkSquareStyle: { backgroundColor: "#B58863" },
+              lightSquareStyle: { backgroundColor: "#F0D9B5" },
+              squareStyles: lastMoveStyles,
+              pieces: customPieces,
+            }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs text-white/45">White</p>
+            <div className="mt-1 flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold text-white">
+                {game.white.displayName}
+              </span>
+              <PlayerRatingBadge rating={game.white.rating} />
+            </div>
+            <p className="mt-1 truncate text-[11px] text-white/35">
+              {game.white.shortAddress}
+            </p>
+          </div>
+          <div className="rounded-xl bg-black/50 px-2 py-1 text-sm font-semibold tabular-nums text-white">
+            {formatClock(displayedTimes.whiteTime)}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 text-xs text-white/55">
+          <span>{getTimeControlDisplay(game.timeControl)}</span>
+          <span>{game.moves.length} ply</span>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <p className="truncate text-xs text-white/40">{game.roomId}</p>
+          <Link
+            href={`/watch/${game.roomId}`}
+            className="shrink-0 rounded-full border border-white/15 bg-white/8 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/12"
+          >
+            Open full view
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
+      <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-white/[0.03] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-300/70">
+            Live Spectator
+          </p>
+          <h1 className="mt-1 text-xl font-semibold text-white sm:text-2xl">
+            {resultLabel(game)}
+          </h1>
+          <p className="mt-1 text-sm text-white/55">
+            {getTimeControlDisplay(game.timeControl)}
+            {game.isStaked ? " · staked game" : " · casual game"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-white/45">
+          <span
+            className={`inline-block h-2.5 w-2.5 rounded-full ${
+              isConnected ? "bg-emerald-400" : "bg-amber-400"
+            }`}
+          />
+          {isConnected ? "Live updates connected" : "Reconnecting to live updates"}
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-4">
+          <PlayerHeader
+            label="Black"
+            player={game.black}
+            time={displayedTimes.blackTime}
+            isTurn={game.turn === "b" && game.status === "IN_PROGRESS"}
+          />
+
+          <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#1A1A1A]/80 p-2 sm:p-3">
+            <Chessboard
+              options={{
+                id: `spectator-board-${game.roomId}`,
+                position: game.fen,
+                boardOrientation: "white",
+                showAnimations: true,
+                animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+                allowDragging: false,
+                boardStyle: { borderRadius: "16px" },
+                darkSquareStyle: { backgroundColor: "#B58863" },
+                lightSquareStyle: { backgroundColor: "#F0D9B5" },
+                squareStyles: lastMoveStyles,
+                pieces: customPieces,
+              }}
+            />
+          </div>
+
+          <PlayerHeader
+            label="White"
+            player={game.white}
+            time={displayedTimes.whiteTime}
+            isTurn={game.turn === "w" && game.status === "IN_PROGRESS"}
+          />
+        </div>
+
+        <aside className="flex flex-col gap-4">
+          <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-white/45">
+              Match Info
+            </p>
+            <dl className="mt-3 space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-white/45">Room</dt>
+                <dd className="font-mono text-xs text-white/75">{game.roomId}</dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-white/45">Status</dt>
+                <dd className="text-white">{game.status.replace("_", " ")}</dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-white/45">Created</dt>
+                <dd className="text-white">
+                  {new Date(game.createdAt).toLocaleString()}
+                </dd>
+              </div>
+              {game.endedAt ? (
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-white/45">Ended</dt>
+                  <dd className="text-white">
+                    {new Date(game.endedAt).toLocaleString()}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-white/45">
+                Moves
+              </p>
+              <p className="text-xs text-white/35">{game.moves.length} ply</p>
+            </div>
+            {game.moves.length === 0 ? (
+              <p className="mt-4 text-sm text-white/45">
+                Waiting for the first move.
+              </p>
+            ) : (
+              <div className="mt-4 max-h-[420px] overflow-y-auto pr-1 [scrollbar-width:thin]">
+                <div className="grid gap-2 text-sm">
+                  {Array.from({ length: Math.ceil(game.moves.length / 2) }).map(
+                    (_, index) => {
+                      const whiteMove = game.moves[index * 2];
+                      const blackMove = game.moves[index * 2 + 1];
+
+                      return (
+                        <div
+                          key={`move-pair-${index}`}
+                          className="grid grid-cols-[36px_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2 rounded-2xl border border-white/5 bg-black/25 px-3 py-2"
+                        >
+                          <span className="text-xs font-semibold text-white/40">
+                            {index + 1}.
+                          </span>
+                          <span className="truncate text-white">
+                            {whiteMove?.san ?? "—"}
+                          </span>
+                          <span className="truncate text-white/70">
+                            {blackMove?.san ?? "—"}
+                          </span>
+                        </div>
+                      );
+                    },
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}

@@ -3,6 +3,7 @@ import { create } from "zustand";
 export type Player = {
   address: string;
   rating: number;
+  username?: string | null;
   memoji?: string;
 };
 

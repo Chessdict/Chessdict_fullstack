@@ -27,6 +27,8 @@ type PendingMatch = {
   roomId: string;
   color: "white" | "black";
   opponent: string;
+  opponentName?: string | null;
+  playerName?: string | null;
   playerRating: number;
   opponentRating: number;
   timeControl: number;
@@ -40,6 +42,7 @@ type PendingMatch = {
 
 type IncomingChallenge = {
   from: string;
+  fromName?: string | null;
   stakeEnabled?: boolean;
   stakeToken?: string | null;
   stakeAmount?: string | null;
@@ -95,11 +98,13 @@ export default function PlayPage() {
     setPlayerColor(match.color);
     setOpponent({
       address: match.opponent,
+      username: match.opponentName ?? null,
       rating: match.opponentRating,
       memoji: searchMemojiRef.current ?? getMemojiForAddress(match.opponent),
     });
     setPlayer({
       address,
+      username: match.playerName ?? null,
       rating: match.playerRating,
       memoji: getMemojiForAddress(address),
     });
@@ -117,6 +122,7 @@ export default function PlayPage() {
             console.log("Logged in with wallet:", result.user);
             setPlayer({
               address,
+              username: result.user.username ?? null,
               rating: getPlayerRatingForTimeControl(
                 result.user,
                 DEFAULT_QUEUE_TIME_CONTROL_MINUTES,
@@ -207,7 +213,7 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
-    socket.on('gameRejoined', (data: { status?: string | null; roomId: string; color: string; opponentAddress: string; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
+    socket.on('gameRejoined', (data: { status?: string | null; roomId: string; color: string; opponentAddress: string; opponentName?: string | null; playerName?: string | null; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null }) => {
       console.log("GAME REJOINED EVENT:", data);
       const timeControlMinutes = normalizeTimeControlMinutes(
         data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
@@ -228,6 +234,8 @@ export default function PlayPage() {
           roomId: data.roomId,
           color: data.color as "white" | "black",
           opponent: data.opponentAddress,
+          opponentName: data.opponentName ?? null,
+          playerName: data.playerName ?? null,
           opponentRating: data.opponentRating,
           playerRating: data.playerRating,
           timeControl: timeControlMinutes,
@@ -243,8 +251,8 @@ export default function PlayPage() {
         setStakeAmountRaw(data.stakeAmount ?? null);
         setRoomId(data.roomId);
         setPlayerColor(data.color as "white" | "black");
-        setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
-        if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
+        setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
+        if (address) setPlayer({ address, username: data.playerName ?? null, rating: data.playerRating, memoji: getMemojiForAddress(address) });
         if (!gameMode) setGameMode("online");
         setStatus("matched");
         toast.info(
@@ -263,8 +271,8 @@ export default function PlayPage() {
       setStakeAmountRaw(data.stakeAmount ?? null);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
-      setOpponent({ address: data.opponentAddress, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
-      if (address) setPlayer({ address, rating: data.playerRating, memoji: getMemojiForAddress(address) });
+      setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
+      if (address) setPlayer({ address, username: data.playerName ?? null, rating: data.playerRating, memoji: getMemojiForAddress(address) });
       setWhiteTime(Math.min(data.whiteTime, initialSeconds));
       setBlackTime(Math.min(data.blackTime, initialSeconds));
       setRejoinData(data.fen, data.moves);
@@ -322,7 +330,7 @@ export default function PlayPage() {
       queuedStakeAmountRef.current = null;
       clearMatchState();
       setPlayerColor("white");
-      setOpponent({ address: 'stockfish', rating: 1500, memoji: getMemojiForAddress('stockfish') });
+      setOpponent({ address: 'stockfish', username: 'Stockfish', rating: 1500, memoji: getMemojiForAddress('stockfish') });
       setStatus("in-progress");
       console.log("computer mode started");
     }
@@ -357,6 +365,8 @@ export default function PlayPage() {
         {pendingMatch && (
           <MatchFoundModal
             opponent={pendingMatch.opponent}
+            opponentName={pendingMatch.opponentName}
+            playerName={pendingMatch.playerName}
             color={pendingMatch.color}
             memoji={searchMemojiRef.current}
             autoEnter={!pendingMatch.staked || !!pendingMatch.readyToEnter}

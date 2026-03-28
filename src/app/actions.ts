@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { containsProfanity } from "@/lib/utils";
 import { getAllRatings, getPlayerRatingForTimeControl } from "@/lib/player-ratings";
+import { getPublicGameSnapshot } from "@/lib/server/public-game";
 import {
   clampStakedTimeControlMinutes,
   normalizeTimeControlMinutes,
@@ -11,7 +12,14 @@ import {
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 2;
+const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 60 * 3;
+const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
+
+function normalizeUsernameInput(username: unknown) {
+  const normalized = String(username ?? "").trim().toLowerCase();
+  if (!normalized) return "";
+  return normalized;
+}
 
 function normalizeStakeAmountString(value: unknown) {
   const numericAmount = Number.parseFloat(String(value ?? ""));
@@ -89,6 +97,10 @@ async function getOpenChallengeRecord(challengeId: string) {
   return challenge;
 }
 
+export async function getPublicGame(roomId: string) {
+  return getPublicGameSnapshot(roomId);
+}
+
 export async function loginWithWallet(walletAddress: string) {
   if (!walletAddress) {
     throw new Error("Wallet address is required");
@@ -102,6 +114,16 @@ export async function loginWithWallet(walletAddress: string) {
       update: {},
       create: {
         walletAddress: walletAddress,
+      },
+      select: {
+        id: true,
+        walletAddress: true,
+        username: true,
+        rating: true,
+        bulletRating: true,
+        blitzRating: true,
+        rapidRating: true,
+        stakedRating: true,
       },
     });
     return { success: true, user };
@@ -179,17 +201,29 @@ export async function searchUsers(query: string) {
   if (!query || query.length < 3) return { success: true, users: [] };
 
   try {
+    const normalizedQuery = query.trim().toLowerCase();
     const users = await prisma.user.findMany({
       where: {
-        walletAddress: {
-          contains: query,
-          mode: "insensitive",
-        },
+        OR: [
+          {
+            walletAddress: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+          {
+            username: {
+              contains: normalizedQuery,
+              mode: "insensitive",
+            },
+          },
+        ],
       },
       take: 10,
       select: {
         id: true,
         walletAddress: true,
+        username: true,
         rating: true,
       },
     });
@@ -228,10 +262,16 @@ export async function getRecentOpponents(walletAddress: string) {
       const white = game.whitePlayer;
       const black = game.blackPlayer;
       if (white && white.walletAddress !== walletAddress) {
-        opponentsMap.set(white.walletAddress, white);
+        opponentsMap.set(white.walletAddress, {
+          ...white,
+          name: white.username ?? null,
+        });
       }
       if (black && black.walletAddress !== walletAddress) {
-        opponentsMap.set(black.walletAddress, black);
+        opponentsMap.set(black.walletAddress, {
+          ...black,
+          name: black.username ?? null,
+        });
       }
     });
 
@@ -433,6 +473,7 @@ export async function getUserProfile(walletAddress: string) {
       select: {
         id: true,
         walletAddress: true,
+        username: true,
         rating: true,
         bulletRating: true,
         blitzRating: true,
@@ -469,6 +510,7 @@ export async function getUserProfile(walletAddress: string) {
       success: true,
       profile: {
         walletAddress: user.walletAddress,
+        username: user.username,
         ratings: getAllRatings(user),
         joinedAt: user.createdAt.toISOString(),
         totalGames,
@@ -516,6 +558,7 @@ export async function getGameHistory(
             select: {
               id: true,
               walletAddress: true,
+              username: true,
               rating: true,
               bulletRating: true,
               blitzRating: true,
@@ -527,6 +570,7 @@ export async function getGameHistory(
             select: {
               id: true,
               walletAddress: true,
+              username: true,
               rating: true,
               bulletRating: true,
               blitzRating: true,
@@ -554,6 +598,7 @@ export async function getGameHistory(
         result,
         playedAs: isWhite ? ("white" as const) : ("black" as const),
         opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
+        opponentUsername: opponentPlayer?.username ?? null,
         opponentRating: getPlayerRatingForTimeControl(
           opponentPlayer,
           g.timeControl,
@@ -609,10 +654,10 @@ export async function getStakedGameHistory(
         take: pageSize,
         include: {
           whitePlayer: {
-            select: { id: true, walletAddress: true, rating: true },
+            select: { id: true, walletAddress: true, username: true, rating: true },
           },
           blackPlayer: {
-            select: { id: true, walletAddress: true, rating: true },
+            select: { id: true, walletAddress: true, username: true, rating: true },
           },
           winner: { select: { id: true, walletAddress: true } },
         },
@@ -637,6 +682,7 @@ export async function getStakedGameHistory(
         result,
         playedAs: isWhite ? ("white" as const) : ("black" as const),
         opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
+        opponentUsername: opponentPlayer?.username ?? null,
         date: g.updatedAt.toISOString(),
       };
     });
@@ -649,5 +695,67 @@ export async function getStakedGameHistory(
   } catch (error) {
     console.error("Error fetching staked game history:", error);
     return { success: false, error: "Failed to fetch staked game history" };
+  }
+}
+
+export async function updateUsername(walletAddress: string, username: string) {
+  if (!walletAddress) {
+    return { success: false, error: "Wallet address is required" };
+  }
+
+  const normalizedUsername = normalizeUsernameInput(username);
+  if (!normalizedUsername) {
+    return { success: false, error: "Username is required" };
+  }
+
+  if (!USERNAME_PATTERN.test(normalizedUsername)) {
+    return {
+      success: false,
+      error: "Username must be 3-20 characters and use only letters, numbers, or underscores",
+    };
+  }
+
+  if (containsProfanity(normalizedUsername)) {
+    return { success: false, error: "Username contains blocked language" };
+  }
+
+  try {
+    const existingUser = await prisma.user.findUnique({
+      where: { walletAddress },
+      select: { id: true },
+    });
+
+    if (!existingUser) {
+      return { success: false, error: "User not found" };
+    }
+
+    const conflict = await prisma.user.findFirst({
+      where: {
+        username: normalizedUsername,
+        walletAddress: { not: walletAddress },
+      },
+      select: { id: true },
+    });
+
+    if (conflict) {
+      return { success: false, error: "Username is already taken" };
+    }
+
+    const updated = await prisma.user.update({
+      where: { walletAddress },
+      data: { username: normalizedUsername },
+      select: {
+        walletAddress: true,
+        username: true,
+      },
+    });
+
+    revalidatePath("/profile");
+    revalidatePath("/watch");
+    revalidatePath("/play");
+    return { success: true, profile: updated };
+  } catch (error) {
+    console.error("Error updating username:", error);
+    return { success: false, error: "Failed to update username" };
   }
 }

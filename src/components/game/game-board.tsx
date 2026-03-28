@@ -33,7 +33,7 @@ import { SignalStrength } from "./signal-strength";
 import { customPieces } from "@/components/chess/custom-pieces";
 import { X } from "lucide-react";
 import Image from "next/image";
-import { cn } from "@/lib/utils";
+import { cn, formatWalletAddress, getDisplayName } from "@/lib/utils";
 
 
 // Helper to format time as MM:SS
@@ -329,6 +329,7 @@ export function GameBoard() {
           clearSelection();
         }
 
+        // Lichess/Chessground clears only real drag state, not ordinary tap selection.
         if (options?.resetBoardInteraction && dragInteractionRef.current) {
           resetBoardInteraction();
         }
@@ -1232,6 +1233,11 @@ export function GameBoard() {
   // Determine if it's the player's turn
   const currentTurn = game.turn(); // 'w' or 'b'
   const isMyTurn = !!playerTurnCode && currentTurn === playerTurnCode;
+  const opponentDisplayName =
+    gameMode === "computer"
+      ? "Stockfish"
+      : getDisplayName(opponent?.username, opponent?.address, "Waiting...");
+  const playerDisplayName = getDisplayName(player?.username, player?.address, "You");
   const ratingField = getRatingFieldForTimeControl(
     Math.max(1, Math.round(initialTime / 60)),
     isStakedMatch,
@@ -1256,14 +1262,14 @@ export function GameBoard() {
               <Image src={opponent.memoji} alt="Opponent" width={40} height={40} className="h-full w-full object-contain" />
             ) : (
               <span className="flex h-full w-full items-center justify-center text-[10px] font-bold text-white/70 uppercase sm:text-xs">
-                {gameMode === 'computer' ? 'AI' : opponent?.address.slice(2, 4) || '??'}
+                {gameMode === 'computer' ? 'AI' : opponentDisplayName.slice(0, 2).toUpperCase() || '??'}
               </span>
             )}
           </div>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
               <p className="truncate text-xs font-semibold text-white sm:text-sm">
-                {gameMode === 'computer' ? 'Stockfish' : opponent ? (opponent.address.slice(0, 6) + '...' + opponent.address.slice(-4)) : 'Waiting...'}
+                {opponentDisplayName}
               </p>
               <PlayerRatingBadge rating={opponent?.rating} />
             </div>
@@ -1271,7 +1277,7 @@ export function GameBoard() {
               {status === 'in-progress' && !isMyTurn
                 ? 'Thinking...'
                 : opponent
-                  ? `Opponent · ${opponent.address.slice(0, 4)}...${opponent.address.slice(-4)}`
+                  ? `Opponent · ${formatWalletAddress(opponent.address)}`
                   : ''}
             </p>
             {opponentMaterialDisplay ? (
@@ -1366,9 +1372,6 @@ export function GameBoard() {
               squareStyles: { ...lastMoveSquares, ...checkSquare, ...premoveSquares, ...moveSquares, ...checkFlash },
               pieces: customPieces,
               onPieceDrag: () => {
-                dragInteractionRef.current = true;
-              },
-              onSquareMouseDown: () => {
                 dragInteractionRef.current = true;
               },
               onSquareMouseUp: () => {
@@ -1523,7 +1526,7 @@ export function GameBoard() {
           </div>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
-              <p className="truncate text-xs font-semibold text-white sm:text-sm">You</p>
+              <p className="truncate text-xs font-semibold text-white sm:text-sm">{playerDisplayName}</p>
               <PlayerRatingBadge rating={player?.rating} />
             </div>
             <div className="flex items-center gap-2 text-[9px] text-white/30 sm:text-xs">

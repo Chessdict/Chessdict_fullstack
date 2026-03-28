@@ -4,13 +4,16 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useAccount } from "wagmi";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { getUserProfile, getGameHistory } from "@/app/actions";
+import { getUserProfile, getGameHistory, updateUsername } from "@/app/actions";
 import { Copy, Check, Trophy, Target, Minus, TrendingUp, ChevronLeft, ChevronRight } from "lucide-react";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
+import { formatWalletAddress, getDisplayName } from "@/lib/utils";
+import { toast } from "sonner";
 
 type Profile = {
     walletAddress: string;
+    username?: string | null;
     ratings: {
         bullet: number;
         blitz: number;
@@ -30,6 +33,7 @@ type GameRecord = {
     result: "win" | "loss" | "draw";
     playedAs: "white" | "black";
     opponentAddress: string;
+    opponentUsername?: string | null;
     opponentRating: number;
     timeControl: number;
     isStaked: boolean;
@@ -46,6 +50,8 @@ export default function ProfilePage() {
     const [games, setGames] = useState<GameRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [copied, setCopied] = useState(false);
+    const [usernameDraft, setUsernameDraft] = useState("");
+    const [savingUsername, setSavingUsername] = useState(false);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const [gamesLoading, setGamesLoading] = useState(false);
@@ -65,6 +71,7 @@ export default function ProfilePage() {
 
             if (profileRes.success && profileRes.profile) {
                 setProfile(profileRes.profile);
+                setUsernameDraft(profileRes.profile.username ?? "");
             }
             if (historyRes.success && historyRes.games) {
                 setGames(historyRes.games);
@@ -123,6 +130,30 @@ export default function ProfilePage() {
 
     const resultLabel = { win: "W", loss: "L", draw: "D" };
     const profileMemoji = getMemojiForAddress(profile.walletAddress);
+    const displayName = getDisplayName(profile.username, profile.walletAddress, "Player");
+
+    async function handleUsernameSave() {
+        if (!address) return;
+        setSavingUsername(true);
+        const result = await updateUsername(address, usernameDraft);
+        setSavingUsername(false);
+
+        if (!result.success || !result.profile) {
+            toast.error(result.error ?? "Failed to update username");
+            return;
+        }
+
+        setProfile((current) =>
+            current
+                ? {
+                      ...current,
+                      username: result.profile.username,
+                  }
+                : current,
+        );
+        setUsernameDraft(result.profile.username ?? "");
+        toast.success("Username updated");
+    }
 
     return (
         <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
@@ -142,7 +173,9 @@ export default function ProfilePage() {
                             />
                         </div>
                         <div className="min-w-0 flex-1">
-                            <p className="text-xs uppercase tracking-widest text-white/40 mb-3">Wallet Address</p>
+                            <p className="text-xs uppercase tracking-widest text-white/40 mb-1">Profile</p>
+                            <h1 className="truncate text-2xl font-semibold text-white">{displayName}</h1>
+                            <p className="mt-1 text-xs uppercase tracking-widest text-white/30">Wallet Address</p>
                             <div className="flex items-center gap-3">
                                 <code className="text-lg sm:text-xl font-mono text-white/90 break-all">
                                     {profile.walletAddress}
@@ -156,6 +189,26 @@ export default function ProfilePage() {
                             </div>
                             <p className="mt-3 text-xs text-white/30">
                                 Joined {new Date(profile.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+                            </p>
+                            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <input
+                                    type="text"
+                                    value={usernameDraft}
+                                    onChange={(event) => setUsernameDraft(event.target.value)}
+                                    placeholder="Choose username"
+                                    className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none transition focus:border-white/20"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleUsernameSave}
+                                    disabled={savingUsername || usernameDraft.trim().toLowerCase() === (profile.username ?? "")}
+                                    className="shrink-0 rounded-xl border border-white/10 bg-white/8 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {savingUsername ? "Saving…" : "Save"}
+                                </button>
+                            </div>
+                            <p className="text-[11px] text-white/30">
+                                Usernames are shown in live games and spectator views. Use 3-20 lowercase letters, numbers, or underscores.
                             </p>
                         </div>
                     </div>
@@ -218,10 +271,13 @@ export default function ProfilePage() {
                                         </div>
                                         <div>
                                             <p className="text-sm font-mono text-white/80">
-                                                {game.opponentAddress.slice(0, 6)}...{game.opponentAddress.slice(-4)}
+                                                {getDisplayName(game.opponentUsername, game.opponentAddress, "Opponent")}
                                             </p>
                                             <p className="text-xs text-white/30">
                                                 {game.playedAs === "white" ? "White" : "Black"} &middot; Opp. {game.opponentRating}
+                                            </p>
+                                            <p className="text-[11px] text-white/35">
+                                                {formatWalletAddress(game.opponentAddress)}
                                             </p>
                                             <p className="text-[11px] text-white/40">
                                                 {getTimeControlDisplay(game.timeControl)}

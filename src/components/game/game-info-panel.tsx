@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { useGameStore } from "@/stores/game-store";
-import { cn } from "@/lib/utils";
+import { cn, formatWalletAddress, getDisplayName } from "@/lib/utils";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
 import { ResignConfirmModal } from "./resign-confirm-modal";
@@ -28,6 +28,7 @@ type GameHistoryEntry = {
   result: "win" | "loss" | "draw";
   playedAs: "white" | "black";
   opponentAddress: string;
+  opponentUsername?: string | null;
   opponentRating: number;
   timeControl: number;
   isStaked: boolean;
@@ -429,9 +430,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
   }
 
   const opponentName = opponent
-    ? (gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`)
+    ? (gameMode === "computer"
+        ? "Stockfish AI"
+        : getDisplayName(opponent.username, opponent.address, "Opponent"))
     : "Opponent";
-  const playerName = player ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : "You";
+  const playerName = player
+    ? getDisplayName(player.username, player.address, "You")
+    : "You";
   const playerMemoji = player?.memoji || (address ? getMemojiForAddress(address) : "/svgs/memoji/Frame 1000003460.svg");
   const opponentMemoji = opponent?.memoji || (opponent?.address ? getMemojiForAddress(opponent.address) : "/svgs/memoji/Frame 1000003461.svg");
 
@@ -442,6 +447,14 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     playerColor === "white" ? player?.address : opponent?.address;
   const blackPlayerAddress =
     playerColor === "black" ? player?.address : opponent?.address;
+  const whitePlayerName =
+    playerColor === "white"
+      ? getDisplayName(player?.username, player?.address, "White")
+      : getDisplayName(opponent?.username, opponent?.address, "White");
+  const blackPlayerName =
+    playerColor === "black"
+      ? getDisplayName(player?.username, player?.address, "Black")
+      : getDisplayName(opponent?.username, opponent?.address, "Black");
   const stakedAmountDisplay = formatStakeAmountDisplay(
     stakeAmountRaw,
     stakeTokenDecimals as number | undefined,
@@ -619,10 +632,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-white truncate">
-                        vs {g.opponentAddress.slice(0, 6)}...{g.opponentAddress.slice(-4)}
+                        vs {getDisplayName(g.opponentUsername, g.opponentAddress, "Opponent")}
                       </p>
                       <p className="text-[11px] text-white/40">
                         Played as {g.playedAs} &middot; {new Date(g.date).toLocaleDateString()}
+                      </p>
+                      <p className="text-[11px] text-white/35">
+                        {formatWalletAddress(g.opponentAddress)}
                       </p>
                       <p className="text-[11px] text-white/45">
                         {getTimeControlDisplay(g.timeControl)}
@@ -787,8 +803,12 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   <span className="text-white/45">Game Type</span>
                   <span className="text-right text-white/80">{isStakedMatch ? "Staked" : "Non-staked"}</span>
                   <span className="text-white/45">White</span>
-                  <span className="break-all text-right font-mono text-[11px] text-white/80">{whitePlayerAddress ?? "Waiting..."}</span>
+                  <span className="text-right text-white/80">{whitePlayerName}</span>
                   <span className="text-white/45">Black</span>
+                  <span className="text-right text-white/80">{blackPlayerName}</span>
+                  <span className="text-white/45">White Addr</span>
+                  <span className="break-all text-right font-mono text-[11px] text-white/80">{whitePlayerAddress ?? "Waiting..."}</span>
+                  <span className="text-white/45">Black Addr</span>
                   <span className="break-all text-right font-mono text-[11px] text-white/80">{blackPlayerAddress ?? "Waiting..."}</span>
                   {isStakedMatch ? (
                     <>
@@ -834,15 +854,21 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                 <div className="mt-2 flex flex-col gap-2">
                   <div className="flex items-start justify-between gap-3">
                     <span className="text-xs font-semibold text-white/55">White</span>
-                    <span className="break-all text-right font-mono text-xs text-white/80">
-                      {whitePlayerAddress ?? "Waiting..."}
-                    </span>
+                    <div className="text-right">
+                      <span className="block text-xs text-white/85">{whitePlayerName}</span>
+                      <span className="block break-all font-mono text-[11px] text-white/45">
+                        {whitePlayerAddress ?? "Waiting..."}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="text-xs font-semibold text-white/55">Black</span>
-                    <span className="break-all text-right font-mono text-xs text-white/80">
-                      {blackPlayerAddress ?? "Waiting..."}
-                    </span>
+                    <div className="text-right">
+                      <span className="block text-xs text-white/85">{blackPlayerName}</span>
+                      <span className="block break-all font-mono text-[11px] text-white/45">
+                        {blackPlayerAddress ?? "Waiting..."}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -883,13 +909,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-white">
-                      {gameMode === "computer" ? "Stockfish AI" : `${opponent.address.slice(0, 6)}...${opponent.address.slice(-4)}`}
+                      {opponentName}
                     </p>
                     <p className="text-xs text-white/40">
                       {playerColor === "white" ? "Black" : "White"} pieces
                     </p>
                     <p className="mt-1 break-all font-mono text-[11px] text-white/30">
-                      {opponent.address}
+                      {formatWalletAddress(opponent.address)}
                     </p>
                   </div>
                 </div>
@@ -907,13 +933,13 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-white">
-                      {player ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : "You"}
+                      {playerName}
                     </p>
                     <p className="text-xs text-blue-400">
                       {playerColor === "white" ? "White" : "Black"} pieces
                     </p>
                     <p className="mt-1 break-all font-mono text-[11px] text-blue-200/55">
-                      {player?.address ?? address ?? "Unknown"}
+                      {formatWalletAddress(player?.address ?? address ?? "Unknown")}
                     </p>
                   </div>
                 </div>
@@ -1047,12 +1073,9 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                       disabled={!isGameActive || gameMode === "computer" || !chatInput.trim()}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#757575] transition hover:scale-[1.02] disabled:opacity-50"
                     >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="7.5" />
-                        <path d="M9 14c.7.7 1.6 1 3 1s2.3-.3 3-1" />
-                        <circle cx="9.2" cy="10" r="0.8" fill="currentColor" stroke="none" />
-                        <circle cx="14.8" cy="10" r="0.8" fill="currentColor" stroke="none" />
-                      </svg>
+                      <span role="img" aria-label="Send" className="text-sm leading-none">
+                        ✈️
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1203,12 +1226,9 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
                       disabled={!isGameActive || gameMode === "computer" || !chatInput.trim()}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#757575] transition hover:scale-[1.02] disabled:opacity-50"
                     >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="7.5" />
-                        <path d="M9 14c.7.7 1.6 1 3 1s2.3-.3 3-1" />
-                        <circle cx="9.2" cy="10" r="0.8" fill="currentColor" stroke="none" />
-                        <circle cx="14.8" cy="10" r="0.8" fill="currentColor" stroke="none" />
-                      </svg>
+                      <span role="img" aria-label="Send" className="text-sm leading-none">
+                        ✈️
+                      </span>
                     </button>
                   </div>
                 </div>
