@@ -14,6 +14,7 @@ import { redirect } from "next/navigation";
 
 const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 60 * 3;
 const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function normalizeUsernameInput(username: unknown) {
   const normalized = String(username ?? "").trim().toLowerCase();
@@ -25,6 +26,10 @@ function normalizeStakeAmountString(value: unknown) {
   const numericAmount = Number.parseFloat(String(value ?? ""));
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) return null;
   return String(numericAmount);
+}
+
+function normalizeEmailInput(email: unknown) {
+  return String(email ?? "").trim().toLowerCase();
 }
 
 async function serializeOpenChallenge(challenge: {
@@ -107,14 +112,8 @@ export async function loginWithWallet(walletAddress: string) {
   }
 
   try {
-    const user = await prisma.user.upsert({
-      where: {
-        walletAddress: walletAddress,
-      },
-      update: {},
-      create: {
-        walletAddress: walletAddress,
-      },
+    const existingUser = await prisma.user.findUnique({
+      where: { walletAddress },
       select: {
         id: true,
         walletAddress: true,
@@ -126,11 +125,83 @@ export async function loginWithWallet(walletAddress: string) {
         stakedRating: true,
       },
     });
+
+    const user = existingUser
+      ? existingUser
+      : await prisma.user.create({
+          data: {
+            walletAddress,
+          },
+          select: {
+            id: true,
+            walletAddress: true,
+            username: true,
+            rating: true,
+            bulletRating: true,
+            blitzRating: true,
+            rapidRating: true,
+            stakedRating: true,
+          },
+        });
+
     return { success: true, user };
   } catch (error) {
     console.error("Error logging in with wallet:", error);
     return { success: false, error: "Failed to login with wallet" };
   }
+}
+
+async function updateUserEmailRecord(
+  walletAddress: string,
+  email: string,
+  options?: { markPromptSeen?: boolean },
+) {
+  const normalizedEmail = normalizeEmailInput(email);
+
+  if (normalizedEmail && !EMAIL_PATTERN.test(normalizedEmail)) {
+    return { success: false, error: "Enter a valid email address" };
+  }
+
+  const existingUser = await prisma.user.findUnique({
+    where: { walletAddress },
+    select: { id: true },
+  });
+
+  if (!existingUser) {
+    return { success: false, error: "User not found" };
+  }
+
+  if (normalizedEmail) {
+    const conflict = await prisma.user.findFirst({
+      where: {
+        email: normalizedEmail,
+        walletAddress: { not: walletAddress },
+      },
+      select: { id: true },
+    });
+
+    if (conflict) {
+      return { success: false, error: "Email is already linked to another wallet" };
+    }
+  }
+
+  const updated = await prisma.user.update({
+    where: { walletAddress },
+    data: {
+      email: normalizedEmail || null,
+      ...(options?.markPromptSeen ? { emailPromptSeen: true } : {}),
+    },
+    select: {
+      walletAddress: true,
+      email: true,
+      emailPromptSeen: true,
+      username: true,
+    },
+  });
+
+  revalidatePath("/profile");
+  revalidatePath("/play");
+  return { success: true, profile: updated };
 }
 
 export async function publishPost(formData: FormData) {
@@ -474,6 +545,7 @@ export async function getUserProfile(walletAddress: string) {
         id: true,
         walletAddress: true,
         username: true,
+        email: true,
         rating: true,
         bulletRating: true,
         blitzRating: true,
@@ -511,6 +583,7 @@ export async function getUserProfile(walletAddress: string) {
       profile: {
         walletAddress: user.walletAddress,
         username: user.username,
+        email: user.email,
         ratings: getAllRatings(user),
         joinedAt: user.createdAt.toISOString(),
         totalGames,
@@ -757,5 +830,20 @@ export async function updateUsername(walletAddress: string, username: string) {
   } catch (error) {
     console.error("Error updating username:", error);
     return { success: false, error: "Failed to update username" };
+  }
+}
+
+export async function updateEmail(walletAddress: string, email: string) {
+  if (!walletAddress) {
+    return { success: false, error: "Wallet address is required" };
+  }
+
+  try {
+    return await updateUserEmailRecord(walletAddress, email, {
+      markPromptSeen: true,
+    });
+  } catch (error) {
+    console.error("Error updating email:", error);
+    return { success: false, error: "Failed to update email" };
   }
 }
