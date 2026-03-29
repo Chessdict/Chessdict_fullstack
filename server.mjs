@@ -5,6 +5,10 @@ import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { PrismaClient } from "@prisma/client";
 import { createMatchmaking } from "./lib/matchmaking.mjs";
+import {
+  assertMainnetInProduction,
+  formatResolvedNetworkLog,
+} from "./lib/network-env.mjs";
 import { ethers } from "ethers";
 import { setWinnerSingleAbi } from "./lib/chessdict-abi-server.mjs";
 import {
@@ -36,15 +40,14 @@ const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
 const prisma = new PrismaClient();
+const resolvedNetwork = assertMainnetInProduction(process.env.NEXT_PUBLIC_NETWORK);
 
 // ─── On-chain settlement (staked games) ───
 const CHESSDICT_ADDRESS = "0xaBb21D8466df3753764CA84d51db0ed65e155Da9";
 const REDEEMER_PRIVATE_KEY = process.env.REDEEMER_PRIVATE_KEY;
-const DEFAULT_RPC_URL =
-  process.env.NEXT_PUBLIC_NETWORK === "testnet"
-    ? "https://sepolia.base.org"
-    : "https://mainnet.base.org";
-const RPC_URL = process.env.RPC_URL || DEFAULT_RPC_URL;
+const RPC_URL = process.env.RPC_URL || resolvedNetwork.rpcUrl;
+
+console.log(formatResolvedNetworkLog(resolvedNetwork, RPC_URL));
 
 let chessdictContract = null;
 if (REDEEMER_PRIVATE_KEY) {

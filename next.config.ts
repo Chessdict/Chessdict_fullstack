@@ -1,4 +1,7 @@
 import type { NextConfig } from "next";
+import { assertMainnetInProduction } from "./lib/network-env.mjs";
+
+assertMainnetInProduction(process.env.NEXT_PUBLIC_NETWORK);
 
 const nextConfig: NextConfig = {
   images: {
