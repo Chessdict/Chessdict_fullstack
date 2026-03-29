@@ -49,6 +49,11 @@ type IncomingChallenge = {
   timeControl?: number;
 };
 
+type PendingQueueRequest = {
+  timeControl: number;
+  stakeInfo?: StakeInfo;
+};
+
 export default function PlayPage() {
   const router = useRouter();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -73,6 +78,7 @@ export default function PlayPage() {
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
   const [incomingChallenge, setIncomingChallenge] = useState<IncomingChallenge | null>(null);
   const [pendingMatch, setPendingMatch] = useState<PendingMatch | null>(null);
+  const [pendingQueueRequest, setPendingQueueRequest] = useState<PendingQueueRequest | null>(null);
 
   const { address, isConnected } = useAccount();
   const { socket, isConnected: isSocketConnected } = useSocket(address ?? undefined);
@@ -80,7 +86,63 @@ export default function PlayPage() {
   const selectedTimeRef = useRef<number>(DEFAULT_QUEUE_TIME_CONTROL_MINUTES);
   const queuedStakeAmountRef = useRef<string | null>(null);
   const hasHandledAutoActionRef = useRef(false);
+  const socketRetryTimeoutRef = useRef<number | null>(null);
   const setInitialTime = useGameStore((s) => s.setInitialTime);
+
+  const clearSocketRetryTimeout = useCallback(() => {
+    if (socketRetryTimeoutRef.current) {
+      window.clearTimeout(socketRetryTimeoutRef.current);
+      socketRetryTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleSocketRecovery = useCallback(() => {
+    if (socketRetryTimeoutRef.current) return;
+
+    socketRetryTimeoutRef.current = window.setTimeout(() => {
+      socketRetryTimeoutRef.current = null;
+      window.location.reload();
+    }, 4000);
+  }, []);
+
+  const joinQueueWhenReady = useCallback((request: PendingQueueRequest) => {
+    if (!address || !socket) return;
+
+    if (request.stakeInfo) {
+      queuedStakeAmountRef.current = request.stakeInfo.stakeAmount;
+      socket.emit("joinQueue", {
+        userId: address,
+        staked: true,
+        token: request.stakeInfo.token,
+        stakeAmount: request.stakeInfo.stakeAmount,
+        timeControl: request.timeControl,
+      });
+      return;
+    }
+
+    queuedStakeAmountRef.current = null;
+    socket.emit("joinQueue", { userId: address, timeControl: request.timeControl });
+  }, [address, socket]);
+
+  useEffect(() => {
+    if (!pendingQueueRequest || !address || !socket || !isSocketConnected) return;
+
+    clearSocketRetryTimeout();
+    joinQueueWhenReady(pendingQueueRequest);
+    setPendingQueueRequest(null);
+  }, [address, clearSocketRetryTimeout, isSocketConnected, joinQueueWhenReady, pendingQueueRequest, socket]);
+
+  useEffect(() => {
+    if (isSocketConnected) {
+      clearSocketRetryTimeout();
+    }
+  }, [clearSocketRetryTimeout, isSocketConnected]);
+
+  useEffect(() => {
+    return () => {
+      clearSocketRetryTimeout();
+    };
+  }, [clearSocketRetryTimeout]);
 
   const enterMatchedGame = useCallback((match: PendingMatch, options?: { onChainGameId?: bigint | null }) => {
     if (!address) return;
@@ -308,24 +370,18 @@ export default function PlayPage() {
     setInitialTime(getTimeControlSeconds(timeMinutes));
 
     if (gameMode === 'online') {
-      if (!isSocketConnected) {
-        toast.error("Socket not connected. Please try again.");
+      if (!socket || !isSocketConnected) {
+        setPendingQueueRequest({
+          timeControl: timeMinutes,
+          stakeInfo,
+        });
+        setIsSearchOpen(true);
+        socket?.connect();
+        scheduleSocketRecovery();
         return;
       }
       setIsSearchOpen(true);
-      if (stakeInfo) {
-        queuedStakeAmountRef.current = stakeInfo.stakeAmount;
-        socket?.emit("joinQueue", {
-          userId: address,
-          staked: true,
-          token: stakeInfo.token,
-          stakeAmount: stakeInfo.stakeAmount,
-          timeControl: timeMinutes,
-        });
-      } else {
-        queuedStakeAmountRef.current = null;
-        socket?.emit("joinQueue", { userId: address, timeControl: timeMinutes });
-      }
+      joinQueueWhenReady({ timeControl: timeMinutes, stakeInfo });
     } else if (gameMode === 'computer') {
       queuedStakeAmountRef.current = null;
       clearMatchState();

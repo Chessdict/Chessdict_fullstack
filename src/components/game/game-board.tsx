@@ -49,6 +49,10 @@ function isLowTime(seconds: number, initialTime: number): boolean {
   return seconds <= threshold && seconds > 0;
 }
 
+function normalizeClockTurn(turn: string | null | undefined): "w" | "b" {
+  return turn === "b" ? "b" : "w";
+}
+
 // Map piece codes to unicode symbols
 const pieceSymbols: Record<string, { w: string; b: string }> = {
   p: { w: "\u2659", b: "\u265F" },
@@ -200,6 +204,9 @@ export function GameBoard() {
   const [settlementFailed, setSettlementFailed] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [rematchRequestPending, setRematchRequestPending] = useState(false);
+  const [timerSyncedAtMs, setTimerSyncedAtMs] = useState(() => Date.now());
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [timerTurn, setTimerTurn] = useState<"w" | "b">("w");
 
   const router = useRouter();
   const { address } = useAccount();
@@ -301,7 +308,7 @@ export function GameBoard() {
     selectionModeRef.current = selectionMode;
   }, [sourceSquare, selectionMode]);
 
-  const safeMove = useCallback((move: any, options?: { preserveSelection?: boolean; resetBoardInteraction?: boolean }) => {
+  const safeMove = useCallback((move: any, options?: { preserveSelection?: boolean; resetBoardInteraction?: boolean; soundPerspective?: "self" | "opponent" }) => {
     try {
       const result = game.move(move);
       if (result) {
@@ -336,7 +343,7 @@ export function GameBoard() {
         clearDragInteraction();
 
         // Play sound based on move type
-        playMoveSound(result);
+        playMoveSound(result, options?.soundPerspective ?? "self");
 
         return result;
       }
@@ -447,6 +454,9 @@ export function GameBoard() {
       setQueuedPremove(null);
       setPromotionSelection(null);
       setLastMoveSquares({});
+      setTimerSyncedAtMs(Date.now());
+      setClockNowMs(Date.now());
+      setTimerTurn("w");
       clearDragInteraction();
       resetBoardInteraction();
     }
@@ -469,6 +479,9 @@ export function GameBoard() {
       setQueuedPremove(null);
       setPromotionSelection(null);
       setLastMoveSquares({});
+      setTimerSyncedAtMs(Date.now());
+      setClockNowMs(Date.now());
+      setTimerTurn("w");
       clearDragInteraction();
       resetBoardInteraction();
     }
@@ -487,6 +500,9 @@ export function GameBoard() {
         clearSelection();
         setQueuedPremove(null);
         setPromotionSelection(null);
+        setTimerSyncedAtMs(Date.now());
+        setClockNowMs(Date.now());
+        setTimerTurn(normalizeClockTurn(game.turn()));
         clearDragInteraction();
         resetBoardInteraction();
         clearRejoinData();
@@ -522,8 +538,57 @@ export function GameBoard() {
     return () => clearInterval(interval);
   }, [opponentDisconnectDeadline, setOpponentDisconnectDeadline]);
 
+  useEffect(() => {
+    if (!isMultiplayer || status !== "in-progress" || gameOver) return;
+
+    const interval = setInterval(() => {
+      setClockNowMs(Date.now());
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [gameOver, isMultiplayer, status]);
+
+  const displayedTimes = useMemo(() => {
+    let displayedWhiteTime = whiteTime;
+    let displayedBlackTime = blackTime;
+
+    if (isMultiplayer && status === "in-progress" && !gameOver) {
+      const elapsedSeconds = Math.max(
+        0,
+        Math.floor((clockNowMs - timerSyncedAtMs) / 1000),
+      );
+
+      if (timerTurn === "w") {
+        displayedWhiteTime = Math.max(0, whiteTime - elapsedSeconds);
+      } else {
+        displayedBlackTime = Math.max(0, blackTime - elapsedSeconds);
+      }
+    }
+
+    return {
+      whiteTime: Math.round(displayedWhiteTime),
+      blackTime: Math.round(displayedBlackTime),
+    };
+  }, [blackTime, clockNowMs, gameOver, isMultiplayer, status, timerSyncedAtMs, timerTurn, whiteTime]);
+
+  useEffect(() => {
+    if (!isMultiplayer || status !== "in-progress" || gameOver) return;
+
+    const currentTurn = normalizeClockTurn(game.turn());
+    if (currentTurn === timerTurn) return;
+
+    // Freeze the elapsed time on the side that just moved, then start the new turn
+    // from a fresh synchronized local baseline until the next server timeSync arrives.
+    setWhiteTime(displayedTimes.whiteTime);
+    setBlackTime(displayedTimes.blackTime);
+    setTimerTurn(currentTurn);
+    setTimerSyncedAtMs(Date.now());
+    setClockNowMs(Date.now());
+  }, [displayedTimes.blackTime, displayedTimes.whiteTime, game, gameOver, isMultiplayer, status, timerTurn, fen, setBlackTime, setWhiteTime]);
+
   // Timer countdown logic
   useEffect(() => {
+    if (gameMode !== "computer") return;
     if (status !== "in-progress") return;
     if (gameOver) return;
 
@@ -538,10 +603,11 @@ export function GameBoard() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [status, gameOver, game, fen, decrementWhiteTime, decrementBlackTime]);
+  }, [status, gameOver, game, fen, gameMode, decrementWhiteTime, decrementBlackTime]);
 
   // Handle timeout (time runs out)
   useEffect(() => {
+    if (gameMode !== "computer") return;
     if (status !== "in-progress") return;
     if (gameOver) return;
 
@@ -551,11 +617,6 @@ export function GameBoard() {
     if (timeoutPlayer <= 0) {
       const winner = currentTurnForTimer === 'w' ? 'black' : 'white';
       console.log(`[CLIENT] Timeout! ${winner} wins`);
-
-      const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-      if (isMultiplayer && socket && roomId) {
-        socket.emit("gameComplete", { roomId, winner, reason: "timeout" });
-      }
 
       setGameOver(winner, "timeout");
       setStatus("finished");
@@ -574,7 +635,7 @@ export function GameBoard() {
     const myColor = playerColor || 'white';
 
     // Only alert for the player's own time
-    const myTime = myColor === 'white' ? whiteTime : blackTime;
+    const myTime = myColor === 'white' ? displayedTimes.whiteTime : displayedTimes.blackTime;
     const key = myColor as 'white' | 'black';
 
     if (myTime <= threshold && myTime > 0 && !lowTimeAlertedRef.current[key]) {
@@ -585,7 +646,7 @@ export function GameBoard() {
     if (myTime > threshold) {
       lowTimeAlertedRef.current[key] = false;
     }
-  }, [whiteTime, blackTime, status, gameOver, playerColor, playLowTime]);
+  }, [displayedTimes.blackTime, displayedTimes.whiteTime, status, gameOver, playerColor, playLowTime]);
 
   // Bot Logic
   useEffect(() => {
@@ -600,7 +661,7 @@ export function GameBoard() {
       const timeoutId = setTimeout(() => {
         const move = getBestMove(new Chess(game.fen()), difficulty);
         if (move) {
-          safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
+          safeMove(move, { preserveSelection: true, resetBoardInteraction: true, soundPerspective: "opponent" });
         }
       }, 600);
       return () => clearTimeout(timeoutId);
@@ -674,7 +735,7 @@ export function GameBoard() {
     if (!socket || !isMultiplayer || !roomId) return;
 
     const handleOpponentMove = (move: any) => {
-      safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
+      safeMove(move, { preserveSelection: true, resetBoardInteraction: true, soundPerspective: "opponent" });
     };
 
     socket.on('opponentMove', handleOpponentMove);
@@ -758,7 +819,7 @@ export function GameBoard() {
       setOpponentPing(data.ping);
     };
 
-    const handleTimeSync = (data: { whiteTime: number; blackTime: number; initialTime?: number }) => {
+    const handleTimeSync = (data: { whiteTime: number; blackTime: number; initialTime?: number; turn?: "w" | "b" }) => {
       const {
         initialTime: currentInitialTime,
         whiteTime: curWhite,
@@ -780,6 +841,9 @@ export function GameBoard() {
       if (syncedInitialTime > currentInitialTime || newBlack <= curBlack) {
         setBlackTime(newBlack);
       }
+      setTimerTurn(normalizeClockTurn(data.turn ?? game.turn()));
+      setTimerSyncedAtMs(Date.now());
+      setClockNowMs(Date.now());
     };
 
     const handleOpponentDisconnecting = (data: { deadline: number }) => {
@@ -833,7 +897,7 @@ export function GameBoard() {
       socket.off('opponentDisconnecting', handleOpponentDisconnecting);
       socket.off('opponentReconnected', handleOpponentReconnected);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed, setInitialTime]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed, setInitialTime, game]);
 
   useEffect(() => {
     if (!socket || !roomId || !canRequestRematch) return;
@@ -1295,7 +1359,7 @@ export function GameBoard() {
             <SignalStrength ping={opponentPing} isConnected={!!socket?.connected} variant="opponent" />
           )}
           {(() => {
-            const opponentTime = playerColor === 'white' ? blackTime : whiteTime;
+            const opponentTime = playerColor === 'white' ? displayedTimes.blackTime : displayedTimes.whiteTime;
             const low = isLowTime(opponentTime, initialTime);
             return (
               <div className={`flex items-center gap-1 rounded-lg px-1.5 py-0.5 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>
@@ -1553,7 +1617,7 @@ export function GameBoard() {
             <SignalStrength ping={ping} isConnected={!!socket?.connected} />
           )}
           {(() => {
-            const myTime = playerColor === 'white' ? whiteTime : blackTime;
+            const myTime = playerColor === 'white' ? displayedTimes.whiteTime : displayedTimes.blackTime;
             const low = isLowTime(myTime, initialTime);
             return (
               <div className={`flex items-center gap-1 rounded-lg px-1.5 py-0.5 ${low ? 'bg-red-500 animate-pulse' : 'bg-white'}`}>

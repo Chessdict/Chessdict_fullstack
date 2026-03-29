@@ -57,11 +57,13 @@ export default function OpenChallengePage({
   const [isLoading, setIsLoading] = useState(true);
   const [isAccepting, setIsAccepting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [pendingSocketAccept, setPendingSocketAccept] = useState(false);
   const hasNavigatedRef = useRef(false);
   const hasRedirectedRef = useRef(false);
   const retriedInitialLoadRef = useRef(false);
   const redirectTimeoutRef = useRef<number | null>(null);
   const challengeExpiryTimeoutRef = useRef<number | null>(null);
+  const socketRecoveryTimeoutRef = useRef<number | null>(null);
   const stakeTokenAddress =
     challenge?.staked && challenge.stakeToken
       ? (challenge.stakeToken as `0x${string}`)
@@ -85,6 +87,22 @@ export default function OpenChallengePage({
       router.replace("/play");
     }, EXIT_REDIRECT_DELAY_MS);
   }, [router]);
+
+  const clearSocketRecoveryTimeout = useCallback(() => {
+    if (socketRecoveryTimeoutRef.current) {
+      window.clearTimeout(socketRecoveryTimeoutRef.current);
+      socketRecoveryTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleSocketRecovery = useCallback(() => {
+    if (socketRecoveryTimeoutRef.current) return;
+
+    socketRecoveryTimeoutRef.current = window.setTimeout(() => {
+      socketRecoveryTimeoutRef.current = null;
+      window.location.reload();
+    }, 4000);
+  }, []);
 
   const loadChallenge = useCallback(
     async (options?: { silent?: boolean; allowRetry?: boolean }) => {
@@ -154,8 +172,9 @@ export default function OpenChallengePage({
       if (challengeExpiryTimeoutRef.current) {
         window.clearTimeout(challengeExpiryTimeoutRef.current);
       }
+      clearSocketRecoveryTimeout();
     };
-  }, []);
+  }, [clearSocketRecoveryTimeout]);
 
   useEffect(() => {
     if (
@@ -250,6 +269,12 @@ export default function OpenChallengePage({
   }, [challenge?.roomId, challengeId, loadChallenge, navigateToGame, socket]);
 
   useEffect(() => {
+    if (isSocketConnected) {
+      clearSocketRecoveryTimeout();
+    }
+  }, [clearSocketRecoveryTimeout, isSocketConnected]);
+
+  useEffect(() => {
     if (!challenge?.roomId || challenge.status !== "ACCEPTED" || !address) return;
 
     const normalizedAddress = address.toLowerCase();
@@ -305,21 +330,19 @@ export default function OpenChallengePage({
     }
   };
 
-  const handleAccept = async () => {
+  const performAccept = useCallback(async () => {
     if (!challenge) return;
     if (!isConnected || !address) {
       toast.error("Connect your wallet to accept the challenge");
+      setIsAccepting(false);
       return;
     }
-
-    if (!socket || !isSocketConnected) {
-      toast.error("Socket not connected. Please try again.");
+    if (!socket) {
+      setIsAccepting(false);
       return;
     }
 
     try {
-      setIsAccepting(true);
-
       if (challenge.staked) {
         if (!stakeTokenAddress || !challenge.stakeAmount) {
           toast.error("This staked challenge is missing token details");
@@ -349,6 +372,33 @@ export default function OpenChallengePage({
       setIsAccepting(false);
       toast.error(error?.shortMessage ?? error?.message ?? "Failed to accept challenge");
     }
+  }, [address, approveToken, challenge, challengeId, checkAllowance, ensureNetwork, isConnected, socket, stakeTokenAddress, stakeTokenDecimals]);
+
+  useEffect(() => {
+    if (!pendingSocketAccept || !socket || !isSocketConnected) return;
+
+    clearSocketRecoveryTimeout();
+    setPendingSocketAccept(false);
+    void performAccept();
+  }, [clearSocketRecoveryTimeout, isSocketConnected, pendingSocketAccept, performAccept, socket]);
+
+  const handleAccept = async () => {
+    if (!challenge) return;
+    if (!isConnected || !address) {
+      toast.error("Connect your wallet to accept the challenge");
+      return;
+    }
+
+    setIsAccepting(true);
+
+    if (!socket || !isSocketConnected) {
+      setPendingSocketAccept(true);
+      socket?.connect();
+      scheduleSocketRecovery();
+      return;
+    }
+
+    await performAccept();
   };
 
   const handleCancel = async () => {
