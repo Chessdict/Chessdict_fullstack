@@ -14,6 +14,7 @@ import { redirect } from "next/navigation";
 
 const OPEN_CHALLENGE_TTL_MS = 1000 * 60 * 60 * 3;
 const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
 function normalizeUsernameInput(username: unknown) {
   const normalized = String(username ?? "").trim().toLowerCase();
@@ -25,6 +26,12 @@ function normalizeStakeAmountString(value: unknown) {
   const numericAmount = Number.parseFloat(String(value ?? ""));
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) return null;
   return String(numericAmount);
+}
+
+function normalizeEmailInput(email: unknown) {
+  const normalized = String(email ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  return normalized;
 }
 
 async function serializeOpenChallenge(challenge: {
@@ -119,6 +126,7 @@ export async function loginWithWallet(walletAddress: string) {
         id: true,
         walletAddress: true,
         username: true,
+        email: true,
         rating: true,
         bulletRating: true,
         blitzRating: true,
@@ -474,6 +482,7 @@ export async function getUserProfile(walletAddress: string) {
         id: true,
         walletAddress: true,
         username: true,
+        email: true,
         rating: true,
         bulletRating: true,
         blitzRating: true,
@@ -511,6 +520,7 @@ export async function getUserProfile(walletAddress: string) {
       profile: {
         walletAddress: user.walletAddress,
         username: user.username,
+        email: user.email,
         ratings: getAllRatings(user),
         joinedAt: user.createdAt.toISOString(),
         totalGames,
@@ -757,5 +767,42 @@ export async function updateUsername(walletAddress: string, username: string) {
   } catch (error) {
     console.error("Error updating username:", error);
     return { success: false, error: "Failed to update username" };
+  }
+}
+
+export async function updateEmail(walletAddress: string, email: string) {
+  if (!walletAddress) {
+    return { success: false, error: "Wallet address is required" };
+  }
+
+  const normalizedEmail = normalizeEmailInput(email);
+  if (normalizedEmail && !EMAIL_PATTERN.test(normalizedEmail)) {
+    return { success: false, error: "Please enter a valid email address" };
+  }
+
+  try {
+    const existingUser = await prisma.user.findUnique({
+      where: { walletAddress },
+      select: { id: true },
+    });
+
+    if (!existingUser) {
+      return { success: false, error: "User not found" };
+    }
+
+    const updated = await prisma.user.update({
+      where: { walletAddress },
+      data: { email: normalizedEmail },
+      select: {
+        walletAddress: true,
+        email: true,
+      },
+    });
+
+    revalidatePath("/profile");
+    return { success: true, profile: updated };
+  } catch (error) {
+    console.error("Error updating email:", error);
+    return { success: false, error: "Failed to update email" };
   }
 }

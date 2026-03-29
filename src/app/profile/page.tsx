@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useAccount } from "wagmi";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { getUserProfile, getGameHistory, updateUsername } from "@/app/actions";
+import { getUserProfile, getGameHistory, updateEmail, updateUsername } from "@/app/actions";
 import { Copy, Check, Trophy, Target, Minus, TrendingUp, ChevronLeft, ChevronRight } from "lucide-react";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
@@ -14,6 +14,7 @@ import { toast } from "sonner";
 type Profile = {
     walletAddress: string;
     username?: string | null;
+    email?: string | null;
     ratings: {
         bullet: number;
         blitz: number;
@@ -51,7 +52,9 @@ export default function ProfilePage() {
     const [loading, setLoading] = useState(true);
     const [copied, setCopied] = useState(false);
     const [usernameDraft, setUsernameDraft] = useState("");
+    const [emailDraft, setEmailDraft] = useState("");
     const [savingUsername, setSavingUsername] = useState(false);
+    const [savingEmail, setSavingEmail] = useState(false);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const [gamesLoading, setGamesLoading] = useState(false);
@@ -72,6 +75,7 @@ export default function ProfilePage() {
             if (profileRes.success && profileRes.profile) {
                 setProfile(profileRes.profile);
                 setUsernameDraft(profileRes.profile.username ?? "");
+                setEmailDraft(profileRes.profile.email ?? "");
             }
             if (historyRes.success && historyRes.games) {
                 setGames(historyRes.games);
@@ -155,6 +159,29 @@ export default function ProfilePage() {
         toast.success("Username updated");
     }
 
+    async function handleEmailSave() {
+        if (!address) return;
+        setSavingEmail(true);
+        const result = await updateEmail(address, emailDraft);
+        setSavingEmail(false);
+
+        if (!result.success || !result.profile) {
+            toast.error(result.error ?? "Failed to update email");
+            return;
+        }
+
+        setProfile((current) =>
+            current
+                ? {
+                      ...current,
+                      email: result.profile.email,
+                  }
+                : current,
+        );
+        setEmailDraft(result.profile.email ?? "");
+        toast.success(result.profile.email ? "Email updated" : "Email cleared");
+    }
+
     return (
         <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
             <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
@@ -209,6 +236,26 @@ export default function ProfilePage() {
                             </div>
                             <p className="text-[11px] text-white/30">
                                 Usernames are shown in live games and spectator views. Use 3-20 lowercase letters, numbers, or underscores.
+                            </p>
+                            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <input
+                                    type="email"
+                                    value={emailDraft}
+                                    onChange={(event) => setEmailDraft(event.target.value)}
+                                    placeholder="Optional email"
+                                    className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none transition focus:border-white/20"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleEmailSave}
+                                    disabled={savingEmail || emailDraft.trim().toLowerCase() === (profile.email ?? "")}
+                                    className="shrink-0 rounded-xl border border-white/10 bg-white/8 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {savingEmail ? "Saving…" : "Save Email"}
+                                </button>
+                            </div>
+                            <p className="text-[11px] text-white/30">
+                                Optional for future updates and account contact. This does not change wallet login.
                             </p>
                         </div>
                     </div>
