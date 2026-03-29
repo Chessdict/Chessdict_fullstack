@@ -74,7 +74,7 @@ export default function AdminPage() {
     try {
       setIsLoading(true);
       if (chainId !== CHESSDICT_CHAIN_ID) {
-        toast.info(`Switching to ${networkConfig.networkLabel}…`);
+        toast.info(`Switching to ${networkConfig.networkLabel} (chain ${CHESSDICT_CHAIN_ID})…`);
         await switchChainAsync({ chainId: CHESSDICT_CHAIN_ID });
       }
       toast.info(`Adding token ${tokenAddress.slice(0, 8)}…`);
@@ -100,7 +100,9 @@ export default function AdminPage() {
       <div className="relative w-full max-w-xl px-6">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-white">Contract Admin</h1>
-          <p className="mt-1 text-sm text-white/40">Manage the Chessdict contract settings</p>
+          <p className="mt-1 text-sm text-white/40">
+            Manage the Chessdict contract settings on {networkConfig.networkLabel}
+          </p>
         </div>
 
         {/* Wallet */}

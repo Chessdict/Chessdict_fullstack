@@ -14,13 +14,18 @@ import {
   CHESSDICT_ADDRESS,
   CHESSDICT_CHAIN_ID,
 } from "@/lib/contract";
+import { networkConfig } from "@/lib/network-config";
 import { erc20Abi } from "@/lib/erc20-abi";
 import { parseUnits, decodeEventLog } from "viem";
-import { baseSepolia, base } from "viem/chains";
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
 
-const TARGET_CHAIN = CHESSDICT_CHAIN_ID === baseSepolia.id ? baseSepolia : base;
+const TARGET_CHAIN = networkConfig.chain;
+
+function formatChainMismatchMessage(currentChainId: number | undefined) {
+  const currentChain = currentChainId ?? "unknown";
+  return `Wallet is on chain ${currentChain}. Chessdict requires chain ${CHESSDICT_CHAIN_ID} (${TARGET_CHAIN.name}).`;
+}
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -112,7 +117,7 @@ export function useTokenAllowance(
  * useChessdict — hook providing all write interactions with the Chessdict contract.
  *
  * Internal helpers:
- *  - `ensureNetwork`      — switches to the configured Base network if needed
+ *  - `ensureNetwork`      — switches to the configured Chessdict chain if needed
  *  - `approveToken`       — ERC-20 approval with on-chain wait
  *  - `executeStakedWrite` — full approve → write → confirm flow
  *  - `executeWrite`       — simple write → confirm flow (no approval needed)
@@ -159,7 +164,7 @@ export function useChessdict() {
     const currentConnector = requireWalletConnector();
 
     if (chainId !== CHESSDICT_CHAIN_ID) {
-      toast.info(`Switching to ${TARGET_CHAIN.name}…`);
+      toast.info(`Switching to ${TARGET_CHAIN.name} (chain ${CHESSDICT_CHAIN_ID})…`);
       try {
         await switchChainAsync({
           chainId: CHESSDICT_CHAIN_ID,
@@ -189,9 +194,17 @@ export function useChessdict() {
             });
           }
         } else {
-          throw err;
+          throw new Error(formatChainMismatchMessage(chainId));
         }
       }
+    }
+
+    const resolvedChainId = await currentConnector
+      .getChainId?.()
+      .catch(() => chainId);
+
+    if (resolvedChainId !== CHESSDICT_CHAIN_ID) {
+      throw new Error(formatChainMismatchMessage(resolvedChainId));
     }
   }, [chainId, requireWalletConnector, switchChainAsync]);
 
