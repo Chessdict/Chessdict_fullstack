@@ -77,6 +77,7 @@ export function TournamentGameBoard({
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
   const dragInteractionRef = useRef(false);
+  const dragStartedAtRef = useRef(0);
   const [boardKey, setBoardKey] = useState(0);
 
   const resetBoardInteraction = useCallback(() => {
@@ -85,7 +86,38 @@ export function TournamentGameBoard({
 
   const clearDragInteraction = useCallback(() => {
     dragInteractionRef.current = false;
+    dragStartedAtRef.current = 0;
   }, []);
+
+  const hasBrokenDragInteraction = useCallback(() => {
+    if (!dragInteractionRef.current) return false;
+
+    // Tournament board follows the same rule as the main board:
+    // recover only if a drag is still active after the normal pointer lifecycle.
+    return Date.now() - dragStartedAtRef.current < 2500;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handlePointerLifecycleEnd = () => {
+      clearDragInteraction();
+    };
+
+    window.addEventListener("pointerup", handlePointerLifecycleEnd, true);
+    window.addEventListener("pointercancel", handlePointerLifecycleEnd, true);
+    window.addEventListener("touchend", handlePointerLifecycleEnd, true);
+    window.addEventListener("touchcancel", handlePointerLifecycleEnd, true);
+    window.addEventListener("mouseup", handlePointerLifecycleEnd, true);
+
+    return () => {
+      window.removeEventListener("pointerup", handlePointerLifecycleEnd, true);
+      window.removeEventListener("pointercancel", handlePointerLifecycleEnd, true);
+      window.removeEventListener("touchend", handlePointerLifecycleEnd, true);
+      window.removeEventListener("touchcancel", handlePointerLifecycleEnd, true);
+      window.removeEventListener("mouseup", handlePointerLifecycleEnd, true);
+    };
+  }, [clearDragInteraction]);
 
   const syncState = useCallback(() => {
     setFen(game.fen());
@@ -144,8 +176,7 @@ export function TournamentGameBoard({
           } else {
             clearSelection();
           }
-          // Mirror the main board: only recover from stale real drags, not tap selection.
-          if (options?.resetBoardInteraction && dragInteractionRef.current) {
+          if (options?.resetBoardInteraction && hasBrokenDragInteraction()) {
             resetBoardInteraction();
           }
           clearDragInteraction();
@@ -156,7 +187,7 @@ export function TournamentGameBoard({
       }
       return null;
     },
-    [clearSelection, game, resetBoardInteraction, syncState, clearDragInteraction],
+    [clearSelection, game, resetBoardInteraction, syncState, clearDragInteraction, hasBrokenDragInteraction],
   );
 
   const playPlayerMove = useCallback((move: Premove) => {
@@ -517,17 +548,14 @@ export function TournamentGameBoard({
     (source: string, target: string) => {
       if (gameResult || promotionSelection) {
         clearDragInteraction();
-        resetBoardInteraction();
         return false;
       }
       if (game.isGameOver()) {
         clearDragInteraction();
-        resetBoardInteraction();
         return false;
       }
       if (!playerTurnCode) {
         clearDragInteraction();
-        resetBoardInteraction();
         return false;
       }
 
@@ -535,29 +563,25 @@ export function TournamentGameBoard({
         if (queuedPremove) {
           clearQueuedPremove();
           clearDragInteraction();
-          resetBoardInteraction();
           return false;
         }
         tryQueuePremove(source, target);
         clearDragInteraction();
-        resetBoardInteraction();
         return false;
       }
 
       if (requestPromotion(source, target)) {
         clearDragInteraction();
-        resetBoardInteraction();
         return false;
       }
 
       const result = playPlayerMove({ from: source, to: target, promotion: "q" });
       if (!result) {
         clearDragInteraction();
-        resetBoardInteraction();
       }
       return !!result;
     },
-    [clearQueuedPremove, clearDragInteraction, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, tryQueuePremove],
+    [clearQueuedPremove, clearDragInteraction, game, gameResult, playPlayerMove, playerTurnCode, promotionSelection, queuedPremove, requestPromotion, tryQueuePremove],
   );
 
   const handleResign = () => {
@@ -696,13 +720,17 @@ export function TournamentGameBoard({
               pieces: customPieces,
               onPieceDrag: () => {
                 dragInteractionRef.current = true;
+                dragStartedAtRef.current = Date.now();
               },
               onSquareMouseUp: () => {
                 clearDragInteraction();
               },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string | null }) => {
-                if (!sourceSquare || !targetSquare) return false;
+                if (!sourceSquare || !targetSquare) {
+                  clearDragInteraction();
+                  return false;
+                }
                 return onDrop(sourceSquare, targetSquare);
               },
             }}
