@@ -112,7 +112,7 @@ export function useTokenAllowance(
  * useChessdict — hook providing all write interactions with the Chessdict contract.
  *
  * Internal helpers:
- *  - `ensureNetwork`      — switches to Base Sepolia if needed
+ *  - `ensureNetwork`      — switches to the configured Base network if needed
  *  - `approveToken`       — ERC-20 approval with on-chain wait
  *  - `executeStakedWrite` — full approve → write → confirm flow
  *  - `executeWrite`       — simple write → confirm flow (no approval needed)
