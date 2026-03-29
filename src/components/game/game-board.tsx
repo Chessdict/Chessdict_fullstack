@@ -254,6 +254,7 @@ export function GameBoard() {
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
   const dragInteractionRef = useRef(false);
+  const dragStartedAtRef = useRef(0);
   const [boardKey, setBoardKey] = useState(0);
 
   const resetBoardInteraction = useCallback(() => {
@@ -262,7 +263,38 @@ export function GameBoard() {
 
   const clearDragInteraction = useCallback(() => {
     dragInteractionRef.current = false;
+    dragStartedAtRef.current = 0;
   }, []);
+
+  const hasBrokenDragInteraction = useCallback(() => {
+    if (!dragInteractionRef.current) return false;
+
+    // Only recover drags that are still marked active well after the browser
+    // should have completed the touch/pointer lifecycle.
+    return Date.now() - dragStartedAtRef.current < 2500;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handlePointerLifecycleEnd = () => {
+      clearDragInteraction();
+    };
+
+    window.addEventListener("pointerup", handlePointerLifecycleEnd, true);
+    window.addEventListener("pointercancel", handlePointerLifecycleEnd, true);
+    window.addEventListener("touchend", handlePointerLifecycleEnd, true);
+    window.addEventListener("touchcancel", handlePointerLifecycleEnd, true);
+    window.addEventListener("mouseup", handlePointerLifecycleEnd, true);
+
+    return () => {
+      window.removeEventListener("pointerup", handlePointerLifecycleEnd, true);
+      window.removeEventListener("pointercancel", handlePointerLifecycleEnd, true);
+      window.removeEventListener("touchend", handlePointerLifecycleEnd, true);
+      window.removeEventListener("touchcancel", handlePointerLifecycleEnd, true);
+      window.removeEventListener("mouseup", handlePointerLifecycleEnd, true);
+    };
+  }, [clearDragInteraction]);
 
   // Compute persistent check highlight from current position
   const checkSquare = useMemo<Record<string, React.CSSProperties>>(() => {
@@ -336,8 +368,8 @@ export function GameBoard() {
           clearSelection();
         }
 
-        // Lichess/Chessground clears only real drag state, not ordinary tap selection.
-        if (options?.resetBoardInteraction && dragInteractionRef.current) {
+        // Only remount when an external move lands while a stale drag is still active.
+        if (options?.resetBoardInteraction && hasBrokenDragInteraction()) {
           resetBoardInteraction();
         }
         clearDragInteraction();
@@ -351,7 +383,7 @@ export function GameBoard() {
       console.error(e);
     }
     return null;
-  }, [game, syncState, addMove, clearSelection, playMoveSound, resetBoardInteraction, clearDragInteraction]);
+  }, [game, syncState, addMove, clearSelection, playMoveSound, resetBoardInteraction, clearDragInteraction, hasBrokenDragInteraction]);
 
   const emitPlayerMove = useCallback((move: Premove, result: Move) => {
     if (!isMultiplayer || !roomId) return;
@@ -1153,17 +1185,14 @@ export function GameBoard() {
   const onDrop = useCallback((source: string, target: string) => {
     if (status !== "in-progress" || promotionSelection) {
       clearDragInteraction();
-      resetBoardInteraction();
       return false;
     }
     if (game.isGameOver()) {
       clearDragInteraction();
-      resetBoardInteraction();
       return false;
     }
     if (!playerTurnCode) {
       clearDragInteraction();
-      resetBoardInteraction();
       return false;
     }
 
@@ -1171,28 +1200,24 @@ export function GameBoard() {
       if (queuedPremove) {
         clearQueuedPremove();
         clearDragInteraction();
-        resetBoardInteraction();
         return false;
       }
       tryQueuePremove(source, target);
       clearDragInteraction();
-      resetBoardInteraction();
       return false;
     }
 
     if (requestPromotion(source, target)) {
       clearDragInteraction();
-      resetBoardInteraction();
       return false;
     }
 
     const result = playPlayerMove({ from: source, to: target, promotion: "q" });
     if (!result) {
       clearDragInteraction();
-      resetBoardInteraction();
     }
     return !!result;
-  }, [clearQueuedPremove, clearDragInteraction, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, resetBoardInteraction, status, tryQueuePremove]);
+  }, [clearQueuedPremove, clearDragInteraction, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -1437,13 +1462,17 @@ export function GameBoard() {
               pieces: customPieces,
               onPieceDrag: () => {
                 dragInteractionRef.current = true;
+                dragStartedAtRef.current = Date.now();
               },
               onSquareMouseUp: () => {
                 clearDragInteraction();
               },
               onSquareClick: onSquareClick,
               onPieceDrop: ({ sourceSquare, targetSquare }) => {
-                if (!sourceSquare || !targetSquare) return false;
+                if (!sourceSquare || !targetSquare) {
+                  clearDragInteraction();
+                  return false;
+                }
                 return onDrop(sourceSquare, targetSquare);
               },
             }}
