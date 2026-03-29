@@ -189,10 +189,12 @@ async function updateUserEmailRecord(
     where: { walletAddress },
     data: {
       email: normalizedEmail || null,
+      ...(options?.markPromptSeen ? { emailPromptSeen: true } : {}),
     },
     select: {
       walletAddress: true,
       email: true,
+      emailPromptSeen: true,
       username: true,
     },
   });
