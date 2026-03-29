@@ -3,6 +3,8 @@ import { getMemojiForAddress } from "@/lib/memoji";
 import { getDisplayName } from "@/lib/utils";
 
 export const EVENT_LEADERBOARD_TIME_ZONE = "Africa/Lagos";
+export const EVENT_LOSS_SPOTLIGHT_MIN_GAMES = 6;
+export const EVENT_LOSS_SPOTLIGHT_MAX_GAMES = 10;
 export const EVENT_LEADERBOARD_WINDOW = {
   // 7:30 PM to 9:30 PM WAT on March 29, 2026. WAT is UTC+1.
   startUtc: new Date("2026-03-29T18:30:00.000Z"),
@@ -55,7 +57,10 @@ export type EventLeaderboardEntry = AggregateEntry & {
   displayName: string;
   memoji: string;
   winRate: number;
+  adjustedLossRate: number;
 };
+
+export type EventLossSpotlightEntry = EventLeaderboardEntry;
 
 function isStakedGame(game: Pick<LeaderboardGame, "onChainGameId" | "stakeToken" | "wagerAmount">) {
   return !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
@@ -163,7 +168,31 @@ export function buildEventLeaderboard(games: LeaderboardGame[]): EventLeaderboar
       displayName: getDisplayName(entry.username, entry.walletAddress, "Player"),
       memoji: getMemojiForAddress(entry.walletAddress),
       winRate: entry.games > 0 ? Math.round((entry.wins / entry.games) * 100) : 0,
+      // Bayesian-smoothed loss rate so tiny samples do not dominate.
+      adjustedLossRate: (entry.losses + 3) / (entry.games + 6),
     }));
+}
+
+export function pickEventLossSpotlight(entries: EventLeaderboardEntry[]): EventLossSpotlightEntry | null {
+  const eligibleEntries = entries.filter(
+    (entry) =>
+      entry.games >= EVENT_LOSS_SPOTLIGHT_MIN_GAMES &&
+      entry.games <= EVENT_LOSS_SPOTLIGHT_MAX_GAMES &&
+      entry.losses > 0,
+  );
+
+  if (eligibleEntries.length === 0) {
+    return null;
+  }
+
+  return [...eligibleEntries].sort((left, right) => {
+    if (right.adjustedLossRate !== left.adjustedLossRate) {
+      return right.adjustedLossRate - left.adjustedLossRate;
+    }
+    if (right.losses !== left.losses) return right.losses - left.losses;
+    if (right.games !== left.games) return right.games - left.games;
+    return left.walletAddress.localeCompare(right.walletAddress);
+  })[0];
 }
 
 export async function getEventLeaderboard() {
@@ -230,5 +259,6 @@ export async function getEventLeaderboard() {
     totalGames: games.length,
     totalPlayers: leaderboard.length,
     entries: leaderboard,
+    lossSpotlight: pickEventLossSpotlight(leaderboard),
   };
 }
