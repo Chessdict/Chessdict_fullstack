@@ -1,26 +1,21 @@
-import { base, baseSepolia } from "wagmi/chains";
-import { resolvePublicNetwork } from "../../lib/network-env.mjs";
-
-const resolvedNetwork = resolvePublicNetwork(process.env.NEXT_PUBLIC_NETWORK);
-const isMainnet = resolvedNetwork.key === "mainnet";
+import { base } from "wagmi/chains";
 
 export const networkConfig = {
-  key: resolvedNetwork.key,
-  isMainnet,
+  key: "mainnet",
+  isMainnet: true,
 
-  // This module is imported by client and server code, so invalid env must
-  // explode here instead of silently drifting to Sepolia.
-  chain: isMainnet ? base : baseSepolia,
-  chainId: resolvedNetwork.chainId,
+  chain: base,
+  chainId: 8453,
 
-  // Chessdict contract — same address on both networks
+  // Chessdict contract
   chessdictAddress:
     "0xaBb21D8466df3753764CA84d51db0ed65e155Da9" as `0x${string}`,
 
-  usdcAddress: resolvedNetwork.usdcAddress as `0x${string}`,
+  // Native USDC on Base Mainnet
+  usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as `0x${string}`,
 
-  networkLabel: resolvedNetwork.networkLabel,
+  networkLabel: "Base Mainnet",
 
-  rpcUrl: resolvedNetwork.rpcUrl,
-  blockExplorerUrl: resolvedNetwork.blockExplorerUrl,
+  rpcUrl: "https://mainnet.base.org",
+  blockExplorerUrl: "https://basescan.org",
 } as const;

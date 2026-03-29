@@ -197,6 +197,17 @@ export function useChessdict() {
           throw new Error(formatChainMismatchMessage(chainId));
         }
       }
+
+      // Wait for the connector to report the correct chain — wagmi's
+      // reactive chainId may lag behind the actual wallet state.
+      const maxAttempts = 10;
+      for (let i = 0; i < maxAttempts; i++) {
+        const connectorChainId = await currentConnector
+          .getChainId?.()
+          .catch(() => undefined);
+        if (connectorChainId === CHESSDICT_CHAIN_ID) break;
+        await new Promise((r) => setTimeout(r, 300));
+      }
     }
 
     const resolvedChainId = await currentConnector
