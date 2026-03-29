@@ -1,14 +1,14 @@
 import { base, baseSepolia } from "wagmi/chains";
 
 /**
- * Set NEXT_PUBLIC_NETWORK=mainnet  → Base Mainnet
- * Set NEXT_PUBLIC_NETWORK=testnet  → Base Sepolia (default for dev)
+ * Set NEXT_PUBLIC_NETWORK=mainnet  → Base Mainnet (default)
+ * Set NEXT_PUBLIC_NETWORK=testnet  → Base Sepolia
  *
  * In .env:
  *   NEXT_PUBLIC_NETWORK=mainnet   # production
  *   NEXT_PUBLIC_NETWORK=testnet   # development / testing
  */
-const isMainnet = process.env.NEXT_PUBLIC_NETWORK === "mainnet";
+const isMainnet = process.env.NEXT_PUBLIC_NETWORK !== "testnet";
 
 export const networkConfig = {
   isMainnet,

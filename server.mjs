@@ -40,7 +40,11 @@ const prisma = new PrismaClient();
 // ─── On-chain settlement (staked games) ───
 const CHESSDICT_ADDRESS = "0xaBb21D8466df3753764CA84d51db0ed65e155Da9";
 const REDEEMER_PRIVATE_KEY = process.env.REDEEMER_PRIVATE_KEY;
-const RPC_URL = process.env.RPC_URL || "https://sepolia.base.org";
+const DEFAULT_RPC_URL =
+  process.env.NEXT_PUBLIC_NETWORK === "testnet"
+    ? "https://sepolia.base.org"
+    : "https://mainnet.base.org";
+const RPC_URL = process.env.RPC_URL || DEFAULT_RPC_URL;
 
 let chessdictContract = null;
 if (REDEEMER_PRIVATE_KEY) {
