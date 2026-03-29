@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 const SOUND_PATHS = {
   move: "/sounds/moved-piece.mp3",
@@ -15,6 +15,10 @@ const SOUND_PATHS = {
   notification: "/sounds/notification.mp3",
   timeOut: "/sounds/time-out.mp3",
 } as const;
+
+const decodedAssetCache = new Map<string, AudioBuffer | null>();
+const decodedAssetPromiseCache = new Map<string, Promise<AudioBuffer | null>>();
+let hasPrimedLowLatencyAssets = false;
 
 function createNoiseBuffer(
   ctx: AudioContext,
@@ -47,7 +51,84 @@ export function useChessSounds() {
     return ctxRef.current;
   }, []);
 
+  const loadDecodedAsset = useCallback(async (ctx: AudioContext, src: string) => {
+    if (decodedAssetCache.has(src)) {
+      return decodedAssetCache.get(src) ?? null;
+    }
+
+    const existingPromise = decodedAssetPromiseCache.get(src);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const loadPromise = fetch(src)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch audio asset: ${src}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+        decodedAssetCache.set(src, decoded);
+        return decoded;
+      })
+      .catch(() => {
+        decodedAssetCache.set(src, null);
+        return null;
+      })
+      .finally(() => {
+        decodedAssetPromiseCache.delete(src);
+      });
+
+    decodedAssetPromiseCache.set(src, loadPromise);
+    return loadPromise;
+  }, []);
+
+  const playBufferedAsset = useCallback((src: string, volume = 0.8) => {
+    const ctx = getCtx();
+    const buffer = decodedAssetCache.get(src);
+    if (!buffer) {
+      void loadDecodedAsset(ctx, src);
+      return false;
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+
+    source.connect(gain).connect(ctx.destination);
+    source.start();
+    return true;
+  }, [getCtx, loadDecodedAsset]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const primeAssets = () => {
+      if (hasPrimedLowLatencyAssets) return;
+      hasPrimedLowLatencyAssets = true;
+
+      const ctx = getCtx();
+      void Promise.all([
+        loadDecodedAsset(ctx, SOUND_PATHS.move),
+        loadDecodedAsset(ctx, SOUND_PATHS.opponentMove),
+        loadDecodedAsset(ctx, SOUND_PATHS.capture),
+        loadDecodedAsset(ctx, SOUND_PATHS.check),
+      ]);
+    };
+
+    window.addEventListener("pointerdown", primeAssets, { passive: true, once: true });
+    window.addEventListener("keydown", primeAssets, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", primeAssets);
+      window.removeEventListener("keydown", primeAssets);
+    };
+  }, [getCtx, loadDecodedAsset]);
+
   const playAsset = useCallback((src: string, volume = 0.8) => {
+    if (playBufferedAsset(src, volume)) return true;
     if (typeof Audio === "undefined") return false;
 
     if (failedAssetRef.current.has(src)) return false;
@@ -78,7 +159,7 @@ export function useChessSounds() {
     });
 
     return true;
-  }, []);
+  }, [playBufferedAsset]);
 
   // Use the extracted asset pack first, but keep a synthetic fallback so sound
   // does not silently disappear if a browser blocks or misses a file.
@@ -295,7 +376,10 @@ export function useChessSounds() {
   }, [playAsset, playNotification]);
 
   const playMoveSound = useCallback(
-    (move: { san: string; captured?: string; flags?: string }) => {
+    (
+      move: { san: string; captured?: string; flags?: string },
+      perspective: "self" | "opponent" = "self",
+    ) => {
       const isPromotion = move.flags?.includes("p") || move.san.includes("=");
       const isCheck = move.san.includes("+") || move.san.includes("#");
       const isCapture = !!move.captured;
@@ -310,10 +394,14 @@ export function useChessSounds() {
       } else if (isCastle) {
         playWhenCastle();
       } else {
-        playMove();
+        if (perspective === "opponent") {
+          playOpponentMove();
+        } else {
+          playMove();
+        }
       }
     },
-    [playCapture, playCheck, playMove, playPromotion, playWhenCastle],
+    [playCapture, playCheck, playMove, playOpponentMove, playPromotion, playWhenCastle],
   );
 
   return {

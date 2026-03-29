@@ -280,15 +280,12 @@ app.prepare().then(async () => {
       whiteTime: Math.round(timer.whiteTime),
       blackTime: Math.round(timer.blackTime),
       initialTime: timer.initialTime,
+      turn: timer.turn === 'b' ? 'b' : 'w',
     };
   }
 
   function getPublicTimerSnapshot(timer) {
-    const baseSnapshot = getTimerSnapshot(timer);
-    return {
-      ...baseSnapshot,
-      turn: timer.turn === 'b' ? 'b' : 'w',
-    };
+    return getTimerSnapshot(timer);
   }
 
   function persistGameTimer(roomId, timer) {
@@ -2163,7 +2160,12 @@ app.prepare().then(async () => {
         const elapsed = (now - timer.lastMoveTimestamp) / 1000;
         const whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
         const blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
-        socket.emit('timeSync', { whiteTime: Math.round(whiteTime), blackTime: Math.round(blackTime), initialTime: timer.initialTime });
+        socket.emit('timeSync', {
+          whiteTime: Math.round(whiteTime),
+          blackTime: Math.round(blackTime),
+          initialTime: timer.initialTime,
+          turn: timer.turn === 'b' ? 'b' : 'w',
+        });
       }
     });
 

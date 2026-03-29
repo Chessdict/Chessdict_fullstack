@@ -210,6 +210,26 @@ describe('Duplicate prevention via isInAnyQueue', () => {
     expect(mm.isInAnyQueue('s1')).toBe(false);
     expect(mm.isInAnyQueue('s2')).toBe(false);
   });
+
+  it('does not let the same user match with themselves from two devices', () => {
+    mm.joinQueue('s1', { userId: 'alice', timeControl: 3 });
+    mm.joinQueue('s2', { userId: 'ALICE', timeControl: 3 });
+
+    expect(onMatch).not.toHaveBeenCalled();
+    expect(mm._getFreeQueueLength()).toBe(1);
+    expect(mm._getFreeQueue()[0].socketId).toBe('s2');
+  });
+
+  it('replaces an older staked queue entry for the same user on another device', () => {
+    mm.joinQueue('s1', { userId: 'alice', staked: true, onChainGameId: 'g1', token: 'USDC', stakeAmount: '10', timeControl: 3 });
+    mm.joinQueue('s2', { userId: 'Alice', staked: true, onChainGameId: 'g2', token: 'USDC', stakeAmount: '10', timeControl: 3 });
+    mm.joinQueue('s3', { userId: 'bob', staked: true, onChainGameId: 'g3', token: 'USDC', stakeAmount: '10', timeControl: 3 });
+
+    expect(onMatch).toHaveBeenCalledOnce();
+    const [p1, p2] = onMatch.mock.calls[0];
+    expect([p1.socketId, p2.socketId]).toContain('s2');
+    expect([p1.userId, p2.userId]).not.toEqual(['alice', 'ALICE']);
+  });
 });
 
 // ─── removeFromAllQueues Cleanup ───
