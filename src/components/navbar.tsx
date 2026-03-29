@@ -19,11 +19,11 @@ import {
 const navItems = [
   { href: "/play", label: "Play" },
   { href: "/watch", label: "Watch" },
+  { href: "/leaderboard", label: "Leaderboard" },
   { href: "/play", label: "Tournaments" },
   { href: "/", label: "Creator program" },
   { href: "/", label: "Markets" },
   { href: "/claims", label: "Claims" },
-  // { href: "#leaderboard", label: "Leaderboard" },
   // { href: "#community", label: "Community" },
   // { href: "#blog", label: "Blog" },
   // { href: "#whitepaper", label: "Whitepaper" },

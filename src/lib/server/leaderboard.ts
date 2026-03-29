@@ -1,0 +1,234 @@
+import prisma from "@/lib/prisma";
+import { getMemojiForAddress } from "@/lib/memoji";
+import { getDisplayName } from "@/lib/utils";
+
+export const EVENT_LEADERBOARD_TIME_ZONE = "Africa/Lagos";
+export const EVENT_LEADERBOARD_WINDOW = {
+  // 7:30 PM to 9:30 PM WAT on March 29, 2026. WAT is UTC+1.
+  startUtc: new Date("2026-03-29T18:30:00.000Z"),
+  endUtc: new Date("2026-03-29T20:30:00.000Z"),
+  label: "March 29, 2026 · 7:30 PM - 9:30 PM WAT",
+} as const;
+
+type LeaderboardPlayer = {
+  id: number;
+  walletAddress: string;
+  username: string | null;
+  bulletRating: number;
+  blitzRating: number;
+  rapidRating: number;
+  stakedRating: number;
+};
+
+type LeaderboardGame = {
+  id: string;
+  status: "COMPLETED" | "DRAW";
+  onChainGameId: string | null;
+  stakeToken: string | null;
+  wagerAmount: number | null;
+  updatedAt: Date;
+  whitePlayer: LeaderboardPlayer | null;
+  blackPlayer: LeaderboardPlayer | null;
+  winnerId: number | null;
+};
+
+type AggregateEntry = {
+  id: number;
+  walletAddress: string;
+  username: string | null;
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  points: number;
+  stakedGames: number;
+  stakedWins: number;
+  ratings: {
+    bullet: number;
+    blitz: number;
+    rapid: number;
+    staked: number;
+  };
+};
+
+export type EventLeaderboardEntry = AggregateEntry & {
+  displayName: string;
+  memoji: string;
+  winRate: number;
+};
+
+function isStakedGame(game: Pick<LeaderboardGame, "onChainGameId" | "stakeToken" | "wagerAmount">) {
+  return !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
+}
+
+function createEntry(player: LeaderboardPlayer): AggregateEntry {
+  return {
+    id: player.id,
+    walletAddress: player.walletAddress,
+    username: player.username,
+    games: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    points: 0,
+    stakedGames: 0,
+    stakedWins: 0,
+    ratings: {
+      bullet: player.bulletRating,
+      blitz: player.blitzRating,
+      rapid: player.rapidRating,
+      staked: player.stakedRating,
+    },
+  };
+}
+
+function applyResult(
+  entry: AggregateEntry,
+  {
+    didWin,
+    isDraw,
+    staked,
+  }: {
+    didWin: boolean;
+    isDraw: boolean;
+    staked: boolean;
+  },
+) {
+  entry.games += 1;
+
+  if (staked) {
+    entry.stakedGames += 1;
+  }
+
+  if (isDraw) {
+    entry.draws += 1;
+    entry.points += 0.5;
+    return;
+  }
+
+  if (didWin) {
+    entry.wins += 1;
+    entry.points += 1;
+    if (staked) {
+      entry.stakedWins += 1;
+    }
+    return;
+  }
+
+  entry.losses += 1;
+}
+
+export function buildEventLeaderboard(games: LeaderboardGame[]): EventLeaderboardEntry[] {
+  const entries = new Map<number, AggregateEntry>();
+
+  for (const game of games) {
+    const staked = isStakedGame(game);
+    const participants = [game.whitePlayer, game.blackPlayer].filter(
+      (player): player is LeaderboardPlayer => !!player,
+    );
+
+    for (const player of participants) {
+      if (!entries.has(player.id)) {
+        entries.set(player.id, createEntry(player));
+      }
+    }
+
+    const isDraw = game.status === "DRAW" || game.winnerId == null;
+
+    for (const player of participants) {
+      const entry = entries.get(player.id);
+      if (!entry) continue;
+
+      applyResult(entry, {
+        didWin: !isDraw && player.id === game.winnerId,
+        isDraw,
+        staked,
+      });
+    }
+  }
+
+  return Array.from(entries.values())
+    .sort((left, right) => {
+      if (right.points !== left.points) return right.points - left.points;
+      if (right.wins !== left.wins) return right.wins - left.wins;
+      if (right.stakedWins !== left.stakedWins) return right.stakedWins - left.stakedWins;
+      if (right.games !== left.games) return right.games - left.games;
+      if (right.ratings.staked !== left.ratings.staked) {
+        return right.ratings.staked - left.ratings.staked;
+      }
+      return left.walletAddress.localeCompare(right.walletAddress);
+    })
+    .map((entry) => ({
+      ...entry,
+      displayName: getDisplayName(entry.username, entry.walletAddress, "Player"),
+      memoji: getMemojiForAddress(entry.walletAddress),
+      winRate: entry.games > 0 ? Math.round((entry.wins / entry.games) * 100) : 0,
+    }));
+}
+
+export async function getEventLeaderboard() {
+  const games = await prisma.game.findMany({
+    where: {
+      status: {
+        in: ["COMPLETED", "DRAW"],
+      },
+      updatedAt: {
+        gte: EVENT_LEADERBOARD_WINDOW.startUtc,
+        lt: EVENT_LEADERBOARD_WINDOW.endUtc,
+      },
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+    include: {
+      whitePlayer: {
+        select: {
+          id: true,
+          walletAddress: true,
+          username: true,
+          bulletRating: true,
+          blitzRating: true,
+          rapidRating: true,
+          stakedRating: true,
+        },
+      },
+      blackPlayer: {
+        select: {
+          id: true,
+          walletAddress: true,
+          username: true,
+          bulletRating: true,
+          blitzRating: true,
+          rapidRating: true,
+          stakedRating: true,
+        },
+      },
+      winner: {
+        select: {
+          id: true,
+        },
+      },
+    },
+  });
+
+  const leaderboard = buildEventLeaderboard(
+    games.map((game) => ({
+      id: game.id,
+      status: game.status as "COMPLETED" | "DRAW",
+      onChainGameId: game.onChainGameId,
+      stakeToken: game.stakeToken,
+      wagerAmount: game.wagerAmount,
+      updatedAt: game.updatedAt,
+      whitePlayer: game.whitePlayer,
+      blackPlayer: game.blackPlayer,
+      winnerId: game.winner?.id ?? null,
+    })),
+  );
+
+  return {
+    window: EVENT_LEADERBOARD_WINDOW,
+    totalGames: games.length,
+    totalPlayers: leaderboard.length,
+    entries: leaderboard,
+  };
+}
