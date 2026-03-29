@@ -763,6 +763,7 @@ export async function updateUsername(walletAddress: string, username: string) {
     revalidatePath("/profile");
     revalidatePath("/watch");
     revalidatePath("/play");
+    revalidatePath("/leaderboard");
     return { success: true, profile: updated };
   } catch (error) {
     console.error("Error updating username:", error);
