@@ -12,6 +12,13 @@ export const EVENT_LEADERBOARD_WINDOW = {
   label: "March 29, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
+export const MARCH_31_2026_STAKED_LEADERBOARD_WINDOW = {
+  // 7:55 PM to 10:05 PM WAT on March 31, 2026. WAT is UTC+1.
+  startUtc: new Date("2026-03-31T18:55:00.000Z"),
+  endUtc: new Date("2026-03-31T21:05:00.000Z"),
+  label: "March 31, 2026 · 7:55 PM - 10:05 PM WAT",
+} as const;
+
 type LeaderboardPlayer = {
   id: number;
   walletAddress: string;
@@ -61,6 +68,7 @@ export type EventLeaderboardEntry = AggregateEntry & {
 };
 
 export type EventLossSpotlightEntry = EventLeaderboardEntry;
+export type TournamentLoserEntry = EventLeaderboardEntry;
 
 function isStakedGame(game: Pick<LeaderboardGame, "onChainGameId" | "stakeToken" | "wagerAmount">) {
   return !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
@@ -195,6 +203,74 @@ export function pickEventLossSpotlight(entries: EventLeaderboardEntry[]): EventL
   })[0];
 }
 
+export function pickTournamentLoser(entries: EventLeaderboardEntry[]): TournamentLoserEntry | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return [...entries].sort((left, right) => {
+    if (right.losses !== left.losses) return right.losses - left.losses;
+    if (left.wins !== right.wins) return left.wins - right.wins;
+    if (left.points !== right.points) return left.points - right.points;
+    if (right.games !== left.games) return right.games - left.games;
+    return left.walletAddress.localeCompare(right.walletAddress);
+  })[0];
+}
+
+function mapGameToLeaderboardGame(game: {
+  id: string;
+  status: "COMPLETED" | "DRAW";
+  onChainGameId: string | null;
+  stakeToken: string | null;
+  wagerAmount: number | null;
+  updatedAt: Date;
+  whitePlayer:
+    | {
+        id: number;
+        walletAddress: string | null;
+        username: string | null;
+        bulletRating: number;
+        blitzRating: number;
+        rapidRating: number;
+        stakedRating: number;
+      }
+    | null;
+  blackPlayer:
+    | {
+        id: number;
+        walletAddress: string | null;
+        username: string | null;
+        bulletRating: number;
+        blitzRating: number;
+        rapidRating: number;
+        stakedRating: number;
+      }
+    | null;
+  winner?: { id: number } | null;
+}): LeaderboardGame {
+  return {
+    id: game.id,
+    status: game.status,
+    onChainGameId: game.onChainGameId,
+    stakeToken: game.stakeToken,
+    wagerAmount: game.wagerAmount,
+    updatedAt: game.updatedAt,
+    whitePlayer: game.whitePlayer
+      ? {
+          ...game.whitePlayer,
+          walletAddress: game.whitePlayer.walletAddress ?? "",
+        }
+      : null,
+    blackPlayer: game.blackPlayer
+      ? {
+          ...game.blackPlayer,
+          walletAddress: game.blackPlayer.walletAddress ?? "",
+        }
+      : null,
+    winnerId: game.winner?.id ?? null,
+  };
+}
+
 export async function getEventLeaderboard() {
   const games = await prisma.game.findMany({
     where: {
@@ -241,26 +317,9 @@ export async function getEventLeaderboard() {
   });
 
   const leaderboard = buildEventLeaderboard(
-    games.map((game) => ({
-      id: game.id,
+    games.map((game) => mapGameToLeaderboardGame({
+      ...game,
       status: game.status as "COMPLETED" | "DRAW",
-      onChainGameId: game.onChainGameId,
-      stakeToken: game.stakeToken,
-      wagerAmount: game.wagerAmount,
-      updatedAt: game.updatedAt,
-      whitePlayer: game.whitePlayer
-        ? {
-            ...game.whitePlayer,
-            walletAddress: game.whitePlayer.walletAddress ?? "",
-          }
-        : null,
-      blackPlayer: game.blackPlayer
-        ? {
-            ...game.blackPlayer,
-            walletAddress: game.blackPlayer.walletAddress ?? "",
-          }
-        : null,
-      winnerId: game.winner?.id ?? null,
     })),
   );
 
@@ -270,5 +329,73 @@ export async function getEventLeaderboard() {
     totalPlayers: leaderboard.length,
     entries: leaderboard,
     lossSpotlight: pickEventLossSpotlight(leaderboard),
+  };
+}
+
+export async function getMarch31StakedLeaderboard() {
+  const games = await prisma.game.findMany({
+    where: {
+      status: {
+        in: ["COMPLETED", "DRAW"],
+      },
+      updatedAt: {
+        gte: MARCH_31_2026_STAKED_LEADERBOARD_WINDOW.startUtc,
+        lt: MARCH_31_2026_STAKED_LEADERBOARD_WINDOW.endUtc,
+      },
+      OR: [
+        { onChainGameId: { not: null } },
+        { stakeToken: { not: null } },
+        { wagerAmount: { not: null } },
+      ],
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+    include: {
+      whitePlayer: {
+        select: {
+          id: true,
+          walletAddress: true,
+          username: true,
+          bulletRating: true,
+          blitzRating: true,
+          rapidRating: true,
+          stakedRating: true,
+        },
+      },
+      blackPlayer: {
+        select: {
+          id: true,
+          walletAddress: true,
+          username: true,
+          bulletRating: true,
+          blitzRating: true,
+          rapidRating: true,
+          stakedRating: true,
+        },
+      },
+      winner: {
+        select: {
+          id: true,
+        },
+      },
+    },
+  });
+
+  const leaderboard = buildEventLeaderboard(
+    games.map((game) =>
+      mapGameToLeaderboardGame({
+        ...game,
+        status: game.status as "COMPLETED" | "DRAW",
+      }),
+    ),
+  );
+
+  return {
+    window: MARCH_31_2026_STAKED_LEADERBOARD_WINDOW,
+    totalGames: games.length,
+    totalPlayers: leaderboard.length,
+    entries: leaderboard,
+    loser: pickTournamentLoser(leaderboard),
   };
 }
