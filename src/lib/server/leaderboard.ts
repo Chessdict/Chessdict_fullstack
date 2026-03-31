@@ -248,8 +248,18 @@ export async function getEventLeaderboard() {
       stakeToken: game.stakeToken,
       wagerAmount: game.wagerAmount,
       updatedAt: game.updatedAt,
-      whitePlayer: game.whitePlayer,
-      blackPlayer: game.blackPlayer,
+      whitePlayer: game.whitePlayer
+        ? {
+            ...game.whitePlayer,
+            walletAddress: game.whitePlayer.walletAddress ?? "",
+          }
+        : null,
+      blackPlayer: game.blackPlayer
+        ? {
+            ...game.blackPlayer,
+            walletAddress: game.blackPlayer.walletAddress ?? "",
+          }
+        : null,
       winnerId: game.winner?.id ?? null,
     })),
   );

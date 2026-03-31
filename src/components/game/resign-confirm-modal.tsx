@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { GlassBg } from "../glass-bg";
 
 interface ResignConfirmModalProps {
@@ -9,12 +11,19 @@ interface ResignConfirmModalProps {
 }
 
 export function ResignConfirmModal({ isOpen, onConfirm, onCancel }: ResignConfirmModalProps) {
-    if (!isOpen) return null;
+    const [isMounted, setIsMounted] = useState(false);
 
-    return (
+    useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+    }, []);
+
+    if (!isOpen || !isMounted) return null;
+
+    return createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
             <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
-                <GlassBg className="p-5 sm:p-8 text-center" height="auto">
+                <GlassBg className="p-5 sm:p-8 text-center" height={280}>
                     <div className="flex flex-col items-center gap-4 sm:gap-6">
                         <div className="relative">
                             <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full bg-linear-to-br from-red-500/20 to-orange-500/20 flex items-center justify-center border border-white/10 shadow-xl shadow-red-500/10">
@@ -53,6 +62,7 @@ export function ResignConfirmModal({ isOpen, onConfirm, onCancel }: ResignConfir
                     </div>
                 </GlassBg>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }

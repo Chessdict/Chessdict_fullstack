@@ -30,6 +30,9 @@ import {
   setGameTimer,
   getGameTimer,
   deleteGameTimer,
+  setGameDisconnectGrace,
+  getGameDisconnectGrace,
+  deleteGameDisconnectGrace,
 } from "./lib/redis.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -250,6 +253,7 @@ app.prepare().then(async () => {
   const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
   const STAKE_CONFIRM_TIMEOUT_MS = 45000;
   const REMATCH_REQUEST_TTL_MS = 120000;
+  const REGULAR_GAME_DISCONNECT_GRACE_MS = 30000;
   const SPECTATOR_JOIN_WINDOW_MS = 10000;
   const SPECTATOR_JOIN_LIMIT = 12;
   const SPECTATOR_ROOM_PREFIX = "spectators:";
@@ -257,7 +261,7 @@ app.prepare().then(async () => {
 
   // ─── Reconnection / Disconnect Grace Period (regular games) ───
   const userActiveGames = new Map(); // walletAddress -> { roomId, color, opponentWallet, opponentRating, playerRating }
-  const gameDisconnectTimers = new Map(); // walletAddress -> { roomId, timer, deadline }
+  const gameDisconnectTimers = new Map(); // roomId -> { timer, deadline }
   const gameStateStore = new Map(); // roomId -> { fen, moves[] }
   const INITIAL_BOARD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -303,6 +307,332 @@ app.prepare().then(async () => {
       turn: timer.turn,
       lastMoveTimestamp: timer.lastMoveTimestamp,
     }).catch(() => { });
+  }
+
+  function buildTimerSnapshotFromState(timerState, fallbackInitialTime = DEFAULT_GAME_TIME) {
+    if (!timerState) {
+      return null;
+    }
+
+    const initialTime =
+      typeof timerState.initialTime === "number" && Number.isFinite(timerState.initialTime)
+        ? timerState.initialTime
+        : fallbackInitialTime;
+    const whiteTime =
+      typeof timerState.whiteTime === "number" && Number.isFinite(timerState.whiteTime)
+        ? timerState.whiteTime
+        : initialTime;
+    const blackTime =
+      typeof timerState.blackTime === "number" && Number.isFinite(timerState.blackTime)
+        ? timerState.blackTime
+        : initialTime;
+    const turn = timerState.turn === "b" ? "b" : "w";
+    const lastMoveTimestamp =
+      typeof timerState.lastMoveTimestamp === "number" && Number.isFinite(timerState.lastMoveTimestamp)
+        ? timerState.lastMoveTimestamp
+        : Date.now();
+    const elapsedSeconds = Math.max(0, (Date.now() - lastMoveTimestamp) / 1000);
+
+    return {
+      initialTime: Math.round(initialTime),
+      whiteTime: Math.round(
+        turn === "w" ? Math.max(0, whiteTime - elapsedSeconds) : whiteTime,
+      ),
+      blackTime: Math.round(
+        turn === "b" ? Math.max(0, blackTime - elapsedSeconds) : blackTime,
+      ),
+      turn,
+    };
+  }
+
+  async function getLiveTimerSnapshot(roomId, fallbackInitialTime = DEFAULT_GAME_TIME) {
+    const timer = gameTimers.get(roomId) ?? await getGameTimer(roomId);
+    return buildTimerSnapshotFromState(timer, fallbackInitialTime);
+  }
+
+  function restoreRuntimeTimer(roomId, timerState) {
+    const snapshot = buildTimerSnapshotFromState(timerState, DEFAULT_GAME_TIME);
+    if (!snapshot) {
+      return null;
+    }
+
+    const restoredTimer = {
+      initialTime: snapshot.initialTime,
+      whiteTime: snapshot.whiteTime,
+      blackTime: snapshot.blackTime,
+      turn: snapshot.turn,
+      lastMoveTimestamp: Date.now(),
+      timeoutHandle: null,
+    };
+
+    const nextPlayerTime =
+      restoredTimer.turn === "w" ? restoredTimer.whiteTime : restoredTimer.blackTime;
+    restoredTimer.timeoutHandle = setTimeout(
+      () => handleServerTimeout(roomId),
+      Math.max(0, nextPlayerTime) * 1000,
+    );
+    gameTimers.set(roomId, restoredTimer);
+    persistGameTimer(roomId, restoredTimer);
+    return restoredTimer;
+  }
+
+  async function restorePersistedGameTimers() {
+    const activeGamesInDb = await prisma.game.findMany({
+      where: { status: "IN_PROGRESS" },
+      select: { id: true },
+    });
+
+    for (const activeGame of activeGamesInDb) {
+      if (gameTimers.has(activeGame.id)) continue;
+
+      const persistedTimer = await getGameTimer(activeGame.id);
+      if (!persistedTimer) continue;
+
+      const restoredTimer = restoreRuntimeTimer(activeGame.id, persistedTimer);
+      if (restoredTimer) {
+        console.log(
+          `[TIMER] Restored live timer for room ${activeGame.id}: ${restoredTimer.whiteTime}s/${restoredTimer.blackTime}s`,
+        );
+      }
+    }
+  }
+
+  function buildDisconnectGraceSnapshot(graceState) {
+    if (!graceState) return null;
+
+    const deadline =
+      typeof graceState.deadline === "number" && Number.isFinite(graceState.deadline)
+        ? graceState.deadline
+        : null;
+    if (!deadline) return null;
+
+    const disconnectedWallets = Array.from(
+      new Set(
+        (Array.isArray(graceState.disconnectedWallets) ? graceState.disconnectedWallets : [])
+          .map((wallet) => String(wallet ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    if (disconnectedWallets.length === 0) return null;
+
+    return {
+      deadline,
+      disconnectedWallets,
+      turn: graceState.turn === "b" ? "b" : "w",
+    };
+  }
+
+  async function getDisconnectGraceState(roomId) {
+    const persisted = await getGameDisconnectGrace(roomId);
+    const snapshot = buildDisconnectGraceSnapshot(persisted);
+    if (!snapshot) return null;
+
+    if (snapshot.deadline <= Date.now()) {
+      await deleteGameDisconnectGrace(roomId);
+      return null;
+    }
+
+    return snapshot;
+  }
+
+  function emitDisconnectGraceState(roomId, graceState) {
+    io.to(roomId).emit("disconnectGraceState", {
+      roomId,
+      deadline: graceState.deadline,
+      disconnectedWallets: graceState.disconnectedWallets,
+      turn: graceState.turn,
+      bothDisconnected: graceState.disconnectedWallets.length > 1,
+    });
+  }
+
+  function clearDisconnectGraceTimer(roomId) {
+    const existing = gameDisconnectTimers.get(roomId);
+    if (existing?.timer) {
+      clearTimeout(existing.timer);
+    }
+    gameDisconnectTimers.delete(roomId);
+  }
+
+  async function clearDisconnectGraceState(roomId, options = {}) {
+    clearDisconnectGraceTimer(roomId);
+    await deleteGameDisconnectGrace(roomId);
+
+    if (options.emitCleared !== false) {
+      io.to(roomId).emit("disconnectGraceCleared", { roomId });
+    }
+  }
+
+  async function getCurrentTurnForRoom(roomId) {
+    const timer = gameTimers.get(roomId) ?? await getGameTimer(roomId);
+    if (timer?.turn === "b" || timer?.turn === "w") {
+      return timer.turn;
+    }
+
+    const liveState = await getStoredGameState(roomId);
+    if (typeof liveState?.fen === "string" && liveState.fen) {
+      return getFenTurn(liveState.fen);
+    }
+
+    const game = await prisma.game.findUnique({
+      where: { id: roomId },
+      select: { fen: true },
+    });
+    return getFenTurn(game?.fen || INITIAL_BOARD_FEN);
+  }
+
+  async function resolveDisconnectGraceExpiry(roomId) {
+    clearDisconnectGraceTimer(roomId);
+
+    const graceState = await getDisconnectGraceState(roomId);
+    if (!graceState) {
+      await clearDisconnectGraceState(roomId);
+      return;
+    }
+
+    const freshGame = await prisma.game.findUnique({
+      where: { id: roomId },
+      include: {
+        whitePlayer: { select: { id: true, walletAddress: true } },
+        blackPlayer: { select: { id: true, walletAddress: true } },
+      },
+    });
+
+    if (!freshGame || freshGame.status !== "IN_PROGRESS" || !freshGame.whitePlayer || !freshGame.blackPlayer) {
+      await clearDisconnectGraceState(roomId);
+      return;
+    }
+
+    const stillDisconnected = graceState.disconnectedWallets.filter(
+      (walletAddress) => !getSocketIdForWallet(walletAddress),
+    );
+
+    if (stillDisconnected.length === 0) {
+      await clearDisconnectGraceState(roomId);
+      return;
+    }
+
+    let forfeitingWallet = stillDisconnected[0];
+    if (stillDisconnected.length > 1) {
+      forfeitingWallet =
+        graceState.turn === "w"
+          ? freshGame.whitePlayer.walletAddress
+          : freshGame.blackPlayer.walletAddress;
+    }
+
+    let winnerId = null;
+    let winnerColor = null;
+    if (normalizeWalletAddress(freshGame.whitePlayer.walletAddress) === normalizeWalletAddress(forfeitingWallet)) {
+      winnerId = freshGame.blackPlayer.id;
+      winnerColor = "black";
+    } else if (normalizeWalletAddress(freshGame.blackPlayer.walletAddress) === normalizeWalletAddress(forfeitingWallet)) {
+      winnerId = freshGame.whitePlayer.id;
+      winnerColor = "white";
+    }
+
+    if (winnerId) {
+      await prisma.game.update({ where: { id: roomId }, data: { status: "COMPLETED", winnerId } });
+      const updatedGame = { ...freshGame, winnerId };
+      const newRatings = await updateRatings(updatedGame);
+
+      recentlyCompletedGames.add(roomId);
+      markGameCompleted(roomId, 10).catch(() => { });
+      setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
+
+      const gameOverPayload = { winner: winnerColor, reason: "disconnection", ratings: newRatings };
+      const opponentWallet =
+        normalizeWalletAddress(freshGame.whitePlayer.walletAddress) === normalizeWalletAddress(forfeitingWallet)
+          ? freshGame.blackPlayer.walletAddress
+          : freshGame.whitePlayer.walletAddress;
+      const opponentSid = getSocketIdForWallet(opponentWallet);
+      if (opponentSid) {
+        io.to(opponentSid).emit("gameOver", gameOverPayload);
+      }
+
+      emitToSpectators(roomId, "spectatorGameOver", {
+        roomId,
+        winner: winnerColor,
+        reason: "disconnection",
+        endedAt: new Date().toISOString(),
+      });
+
+      console.log(
+        `[DISCONNECT] Game ${roomId} forfeited by ${forfeitingWallet}. Winner: ${winnerColor}`,
+      );
+    }
+
+    cleanupRegularGame(roomId);
+  }
+
+  function scheduleDisconnectGraceTimer(roomId, graceState) {
+    clearDisconnectGraceTimer(roomId);
+
+    const delayMs = Math.max(0, graceState.deadline - Date.now());
+    const timer = setTimeout(() => {
+      resolveDisconnectGraceExpiry(roomId).catch((error) => {
+        console.error("[DISCONNECT] Failed to resolve disconnect grace expiry:", error);
+      });
+    }, delayMs);
+
+    gameDisconnectTimers.set(roomId, {
+      timer,
+      deadline: graceState.deadline,
+    });
+  }
+
+  async function persistDisconnectGraceState(roomId, graceState) {
+    const snapshot = buildDisconnectGraceSnapshot(graceState);
+    if (!snapshot) {
+      await clearDisconnectGraceState(roomId);
+      return null;
+    }
+
+    await setGameDisconnectGrace(roomId, snapshot);
+    scheduleDisconnectGraceTimer(roomId, snapshot);
+    emitDisconnectGraceState(roomId, snapshot);
+    return snapshot;
+  }
+
+  async function removePlayerFromDisconnectGrace(roomId, walletAddress) {
+    const current = await getDisconnectGraceState(roomId);
+    if (!current) {
+      return { graceState: null, wasCleared: false, changed: false };
+    }
+
+    const remainingWallets = current.disconnectedWallets.filter(
+      (candidate) => normalizeWalletAddress(candidate) !== normalizeWalletAddress(walletAddress),
+    );
+
+    if (remainingWallets.length === current.disconnectedWallets.length) {
+      return { graceState: current, wasCleared: false, changed: false };
+    }
+
+    if (remainingWallets.length === 0) {
+      await clearDisconnectGraceState(roomId);
+      return { graceState: null, wasCleared: true, changed: true };
+    }
+
+    const nextState = await persistDisconnectGraceState(roomId, {
+      ...current,
+      disconnectedWallets: remainingWallets,
+    });
+    return { graceState: nextState, wasCleared: false, changed: true };
+  }
+
+  async function restorePersistedDisconnectGraceTimers() {
+    const activeGamesInDb = await prisma.game.findMany({
+      where: { status: "IN_PROGRESS" },
+      select: { id: true },
+    });
+
+    for (const activeGame of activeGamesInDb) {
+      const disconnectGrace = await getDisconnectGraceState(activeGame.id);
+      if (!disconnectGrace) continue;
+
+      scheduleDisconnectGraceTimer(activeGame.id, disconnectGrace);
+      console.log(
+        `[DISCONNECT] Restored grace window for room ${activeGame.id} with ${disconnectGrace.disconnectedWallets.length} disconnected player(s)`,
+      );
+    }
   }
 
   function isUuidRoomId(roomId) {
@@ -513,8 +843,8 @@ app.prepare().then(async () => {
     }
 
     // Player room membership is checked on the server so spectators cannot mutate via raw room IDs.
-    const activeGame = await hydrateActiveGame(socketUserId);
-    if (!activeGame || activeGame.roomId !== roomId) {
+    const activeGame = await resolveActiveGameForRoom(socketUserId, roomId);
+    if (!activeGame) {
       socket.emit("roomAccessDenied", { event: eventName });
       return null;
     }
@@ -615,18 +945,14 @@ app.prepare().then(async () => {
     gameStateStore.delete(roomId);
     deleteGameState(roomId).catch(() => { });
     deleteGameTimer(roomId).catch(() => { });
+    deleteGameDisconnectGrace(roomId).catch(() => { });
     for (const [wallet, data] of userActiveGames.entries()) {
       if (data.roomId === roomId) {
         userActiveGames.delete(wallet);
         deleteUserActiveGame(wallet).catch(() => { });
       }
     }
-    for (const [wallet, data] of gameDisconnectTimers.entries()) {
-      if (data.roomId === roomId) {
-        clearTimeout(data.timer);
-        gameDisconnectTimers.delete(wallet);
-      }
-    }
+    clearDisconnectGraceTimer(roomId);
     cleanupGameTimer(roomId);
   }
 
@@ -716,6 +1042,124 @@ app.prepare().then(async () => {
     }
 
     return null;
+  }
+
+  async function resolveActiveGameForRoom(walletAddress, roomId) {
+    const cached = await hydrateActiveGame(walletAddress);
+    if (cached?.roomId === roomId) {
+      return cached;
+    }
+
+    if (!isUuidRoomId(roomId)) {
+      return null;
+    }
+
+    const game = await prisma.game.findUnique({
+      where: { id: roomId },
+      include: {
+        whitePlayer: {
+          select: {
+            walletAddress: true,
+            username: true,
+            rating: true,
+            bulletRating: true,
+            blitzRating: true,
+            rapidRating: true,
+            stakedRating: true,
+          },
+        },
+        blackPlayer: {
+          select: {
+            walletAddress: true,
+            username: true,
+            rating: true,
+            bulletRating: true,
+            blitzRating: true,
+            rapidRating: true,
+            stakedRating: true,
+          },
+        },
+      },
+    });
+
+    if (!game || (game.status !== "WAITING" && game.status !== "IN_PROGRESS")) {
+      if (cached?.roomId === roomId) {
+        cleanupRegularGame(roomId);
+      }
+      return null;
+    }
+
+    const normalizedWallet = normalizeWalletAddress(walletAddress);
+    const whiteWallet = game.whitePlayer?.walletAddress;
+    const blackWallet = game.blackPlayer?.walletAddress;
+    const isWhitePlayer =
+      typeof whiteWallet === "string" &&
+      normalizeWalletAddress(whiteWallet) === normalizedWallet;
+    const isBlackPlayer =
+      typeof blackWallet === "string" &&
+      normalizeWalletAddress(blackWallet) === normalizedWallet;
+
+    if (!isWhitePlayer && !isBlackPlayer) {
+      return null;
+    }
+
+    const isStakedGame = Boolean(
+      game.onChainGameId || game.stakeToken || game.wagerAmount != null,
+    );
+    const timeControl = isStakedGame
+      ? normalizeStakedTimeControl(game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL)
+      : normalizeQueueTimeControl(game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
+    const whitePlayerName = getWalletDisplayName(
+      game.whitePlayer.username,
+      game.whitePlayer.walletAddress,
+    );
+    const blackPlayerName = getWalletDisplayName(
+      game.blackPlayer.username,
+      game.blackPlayer.walletAddress,
+    );
+    const whitePlayerRating = getPlayerRatingForTimeControl(
+      game.whitePlayer,
+      timeControl,
+      isStakedGame,
+    );
+    const blackPlayerRating = getPlayerRatingForTimeControl(
+      game.blackPlayer,
+      timeControl,
+      isStakedGame,
+    );
+
+    userActiveGames.set(game.whitePlayer.walletAddress, {
+      roomId,
+      color: "white",
+      opponentWallet: game.blackPlayer.walletAddress,
+      playerRating: whitePlayerRating,
+      opponentRating: blackPlayerRating,
+      playerName: whitePlayerName,
+      opponentName: blackPlayerName,
+      timeControl,
+    });
+    userActiveGames.set(game.blackPlayer.walletAddress, {
+      roomId,
+      color: "black",
+      opponentWallet: game.whitePlayer.walletAddress,
+      playerRating: blackPlayerRating,
+      opponentRating: whitePlayerRating,
+      playerName: blackPlayerName,
+      opponentName: whitePlayerName,
+      timeControl,
+    });
+    setUserActiveGame(
+      game.whitePlayer.walletAddress,
+      userActiveGames.get(game.whitePlayer.walletAddress),
+    ).catch(() => { });
+    setUserActiveGame(
+      game.blackPlayer.walletAddress,
+      userActiveGames.get(game.blackPlayer.walletAddress),
+    ).catch(() => { });
+
+    return isWhitePlayer
+      ? userActiveGames.get(game.whitePlayer.walletAddress)
+      : userActiveGames.get(game.blackPlayer.walletAddress);
   }
 
   async function getStoredGameState(roomId) {
@@ -1895,35 +2339,31 @@ app.prepare().then(async () => {
       userSocketMap.set(userId, socket.id);
       setUserSocket(userId, socket.id).catch(() => { }); // mirror to Redis
 
-      // ─── Reconnection: cancel disconnect grace period if exists ───
-      const disconnectData = gameDisconnectTimers.get(userId);
-      if (disconnectData) {
-        clearTimeout(disconnectData.timer);
-        gameDisconnectTimers.delete(userId);
-        console.log(`[RECONNECT] Cancelled disconnect grace timer for ${userId} in game ${disconnectData.roomId}`);
-      }
-
       // ─── Reconnection: rejoin active game (refresh or reconnect) ───
       (async () => {
-        const activeGame = await hydrateActiveGame(userId);
+        const cachedActiveGame = await hydrateActiveGame(userId);
+        const activeGame = cachedActiveGame
+          ? await resolveActiveGameForRoom(userId, cachedActiveGame.roomId)
+          : null;
         if (!activeGame) return;
 
+        const disconnectGraceUpdate = await removePlayerFromDisconnectGrace(activeGame.roomId, userId);
+
         const gs = await getStoredGameState(activeGame.roomId);
-        const timer = gameTimers.get(activeGame.roomId);
         const stakeState = await getGameStakeState(activeGame.roomId);
         const initialTime = getActiveGameInitialTimeSeconds(activeGame);
-        let whiteTime = initialTime;
-        let blackTime = initialTime;
-
-        if (timer) {
-          const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
-          whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
-          blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
-        }
+        const timerSnapshot =
+          await getLiveTimerSnapshot(activeGame.roomId, initialTime) ?? {
+            initialTime,
+            whiteTime: initialTime,
+            blackTime: initialTime,
+          };
 
         socket.join(activeGame.roomId);
         activeGames.set(socket.id, activeGame.roomId);
-        socket.to(activeGame.roomId).emit("opponentReconnected");
+        if (disconnectGraceUpdate.wasCleared) {
+          socket.to(activeGame.roomId).emit("opponentReconnected");
+        }
 
         socket.emit("gameRejoined", {
           status: stakeState.status,
@@ -1935,12 +2375,13 @@ app.prepare().then(async () => {
           fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
           moves: gs?.moves || [],
           chatMessages: gs?.chatMessages || [],
-          whiteTime: Math.round(whiteTime),
-          blackTime: Math.round(blackTime),
+          whiteTime: timerSnapshot.whiteTime,
+          blackTime: timerSnapshot.blackTime,
           timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
           onChainGameId: stakeState.onChainGameId,
           stakeToken: stakeState.stakeToken,
           stakeAmount: stakeState.stakeAmount,
+          disconnectGrace: disconnectGraceUpdate.graceState,
         });
         console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
       })().catch((e) => {
@@ -2161,45 +2602,56 @@ app.prepare().then(async () => {
       socket.to(activeGame.roomId).emit("opponentJoined", { socketId: socket.id });
 
       // Send current timer state so late-joining players sync immediately
-      const timer = gameTimers.get(activeGame.roomId);
-      if (timer) {
-        const now = Date.now();
-        const elapsed = (now - timer.lastMoveTimestamp) / 1000;
-        const whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
-        const blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
+      const timerSnapshot = await getLiveTimerSnapshot(
+        activeGame.roomId,
+        getActiveGameInitialTimeSeconds(activeGame),
+      );
+      if (timerSnapshot) {
         socket.emit('timeSync', {
-          whiteTime: Math.round(whiteTime),
-          blackTime: Math.round(blackTime),
-          initialTime: timer.initialTime,
-          turn: timer.turn === 'b' ? 'b' : 'w',
+          whiteTime: timerSnapshot.whiteTime,
+          blackTime: timerSnapshot.blackTime,
+          initialTime: timerSnapshot.initialTime,
+          turn: timerSnapshot.turn,
+        });
+      }
+
+      const disconnectGrace = await getDisconnectGraceState(activeGame.roomId);
+      if (disconnectGrace) {
+        socket.emit("disconnectGraceState", {
+          roomId: activeGame.roomId,
+          deadline: disconnectGrace.deadline,
+          disconnectedWallets: disconnectGrace.disconnectedWallets,
+          turn: disconnectGrace.turn,
+          bothDisconnected: disconnectGrace.disconnectedWallets.length > 1,
         });
       }
     });
 
     // Explicit rejoin for URL-based game reconnection (/play/game/[id])
     socket.on("rejoinGame", async ({ roomId: requestedRoomId }) => {
-      const activeGame = await hydrateActiveGame(userId);
-      if (!activeGame || activeGame.roomId !== requestedRoomId) {
+      const activeGame = await resolveActiveGameForRoom(userId, requestedRoomId);
+      if (!activeGame) {
         socket.emit("rejoinError", { error: "No active game found for this room" });
         return;
       }
 
-      const gs = await getStoredGameState(activeGame.roomId);
-      const timer = gameTimers.get(activeGame.roomId);
-
       const initialTime = getActiveGameInitialTimeSeconds(activeGame);
-      let whiteTime = initialTime, blackTime = initialTime;
-      if (timer) {
-        const elapsed = (Date.now() - timer.lastMoveTimestamp) / 1000;
-        whiteTime = timer.turn === 'w' ? Math.max(0, timer.whiteTime - elapsed) : timer.whiteTime;
-        blackTime = timer.turn === 'b' ? Math.max(0, timer.blackTime - elapsed) : timer.blackTime;
-      }
+      const disconnectGraceUpdate = await removePlayerFromDisconnectGrace(activeGame.roomId, userId);
+      const gs = await getStoredGameState(activeGame.roomId);
+      const timerSnapshot =
+        await getLiveTimerSnapshot(activeGame.roomId, initialTime) ?? {
+          initialTime,
+          whiteTime: initialTime,
+          blackTime: initialTime,
+        };
 
       const stakeState = await getGameStakeState(activeGame.roomId);
 
       socket.join(activeGame.roomId);
       activeGames.set(socket.id, activeGame.roomId);
-      socket.to(activeGame.roomId).emit("opponentReconnected");
+      if (disconnectGraceUpdate.wasCleared) {
+        socket.to(activeGame.roomId).emit("opponentReconnected");
+      }
 
       socket.emit("gameRejoined", {
         status: stakeState.status,
@@ -2213,12 +2665,13 @@ app.prepare().then(async () => {
         fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
         moves: gs?.moves || [],
         chatMessages: gs?.chatMessages || [],
-        whiteTime: Math.round(whiteTime),
-        blackTime: Math.round(blackTime),
+        whiteTime: timerSnapshot.whiteTime,
+        blackTime: timerSnapshot.blackTime,
         timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
         onChainGameId: stakeState.onChainGameId,
         stakeToken: stakeState.stakeToken,
         stakeAmount: stakeState.stakeAmount,
+        disconnectGrace: disconnectGraceUpdate.graceState,
       });
       console.log(`[REJOIN] Player ${userId} explicitly rejoined game ${activeGame.roomId}`);
     });
@@ -3552,74 +4005,30 @@ app.prepare().then(async () => {
                     return;
                   }
 
-                  const deadline = Date.now() + 30000;
+                  const existingGrace = await getDisconnectGraceState(activeRoomId);
+                  const nextDeadline = Math.max(
+                    existingGrace?.deadline ?? 0,
+                    Date.now() + REGULAR_GAME_DISCONNECT_GRACE_MS,
+                  );
+                  const nextTurn = existingGrace?.turn ?? await getCurrentTurnForRoom(activeRoomId);
+                  const nextDisconnectedWallets = Array.from(
+                    new Set([
+                      ...(existingGrace?.disconnectedWallets ?? []),
+                      disconnectedUserId,
+                    ]),
+                  );
 
-                  console.log(`[DISCONNECT] Starting 30s grace period for ${disconnectedUserId} in game ${activeRoomId}`);
+                  console.log(
+                    `[DISCONNECT] Starting grace period for ${disconnectedUserId} in game ${activeRoomId} (${nextDisconnectedWallets.length} disconnected)`,
+                  );
 
-                  // Notify opponent
-                  socket.to(activeRoomId).emit("opponentDisconnecting", { deadline });
-                  const roomSockets = io.sockets.adapter.rooms.get(activeRoomId);
-                  if (roomSockets) {
-                    roomSockets.forEach(sid => {
-                      if (sid !== socket.id) io.to(sid).emit("opponentDisconnecting", { deadline });
-                    });
-                  }
+                  await persistDisconnectGraceState(activeRoomId, {
+                    deadline: nextDeadline,
+                    disconnectedWallets: nextDisconnectedWallets,
+                    turn: nextTurn,
+                  });
 
-                  const timer = setTimeout(async () => {
-                    gameDisconnectTimers.delete(disconnectedUserId);
-
-                    // Safety: check if player reconnected before forfeiting
-                    const currentSid = userSocketMap.get(disconnectedUserId);
-                    if (currentSid) {
-                      console.log(`[DISCONNECT] Player ${disconnectedUserId} has reconnected, skipping forfeit`);
-                      return;
-                    }
-
-                    // Re-check game status in case it ended during grace period
-                    const freshGame = await prisma.game.findUnique({ where: { id: activeRoomId } });
-                    if (!freshGame || freshGame.status !== "IN_PROGRESS") return;
-
-                    console.log(`[DISCONNECT] 30s expired for ${disconnectedUserId} — forfeiting game ${activeRoomId}`);
-
-                    const whiteUser = await prisma.user.findUnique({ where: { id: freshGame.whitePlayerId } });
-                    const blackUser = await prisma.user.findUnique({ where: { id: freshGame.blackPlayerId } });
-
-                    let winnerId = null;
-                    let winnerColor = null;
-                    if (whiteUser?.walletAddress === disconnectedUserId) { winnerId = freshGame.blackPlayerId; winnerColor = "black"; }
-                    else if (blackUser?.walletAddress === disconnectedUserId) { winnerId = freshGame.whitePlayerId; winnerColor = "white"; }
-
-                    if (winnerId) {
-                      await prisma.game.update({ where: { id: activeRoomId }, data: { status: "COMPLETED", winnerId } });
-                      const updatedGame = { ...freshGame, winnerId };
-                      const newRatings = await updateRatings(updatedGame);
-
-                      recentlyCompletedGames.add(activeRoomId);
-                      markGameCompleted(activeRoomId, 10).catch(() => { });
-                      setTimeout(() => recentlyCompletedGames.delete(activeRoomId), 10000);
-
-                      const gameOverPayload = { winner: winnerColor, reason: "disconnection", ratings: newRatings };
-
-                      // Only emit to the winner's socket — do NOT broadcast to the room,
-                      // because the disconnected player's socket may still be in the room
-                      // and would incorrectly receive the gameOver event.
-                      const opponentWallet = whiteUser?.walletAddress === disconnectedUserId ? blackUser?.walletAddress : whiteUser?.walletAddress;
-                      const opponentSid = opponentWallet ? userSocketMap.get(opponentWallet) : null;
-                      if (opponentSid) io.to(opponentSid).emit("gameOver", gameOverPayload);
-                      emitToSpectators(activeRoomId, "spectatorGameOver", {
-                        roomId: activeRoomId,
-                        winner: winnerColor,
-                        reason: "disconnection",
-                        endedAt: new Date().toISOString(),
-                      });
-
-                      console.log(`[DISCONNECT] Game ${activeRoomId} forfeited by ${disconnectedUserId}. Winner: ${winnerColor}`);
-                    }
-
-                    cleanupRegularGame(activeRoomId);
-                  }, 30000);
-
-                  gameDisconnectTimers.set(disconnectedUserId, { roomId: activeRoomId, timer, deadline });
+                  socket.to(activeRoomId).emit("opponentDisconnecting", { deadline: nextDeadline });
                 }
               } catch (e) {
                 console.error("Error handling disconnect grace period:", e);
@@ -3711,6 +4120,18 @@ app.prepare().then(async () => {
       }
     } catch (e) {
       console.error("[STARTUP CLEANUP] Error cleaning up stuck tournaments:", e);
+    }
+
+    try {
+      await restorePersistedGameTimers();
+    } catch (error) {
+      console.error("[STARTUP] Failed to restore live game timers:", error);
+    }
+
+    try {
+      await restorePersistedDisconnectGraceTimers();
+    } catch (error) {
+      console.error("[STARTUP] Failed to restore disconnect grace windows:", error);
     }
   });
 });

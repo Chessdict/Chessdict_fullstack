@@ -43,12 +43,16 @@ export default function GamePage({
     setStakeToken,
     setStakeAmountRaw,
     clearMatchState,
+    setOpponentConnected,
   } = useGameStore();
   const setWhiteTime = useGameStore((s) => s.setWhiteTime);
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
   const setInitialTime = useGameStore((s) => s.setInitialTime);
+  const setClockConfig = useGameStore((s) => s.setClockConfig);
+  const setOpponentDisconnectDeadline = useGameStore((s) => s.setOpponentDisconnectDeadline);
+  const setSelfDisconnectDeadline = useGameStore((s) => s.setSelfDisconnectDeadline);
 
   const enterMatchedGame = useCallback((data: {
     roomId: string;
@@ -147,6 +151,12 @@ export default function GamePage({
       onChainGameId?: string | null;
       stakeToken?: string | null;
       stakeAmount?: string | null;
+      disconnectGrace?: {
+        deadline: number;
+        disconnectedWallets: string[];
+        turn: "w" | "b";
+        bothDisconnected?: boolean;
+      } | null;
     }) => {
       if (roomId !== data.roomId || status !== "in-progress") {
         clearMatchState();
@@ -155,7 +165,7 @@ export default function GamePage({
         data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
       );
       const initialSeconds = getTimeControlSeconds(timeControlMinutes);
-      setInitialTime(initialSeconds);
+      setClockConfig(initialSeconds);
       setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
       setStakeToken(data.stakeToken ?? null);
       setStakeAmountRaw(data.stakeAmount ?? null);
@@ -169,6 +179,19 @@ export default function GamePage({
       if (data.chatMessages?.length) {
         setRejoinChatMessages(data.chatMessages);
       }
+      const normalizedAddress = address?.toLowerCase() ?? null;
+      const disconnectedWallets = (data.disconnectGrace?.disconnectedWallets ?? []).map((wallet) =>
+        wallet.toLowerCase(),
+      );
+      const selfDisconnected = normalizedAddress
+        ? disconnectedWallets.includes(normalizedAddress)
+        : false;
+      const opponentDisconnected = normalizedAddress
+        ? disconnectedWallets.some((wallet) => wallet !== normalizedAddress)
+        : disconnectedWallets.length > 0;
+      setSelfDisconnectDeadline(selfDisconnected ? data.disconnectGrace?.deadline ?? null : null);
+      setOpponentDisconnectDeadline(opponentDisconnected ? data.disconnectGrace?.deadline ?? null : null);
+      setOpponentConnected(!opponentDisconnected);
       if (!gameMode) setGameMode("online");
       setStatus("in-progress");
     };
@@ -179,7 +202,7 @@ export default function GamePage({
       socket.off("matchFound", handleMatchFound);
       socket.off("gameRejoined", handleGameRejoined);
     };
-  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, enterMatchedGame, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setInitialTime]);
+  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, enterMatchedGame, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setClockConfig, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
 
   // Effect 2: Emit rejoinGame on initial page load AND on every socket reconnection
   // This ensures we always get fresh game state + chat even after tab close/reopen

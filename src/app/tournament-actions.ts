@@ -77,7 +77,7 @@ export async function getTournaments(
       isSponsored: t.isSponsored,
       sponsoredAmount: t.sponsoredAmount,
       sponsorAddress: t.sponsorAddress,
-      createdBy: t.creator.walletAddress,
+      createdBy: t.creator.walletAddress ?? "",
       playerCount: t._count.participants,
       winner: t.participants.find((p: any) => p.placement === 1)?.user?.walletAddress ?? null,
     }));
@@ -155,12 +155,12 @@ export async function getTournamentById(
       isSponsored: t.isSponsored,
       sponsoredAmount: t.sponsoredAmount,
       sponsorAddress: t.sponsorAddress,
-      createdBy: t.creator.walletAddress,
+      createdBy: t.creator.walletAddress ?? "",
       playerCount: t._count.participants,
       winner: t.participants.find((p) => p.placement === 1)?.user?.walletAddress ?? null,
       participants: t.participants.map((p) => ({
         id: p.id,
-        walletAddress: p.user.walletAddress,
+        walletAddress: p.user.walletAddress ?? "",
         seed: p.seed,
         eliminated: p.eliminated,
         placement: p.placement,

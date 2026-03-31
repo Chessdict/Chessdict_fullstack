@@ -39,6 +39,16 @@ type ChallengeDetails = {
 const POLL_INTERVAL_MS = 5000;
 const INITIAL_LOAD_RETRY_MS = 1000;
 const EXIT_REDIRECT_DELAY_MS = 1200;
+const IMMEDIATE_REDIRECT_DELAY_MS = 0;
+
+function isTakenChallengeMessage(message?: string | null) {
+  const normalized = String(message ?? "").trim().toLowerCase();
+  return (
+    normalized.includes("challenge is no longer available") ||
+    normalized.includes("challenge already accepted") ||
+    normalized.includes("already been claimed")
+  );
+}
 
 export default function OpenChallengePage({
   params,
@@ -71,7 +81,7 @@ export default function OpenChallengePage({
   const { data: stakeTokenSymbol } = useTokenSymbol(stakeTokenAddress);
   const { data: stakeTokenDecimals } = useTokenDecimals(stakeTokenAddress);
 
-  const redirectToPlay = useCallback((message?: string) => {
+  const redirectToPlay = useCallback((message?: string, options?: { immediate?: boolean }) => {
     if (hasNavigatedRef.current || hasRedirectedRef.current) return;
     hasRedirectedRef.current = true;
 
@@ -85,7 +95,7 @@ export default function OpenChallengePage({
 
     redirectTimeoutRef.current = window.setTimeout(() => {
       router.replace("/play");
-    }, EXIT_REDIRECT_DELAY_MS);
+    }, options?.immediate ? IMMEDIATE_REDIRECT_DELAY_MS : EXIT_REDIRECT_DELAY_MS);
   }, [router]);
 
   const clearSocketRecoveryTimeout = useCallback(() => {
@@ -248,6 +258,10 @@ export default function OpenChallengePage({
     const handleError = (payload: { challengeId?: string; error: string }) => {
       if (payload.challengeId && payload.challengeId !== challengeId) return;
       setIsAccepting(false);
+      if (isTakenChallengeMessage(payload.error)) {
+        redirectToPlay("Challenge taken. Play online.", { immediate: true });
+        return;
+      }
       toast.error(payload.error);
       loadChallenge({ silent: true });
     };
@@ -266,7 +280,7 @@ export default function OpenChallengePage({
       socket.off("openChallengeError", handleError);
       socket.off("gameReady", handleGameReady);
     };
-  }, [challenge?.roomId, challengeId, loadChallenge, navigateToGame, socket]);
+  }, [challenge?.roomId, challengeId, loadChallenge, navigateToGame, redirectToPlay, socket]);
 
   useEffect(() => {
     if (isSocketConnected) {
@@ -311,6 +325,14 @@ export default function OpenChallengePage({
       challenge.acceptedByAddress?.toLowerCase() === currentWallet
     );
   }, [challenge, currentWallet]);
+
+  useEffect(() => {
+    if (!challenge || challenge.status !== "ACCEPTED" || !challenge.acceptedByAddress) return;
+    if (isChallengePlayer) return;
+
+    redirectToPlay("Challenge taken. Play online.", { immediate: true });
+  }, [challenge, isChallengePlayer, redirectToPlay]);
+
   const shouldShowStakedSetup =
     !!challenge &&
     challenge.staked &&

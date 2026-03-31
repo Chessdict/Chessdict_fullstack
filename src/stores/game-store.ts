@@ -64,6 +64,7 @@ type GameState = {
   whiteTime: number; // remaining time for white in seconds
   blackTime: number; // remaining time for black in seconds
   setInitialTime: (time: number) => void;
+  setClockConfig: (time: number) => void;
   setWhiteTime: (time: number) => void;
   setBlackTime: (time: number) => void;
   decrementWhiteTime: () => void;
@@ -103,7 +104,9 @@ type GameState = {
   clearRejoinChatMessages: () => void;
   // Opponent disconnect countdown
   opponentDisconnectDeadline: number | null;
+  selfDisconnectDeadline: number | null;
   setOpponentDisconnectDeadline: (deadline: number | null) => void;
+  setSelfDisconnectDeadline: (deadline: number | null) => void;
   gameResultModalDismissed: boolean;
   setGameResultModalDismissed: (dismissed: boolean) => void;
   clearMatchState: () => void;
@@ -136,6 +139,7 @@ const initialState = {
   rejoinMoves: [] as MoveRecord[],
   rejoinChatMessages: [] as { sender: string; text: string; timestamp: number }[],
   opponentDisconnectDeadline: null,
+  selfDisconnectDeadline: null,
   gameResultModalDismissed: false,
 };
 
@@ -161,6 +165,7 @@ export const useGameStore = create<GameState>((set) => ({
   // Timer functions
   setInitialTime: (time) =>
     set({ initialTime: time, whiteTime: time, blackTime: time }),
+  setClockConfig: (time) => set({ initialTime: time }),
   setWhiteTime: (time) => set({ whiteTime: time }),
   setBlackTime: (time) => set({ blackTime: time }),
   decrementWhiteTime: () =>
@@ -179,6 +184,7 @@ export const useGameStore = create<GameState>((set) => ({
   setRejoinChatMessages: (messages) => set({ rejoinChatMessages: messages }),
   clearRejoinChatMessages: () => set({ rejoinChatMessages: [] }),
   setOpponentDisconnectDeadline: (deadline) => set({ opponentDisconnectDeadline: deadline }),
+  setSelfDisconnectDeadline: (deadline) => set({ selfDisconnectDeadline: deadline }),
   setGameResultModalDismissed: (dismissed) => set({ gameResultModalDismissed: dismissed }),
   clearMatchState: () =>
     set((state) => ({
@@ -202,6 +208,7 @@ export const useGameStore = create<GameState>((set) => ({
       rejoinMoves: [],
       rejoinChatMessages: [],
       opponentDisconnectDeadline: null,
+      selfDisconnectDeadline: null,
       gameResultModalDismissed: false,
     })),
   reset: () =>
@@ -224,6 +231,7 @@ export const useGameStore = create<GameState>((set) => ({
       rejoinMoves: [],
       rejoinChatMessages: [],
       opponentDisconnectDeadline: null,
+      selfDisconnectDeadline: null,
       gameResultModalDismissed: false,
     }),
 }));

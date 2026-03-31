@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Chess, Move } from "chess.js";
-import { Chessboard } from "react-chessboard";
+import { Chessboard, defaultPieces } from "react-chessboard";
 import { useGameStore } from "@/stores/game-store";
 import { getBestMove } from "@/lib/chess-ai";
 import { useSocket } from "@/hooks/useSocket";
@@ -21,6 +21,7 @@ import {
 } from "@/lib/game-result-display";
 import { PromotionChooser } from "@/components/chess/promotion-chooser";
 import { PremoveGhostOverlay } from "@/components/chess/premove-ghost-overlay";
+import { customPieces } from "@/components/chess/custom-pieces";
 import {
   getPromotionSelection,
   type PromotionPiece,
@@ -30,16 +31,27 @@ import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { getRatingFieldForTimeControl } from "@/lib/player-ratings";
 import { SignalStrength } from "./signal-strength";
-import { customPieces } from "@/components/chess/custom-pieces";
 import { X } from "lucide-react";
 import Image from "next/image";
 import { cn, formatWalletAddress, getDisplayName } from "@/lib/utils";
 
 
-// Helper to format time as MM:SS
+const LOW_TIME_SOUND_THRESHOLD_SECONDS = 10;
+
+// Helper to format time as MM:SS, with tenths under 10 seconds.
 function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
+  const safeSeconds = Math.max(0, seconds);
+  const mins = Math.floor(safeSeconds / 60);
+  const secs = Math.floor(safeSeconds % 60);
+
+  if (safeSeconds > 0 && safeSeconds <= 10) {
+    const tenths = Math.min(
+      9,
+      Math.floor((safeSeconds - Math.floor(safeSeconds)) * 10 + 1e-6),
+    );
+    return `${mins}:${secs.toString().padStart(2, "0")}.${tenths}`;
+  }
+
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
@@ -161,6 +173,7 @@ export function GameBoard() {
     // Timer state
     initialTime,
     setInitialTime,
+    setClockConfig,
     whiteTime,
     blackTime,
     setWhiteTime,
@@ -183,7 +196,9 @@ export function GameBoard() {
     clearRejoinData,
     // Opponent disconnect
     opponentDisconnectDeadline,
+    selfDisconnectDeadline,
     setOpponentDisconnectDeadline,
+    setSelfDisconnectDeadline,
     // On-chain state
     onChainGameId,
     stakeToken,
@@ -200,6 +215,7 @@ export function GameBoard() {
   const [ratingChange, setRatingChange] = useState<number | null>(null);
   const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
+  const [selfDisconnectCountdown, setSelfDisconnectCountdown] = useState<number | null>(null);
   const [prizeClaimed, setPrizeClaimed] = useState(false);
   const [settlementFailed, setSettlementFailed] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
@@ -232,12 +248,29 @@ export function GameBoard() {
   const isMultiplayer = gameMode === "online" || gameMode === "friend";
   const effectiveColor = playerColor || (gameMode === "computer" ? "white" : undefined);
   const playerTurnCode = effectiveColor ? (effectiveColor === "black" ? "b" : "w") : null;
+  const applyDisconnectGraceState = useCallback((deadline: number | null, disconnectedWallets: string[] = []) => {
+    const normalizedAddress = address?.toLowerCase() ?? null;
+    const normalizedWallets = disconnectedWallets.map((wallet) => wallet.toLowerCase());
+    const selfDisconnected = normalizedAddress
+      ? normalizedWallets.includes(normalizedAddress)
+      : false;
+    const opponentDisconnected = normalizedAddress
+      ? normalizedWallets.some((wallet) => wallet !== normalizedAddress)
+      : normalizedWallets.length > 0;
+
+    setSelfDisconnectDeadline(selfDisconnected ? deadline : null);
+    setOpponentDisconnectDeadline(opponentDisconnected ? deadline : null);
+    if (isMultiplayer) {
+      setOpponentConnected(!opponentDisconnected);
+    }
+  }, [address, isMultiplayer, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
   const chessboardId = useMemo(() => `game-board-${roomId ?? gameMode ?? "local"}`, [gameMode, roomId]);
   const isStakedMatch = !!stakeToken || !!stakeAmountRaw || onChainGameId !== null;
   const canRequestRematch =
     status === "finished" &&
     isMultiplayer &&
     !isStakedMatch;
+  const boardPieces = isMobileViewport ? defaultPieces : customPieces;
 
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
@@ -477,6 +510,8 @@ export function GameBoard() {
       setCheckFlash({});
       setRatingChange(null);
       setDisconnectCountdown(null);
+      setSelfDisconnectDeadline(null);
+      setSelfDisconnectCountdown(null);
       setPrizeClaimed(false);
       setSettlementFailed(false);
       setGameResultModalDismissed(false);
@@ -503,6 +538,8 @@ export function GameBoard() {
       setCheckFlash({});
       setRatingChange(null);
       setDisconnectCountdown(null);
+      setSelfDisconnectDeadline(null);
+      setSelfDisconnectCountdown(null);
       setPrizeClaimed(false);
       setSettlementFailed(false);
       setGameResultModalDismissed(false);
@@ -551,8 +588,9 @@ export function GameBoard() {
       clearSelection();
       setQueuedPremove(null);
       setPromotionSelection(null);
+      setSelfDisconnectDeadline(null);
     }
-  }, [status, gameOver, clearSelection]);
+  }, [status, gameOver, clearSelection, setSelfDisconnectDeadline]);
 
   // Opponent disconnect countdown ticker
   useEffect(() => {
@@ -571,11 +609,26 @@ export function GameBoard() {
   }, [opponentDisconnectDeadline, setOpponentDisconnectDeadline]);
 
   useEffect(() => {
+    if (!selfDisconnectDeadline) {
+      setSelfDisconnectCountdown(null);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((selfDisconnectDeadline - Date.now()) / 1000));
+      setSelfDisconnectCountdown(remaining);
+      if (remaining <= 0) setSelfDisconnectDeadline(null);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [selfDisconnectDeadline, setSelfDisconnectDeadline]);
+
+  useEffect(() => {
     if (!isMultiplayer || status !== "in-progress" || gameOver) return;
 
     const interval = setInterval(() => {
       setClockNowMs(Date.now());
-    }, 250);
+    }, 100);
 
     return () => clearInterval(interval);
   }, [gameOver, isMultiplayer, status]);
@@ -585,10 +638,7 @@ export function GameBoard() {
     let displayedBlackTime = blackTime;
 
     if (isMultiplayer && status === "in-progress" && !gameOver) {
-      const elapsedSeconds = Math.max(
-        0,
-        Math.floor((clockNowMs - timerSyncedAtMs) / 1000),
-      );
+      const elapsedSeconds = Math.max(0, (clockNowMs - timerSyncedAtMs) / 1000);
 
       if (timerTurn === "w") {
         displayedWhiteTime = Math.max(0, whiteTime - elapsedSeconds);
@@ -598,8 +648,8 @@ export function GameBoard() {
     }
 
     return {
-      whiteTime: Math.round(displayedWhiteTime),
-      blackTime: Math.round(displayedBlackTime),
+      whiteTime: displayedWhiteTime,
+      blackTime: displayedBlackTime,
     };
   }, [blackTime, clockNowMs, gameOver, isMultiplayer, status, timerSyncedAtMs, timerTurn, whiteTime]);
 
@@ -661,21 +711,18 @@ export function GameBoard() {
   useEffect(() => {
     if (status !== "in-progress" || gameOver) return;
 
-    const { initialTime } = useGameStore.getState();
-    // 30s threshold for 1-min games, 60s for everything else
-    const threshold = initialTime <= 60 ? 30 : 60;
     const myColor = playerColor || 'white';
 
     // Only alert for the player's own time
     const myTime = myColor === 'white' ? displayedTimes.whiteTime : displayedTimes.blackTime;
     const key = myColor as 'white' | 'black';
 
-    if (myTime <= threshold && myTime > 0 && !lowTimeAlertedRef.current[key]) {
+    if (myTime <= LOW_TIME_SOUND_THRESHOLD_SECONDS && myTime > 0 && !lowTimeAlertedRef.current[key]) {
       lowTimeAlertedRef.current[key] = true;
       playLowTime();
     }
     // Reset alert if time goes back above threshold (e.g. reconnect)
-    if (myTime > threshold) {
+    if (myTime > LOW_TIME_SOUND_THRESHOLD_SECONDS) {
       lowTimeAlertedRef.current[key] = false;
     }
   }, [displayedTimes.blackTime, displayedTimes.whiteTime, status, gameOver, playerColor, playLowTime]);
@@ -744,16 +791,11 @@ export function GameBoard() {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
     if (!socket || !isMultiplayer || !roomId) return;
 
-    // Explicitly join the room to ensure we receive opponent moves
-    // This handles cases where socket reconnects or component remounts
     const joinRoom = () => {
       socket.emit("joinRoom", { roomId });
     };
 
-    // Join immediately
     joinRoom();
-
-    // Rejoin on reconnection
     socket.on("connect", joinRoom);
 
     return () => {
@@ -865,7 +907,7 @@ export function GameBoard() {
       const newBlack = Math.min(data.blackTime, syncedInitialTime);
 
       if (syncedInitialTime !== currentInitialTime) {
-        setInitialTime(syncedInitialTime);
+        setClockConfig(syncedInitialTime);
       }
       if (syncedInitialTime > currentInitialTime || newWhite <= curWhite) {
         setWhiteTime(newWhite);
@@ -888,6 +930,23 @@ export function GameBoard() {
       console.log("[CLIENT] Opponent reconnected");
       setOpponentConnected(true);
       setOpponentDisconnectDeadline(null);
+    };
+
+    const handleDisconnectGraceState = (data: {
+      roomId?: string;
+      deadline: number;
+      disconnectedWallets: string[];
+      turn?: "w" | "b";
+    }) => {
+      if (data.roomId && data.roomId !== roomId) return;
+      applyDisconnectGraceState(data.deadline, data.disconnectedWallets);
+    };
+
+    const handleDisconnectGraceCleared = (data?: { roomId?: string }) => {
+      if (data?.roomId && data.roomId !== roomId) return;
+      setSelfDisconnectDeadline(null);
+      setOpponentDisconnectDeadline(null);
+      setOpponentConnected(true);
     };
 
     // Ping interval
@@ -913,6 +972,8 @@ export function GameBoard() {
     socket.on('timeSync', handleTimeSync);
     socket.on('opponentDisconnecting', handleOpponentDisconnecting);
     socket.on('opponentReconnected', handleOpponentReconnected);
+    socket.on('disconnectGraceState', handleDisconnectGraceState);
+    socket.on('disconnectGraceCleared', handleDisconnectGraceCleared);
 
     return () => {
       clearInterval(pingInterval);
@@ -928,8 +989,10 @@ export function GameBoard() {
       socket.off('timeSync', handleTimeSync);
       socket.off('opponentDisconnecting', handleOpponentDisconnecting);
       socket.off('opponentReconnected', handleOpponentReconnected);
+      socket.off('disconnectGraceState', handleDisconnectGraceState);
+      socket.off('disconnectGraceCleared', handleDisconnectGraceCleared);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setGameResultModalDismissed, setInitialTime, game]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState]);
 
   useEffect(() => {
     if (!socket || !roomId || !canRequestRematch) return;
@@ -1339,6 +1402,16 @@ export function GameBoard() {
         : ratingField === "rapidRating"
           ? "Rapid"
           : "Blitz";
+  const playerNetworkStatus =
+    isMultiplayer && status === "in-progress"
+      ? selfDisconnectCountdown && selfDisconnectCountdown > 0
+        ? `Reconnecting... ${selfDisconnectCountdown}s left`
+        : !socket?.connected
+          ? "Reconnecting..."
+          : ping >= 600
+            ? "Network lag"
+            : null
+      : null;
 
   return (
     <div className="mx-auto flex w-full max-w-full flex-col gap-0.5 sm:max-w-[clamp(480px,calc(100vh-7rem),1300px)] sm:gap-4">
@@ -1407,8 +1480,12 @@ export function GameBoard() {
             <span className="text-xs font-bold text-yellow-400">{disconnectCountdown}</span>
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium text-yellow-300">Opponent disconnected</p>
-            <p className="text-xs text-yellow-400/60">They have {disconnectCountdown}s to reconnect or they forfeit</p>
+            <p className="text-sm font-medium text-yellow-300">
+              Opponent disconnected
+              <span className="ml-1 text-xs font-semibold text-yellow-400/80">
+                {disconnectCountdown}s left
+              </span>
+            </p>
           </div>
         </div>
       )}
@@ -1459,7 +1536,7 @@ export function GameBoard() {
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: { ...lastMoveSquares, ...checkSquare, ...premoveSquares, ...moveSquares, ...checkFlash },
-              pieces: customPieces,
+              pieces: boardPieces,
               onPieceDrag: () => {
                 dragInteractionRef.current = true;
                 dragStartedAtRef.current = Date.now();
@@ -1484,6 +1561,7 @@ export function GameBoard() {
               to={queuedPremove.to}
               orientation={orientation}
               pieceCode={queuedPremovePieceCode}
+              useDefaultPieces={isMobileViewport}
             />
           ) : null}
 
@@ -1622,14 +1700,21 @@ export function GameBoard() {
               <p className="truncate text-xs font-semibold text-white sm:text-sm">{playerDisplayName}</p>
               <PlayerRatingBadge rating={player?.rating} />
             </div>
-            <div className="flex items-center gap-2 text-[9px] text-white/30 sm:text-xs">
-              <p>
-                {status === 'in-progress' && isMyTurn
-                  ? 'Your move'
-                  : status === 'in-progress' && queuedPremove
-                    ? 'Premove set'
-                    : 'Online'}
-              </p>
+            <div className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-2 text-[9px] text-white/30 sm:text-xs">
+                <p>
+                  {status === 'in-progress' && isMyTurn
+                    ? 'Your move'
+                    : status === 'in-progress' && queuedPremove
+                      ? 'Premove set'
+                      : 'Online'}
+                </p>
+              </div>
+              {playerNetworkStatus ? (
+                <p className="text-[9px] font-medium text-amber-300 sm:text-[11px]">
+                  {playerNetworkStatus}
+                </p>
+              ) : null}
             </div>
             {playerMaterialDisplay ? (
               <div className="hidden sm:block">
