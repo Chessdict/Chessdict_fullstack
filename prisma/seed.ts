@@ -14,6 +14,10 @@ const userData: Prisma.UserCreateInput[] = [
 export async function main() {
   console.log("Start seeding...");
   for (const u of userData) {
+    if (!u.walletAddress) {
+      continue;
+    }
+
     const user = await prisma.user.upsert({
       where: { walletAddress: u.walletAddress },
       update: {},

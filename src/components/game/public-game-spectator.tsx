@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Chessboard } from "react-chessboard";
+import { Chessboard, defaultPieces } from "react-chessboard";
 import { useAccount } from "wagmi";
 import { useSocket } from "@/hooks/useSocket";
 import { getMemojiForAddress } from "@/lib/memoji";
@@ -13,8 +13,8 @@ import type {
   PublicGameSnapshot,
   PublicMoveRecord,
 } from "@/lib/server/public-game";
-import { customPieces } from "@/components/chess/custom-pieces";
 import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
+import { customPieces } from "@/components/chess/custom-pieces";
 
 type PublicGameSpectatorProps = {
   initialGame: PublicGameSnapshot;
@@ -146,8 +146,10 @@ export function PublicGameSpectator({
   const [now, setNow] = useState(() => Date.now());
   const [isUnavailable, setIsUnavailable] = useState(false);
   const [isWallDismissed, setIsWallDismissed] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const { address } = useAccount();
   const { socket, isConnected } = useSocket(address ?? undefined);
+  const boardPieces = isMobileViewport ? defaultPieces : customPieces;
 
   useEffect(() => {
     setGame(normalizeSnapshot(initialGame));
@@ -161,6 +163,16 @@ export function PublicGameSpectator({
     }, 1000);
 
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const updateViewport = () => {
+      setIsMobileViewport(window.innerWidth < 640);
+    };
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
   }, []);
 
   useEffect(() => {
@@ -373,7 +385,7 @@ export function PublicGameSpectator({
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: lastMoveStyles,
-              pieces: customPieces,
+              pieces: boardPieces,
             }}
           />
         </div>
@@ -461,7 +473,7 @@ export function PublicGameSpectator({
                 darkSquareStyle: { backgroundColor: "#B58863" },
                 lightSquareStyle: { backgroundColor: "#F0D9B5" },
                 squareStyles: lastMoveStyles,
-                pieces: customPieces,
+                pieces: boardPieces,
               }}
             />
           </div>

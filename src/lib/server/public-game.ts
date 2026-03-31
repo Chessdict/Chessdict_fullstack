@@ -107,16 +107,18 @@ function sanitizeMoveRecord(move: RedisMoveRecord): PublicMoveRecord | null {
 }
 
 function buildPublicPlayerInfo(
-  player: { walletAddress: string; username?: string | null },
+  player: { walletAddress: string | null; username?: string | null },
   rating: number,
 ): PublicPlayerInfo {
+  const walletAddress = player.walletAddress ?? "";
+
   return {
-    address: player.walletAddress,
-    shortAddress: formatWalletAddress(player.walletAddress),
+    address: walletAddress,
+    shortAddress: formatWalletAddress(walletAddress),
     username: player.username ?? null,
-    displayName: getDisplayName(player.username, player.walletAddress, "Player"),
+    displayName: getDisplayName(player.username, walletAddress, "Player"),
     rating,
-    memoji: getMemojiForAddress(player.walletAddress),
+    memoji: getMemojiForAddress(walletAddress),
   };
 }
 

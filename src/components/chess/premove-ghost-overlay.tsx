@@ -1,6 +1,7 @@
 "use client";
 
-import { customPieces } from "./custom-pieces";
+import { defaultPieces } from "react-chessboard";
+import { customPieces } from "@/components/chess/custom-pieces";
 
 const PREMOVE_SOURCE_FILL = "#9FD9A6";
 const PREMOVE_SOURCE_RING = "rgba(22, 101, 52, 0.28)";
@@ -30,6 +31,7 @@ interface PremoveGhostOverlayProps {
   to: string;
   orientation: "white" | "black";
   pieceCode: string | null;
+  useDefaultPieces?: boolean;
 }
 
 export function PremoveGhostOverlay({
@@ -37,10 +39,12 @@ export function PremoveGhostOverlay({
   to,
   orientation,
   pieceCode,
+  useDefaultPieces = false,
 }: PremoveGhostOverlayProps) {
   if (!pieceCode) return null;
 
-  const renderPiece = customPieces[pieceCode];
+  const pieceSet = useDefaultPieces ? defaultPieces : customPieces;
+  const renderPiece = pieceSet[pieceCode];
   if (!renderPiece) return null;
 
   const sourcePosition = getSquarePosition(from, orientation);

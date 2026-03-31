@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { notFound } from "next/navigation";
 import { Crown, Medal, Trophy } from "lucide-react";
 import {
   EVENT_LOSS_SPOTLIGHT_MAX_GAMES,
@@ -22,6 +23,9 @@ function RankIcon({ rank }: { rank: number }) {
 }
 
 export default async function LeaderboardPage() {
+  // Keep the implementation in place, but take the route off the live app for now.
+  notFound();
+
   const leaderboard = await getEventLeaderboard();
 
   return (
@@ -62,54 +66,59 @@ export default async function LeaderboardPage() {
           </div>
         </section>
 
-        {leaderboard.lossSpotlight ? (
-          <section className="rounded-3xl border border-rose-400/15 bg-rose-500/[0.06] p-6 sm:p-7">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-200/80">
-                  Most Tested Player
-                </p>
-                <h2 className="text-2xl font-semibold text-white">
-                  {EVENT_LOSS_SPOTLIGHT_MIN_GAMES}-{EVENT_LOSS_SPOTLIGHT_MAX_GAMES} Games Window
-                </h2>
-                <p className="max-w-2xl text-sm text-white/65">
-                  This highlights the player who kept showing up but had the toughest run, based on a smoothed loss-rate score.
-                </p>
-              </div>
+        {(() => {
+          const lossSpotlight = leaderboard.lossSpotlight;
+          if (!lossSpotlight) return null;
 
-              <div className="flex min-w-0 items-center gap-4 rounded-2xl border border-white/10 bg-black/25 px-4 py-4">
-                <div className="relative h-16 w-16 overflow-hidden rounded-full border border-white/10 bg-white/5">
-                  <Image
-                    src={leaderboard.lossSpotlight.memoji}
-                    alt={leaderboard.lossSpotlight.displayName}
-                    fill
-                    className="object-contain"
-                    sizes="64px"
-                  />
+          return (
+            <section className="rounded-3xl border border-rose-400/15 bg-rose-500/[0.06] p-6 sm:p-7">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-200/80">
+                    Most Tested Player
+                  </p>
+                  <h2 className="text-2xl font-semibold text-white">
+                    {EVENT_LOSS_SPOTLIGHT_MIN_GAMES}-{EVENT_LOSS_SPOTLIGHT_MAX_GAMES} Games Window
+                  </h2>
+                  <p className="max-w-2xl text-sm text-white/65">
+                    This highlights the player who kept showing up but had the toughest run, based on a smoothed loss-rate score.
+                  </p>
                 </div>
-                <div className="min-w-0">
-                  <p className="truncate text-lg font-semibold text-white">
-                    {leaderboard.lossSpotlight.displayName}
-                  </p>
-                  <p className="truncate text-xs text-white/45">
-                    {formatWalletAddress(leaderboard.lossSpotlight.walletAddress)}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-white/70">
-                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
-                      {leaderboard.lossSpotlight.losses} losses
-                    </span>
-                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
-                      {leaderboard.lossSpotlight.games} games
-                    </span>
-                    <span className="rounded-full border border-rose-300/15 bg-rose-400/10 px-2.5 py-1 text-rose-100">
-                      {(leaderboard.lossSpotlight.adjustedLossRate * 100).toFixed(1)}% adjusted loss rate
-                    </span>
+
+                <div className="flex min-w-0 items-center gap-4 rounded-2xl border border-white/10 bg-black/25 px-4 py-4">
+                  <div className="relative h-16 w-16 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                    <Image
+                      src={lossSpotlight!.memoji}
+                      alt={lossSpotlight!.displayName}
+                      fill
+                      className="object-contain"
+                      sizes="64px"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-lg font-semibold text-white">
+                      {lossSpotlight!.displayName}
+                    </p>
+                    <p className="truncate text-xs text-white/45">
+                      {formatWalletAddress(lossSpotlight!.walletAddress)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-white/70">
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                        {lossSpotlight!.losses} losses
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                        {lossSpotlight!.games} games
+                      </span>
+                      <span className="rounded-full border border-rose-300/15 bg-rose-400/10 px-2.5 py-1 text-rose-100">
+                        {(lossSpotlight!.adjustedLossRate * 100).toFixed(1)}% adjusted loss rate
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </section>
-        ) : null}
+            </section>
+          );
+        })()}
 
         {leaderboard.entries.length === 0 ? (
           <section className="rounded-3xl border border-dashed border-white/10 bg-white/[0.03] p-8 text-center text-white/60">

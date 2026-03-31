@@ -35,6 +35,8 @@ interface MatchFoundModalProps {
 type CreatorState = "idle" | "creating" | "waiting" | "failed" | "expired" | "opponent-left" | "cancelling" | "reclaimed";
 type JoinerState = "waiting-for-creator" | "creator-failed" | "expired" | "idle" | "joining" | "confirmed" | "failed";
 
+const FACE_OFF_AUTO_ENTER_DELAY_MS = 2200;
+
 function formatAmountDisplay(value: number | null) {
     if (value == null || !Number.isFinite(value)) return null;
     const rounded = value.toFixed(value % 1 === 0 ? 0 : 4);
@@ -125,6 +127,7 @@ export function MatchFoundModal({
     const [joinerState, setJoinerState] = useState<JoinerState>("waiting-for-creator");
     const [onChainGameId, setOnChainGameId] = useState<string | null>(null);
     const [introReady, setIntroReady] = useState(false);
+    const [isAutoEntering, setIsAutoEntering] = useState(false);
     const hasStartedCreation = useRef(false);
     const hasAutoEntered = useRef(false);
     const onAcceptRef = useRef(onAccept);
@@ -185,15 +188,18 @@ export function MatchFoundModal({
     }, [existingOnChainGameId, isCreator, isJoiner, staked]);
 
     useEffect(() => {
-        if (!autoEnter || hasAutoEntered.current) return;
-        hasAutoEntered.current = true;
+        if (!autoEnter || !introReady || hasAutoEntered.current) return;
 
+        setIsAutoEntering(true);
         const timer = window.setTimeout(() => {
+            hasAutoEntered.current = true;
             onAcceptRef.current();
-        }, 1200);
+        }, FACE_OFF_AUTO_ENTER_DELAY_MS);
 
-        return () => window.clearTimeout(timer);
-    }, [autoEnter]);
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [autoEnter, introReady]);
 
     const startStakeCreation = async () => {
         if (!stakeToken || !stakeAmount || !roomId || tokenDecimalsData == null) return;
@@ -379,20 +385,31 @@ export function MatchFoundModal({
                                         )}
                                     </div>
                                 ) : null}
+                            <div className="flex flex-col items-center gap-2">
                                 <p className="text-xs text-white/45">
                                     Starting the board...
                                 </p>
+                                <div className="h-1.5 w-40 overflow-hidden rounded-full bg-white/10">
+                                    <div
+                                        className="h-full rounded-full bg-linear-to-r from-green-500 to-blue-500"
+                                        style={{
+                                            width: isAutoEntering ? "100%" : "0%",
+                                            transition: `width ${FACE_OFF_AUTO_ENTER_DELAY_MS}ms linear`,
+                                        }}
+                                    />
+                                </div>
                             </div>
+                        </div>
 
-                            <button
-                                onClick={onAccept}
-                                className="w-full relative group overflow-hidden rounded-full py-3 sm:py-4 transition-transform active:scale-95"
-                            >
-                                <div className="absolute inset-0 bg-linear-to-r from-green-600 to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
-                                <span className="relative text-sm font-bold text-white">
-                                    Battle of Chessdicts ⚔️
-                                </span>
-                            </button>
+                        <button
+                            onClick={onAccept}
+                            className="w-full relative group overflow-hidden rounded-full py-3 sm:py-4 transition-transform active:scale-95"
+                        >
+                            <div className="absolute inset-0 bg-linear-to-r from-green-600 to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+                            <span className="relative text-sm font-bold text-white">
+                                {isAutoEntering ? "Entering Match..." : "Battle of Chessdicts ⚔️"}
+                            </span>
+                        </button>
                         </div>
                     </GlassBg>
                 </div>
@@ -789,9 +806,26 @@ export function MatchFoundModal({
                             <p className="text-[10px] font-medium uppercase tracking-widest text-blue-300/80">
                                 {timeControlDisplay}
                             </p>
-                            <p className="text-xs text-white/45">
-                                {autoEnter ? "Starting the board..." : "Ready to enter the match."}
-                            </p>
+                            {autoEnter ? (
+                                <div className="flex flex-col items-center gap-2">
+                                    <p className="text-xs text-white/45">
+                                        Starting the board...
+                                    </p>
+                                    <div className="h-1.5 w-40 overflow-hidden rounded-full bg-white/10">
+                                        <div
+                                            className="h-full rounded-full bg-linear-to-r from-green-500 to-blue-500"
+                                            style={{
+                                                width: isAutoEntering ? "100%" : "0%",
+                                                transition: `width ${FACE_OFF_AUTO_ENTER_DELAY_MS}ms linear`,
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-xs text-white/45">
+                                    Ready to enter the match.
+                                </p>
+                            )}
                         </div>
 
                         <button
@@ -800,7 +834,7 @@ export function MatchFoundModal({
                         >
                             <div className="absolute inset-0 bg-linear-to-r from-green-600 to-blue-600 opacity-90 group-hover:opacity-100 transition-opacity" />
                             <span className="relative text-sm font-bold text-white">
-                                Battle of Chessdicts ⚔️
+                                {autoEnter ? (isAutoEntering ? "Entering Match..." : "Starting Match...") : "Battle of Chessdicts ⚔️"}
                             </span>
                         </button>
                     </div>

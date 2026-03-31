@@ -88,6 +88,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
     stakeAmountRaw,
     onChainGameId,
     gameResultModalDismissed,
+    setGameResultModalDismissed,
     drawOfferSent,
     setDrawOfferSent,
     viewMoveIndex,
@@ -336,6 +337,9 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
 
     const handleRematchRequested = (data: { roomId: string; from: string }) => {
       if (data.roomId !== roomId) return;
+      setShowResignModal(false);
+      setIsMobileChatOpen(false);
+      setGameResultModalDismissed(true);
       setIncomingRematchRequester(data.from);
       setRematchRequestPending(false);
     };
@@ -373,7 +377,7 @@ export function GameInfoPanel({ isSocketConnected }: GameInfoPanelProps) {
       socket.off("rematchUnavailable", handleRematchUnavailable);
       socket.off("rematchExpired", handleRematchExpired);
     };
-  }, [roomId, socket]);
+  }, [roomId, setGameResultModalDismissed, socket]);
 
   // Send chat message
   const sendChatMessage = useCallback(() => {

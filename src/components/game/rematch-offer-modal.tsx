@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { GlassBg } from "../glass-bg";
 
 interface RematchOfferModalProps {
@@ -15,12 +17,19 @@ export function RematchOfferModal({
   onAccept,
   onDecline,
 }: RematchOfferModalProps) {
-  if (!isOpen) return null;
+  const [isMounted, setIsMounted] = useState(false);
 
-  return (
+  useEffect(() => {
+    setIsMounted(true);
+    return () => setIsMounted(false);
+  }, []);
+
+  if (!isOpen || !isMounted) return null;
+
+  return createPortal(
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-300">
       <div className="w-full max-w-sm animate-in zoom-in-95 duration-300">
-        <GlassBg className="p-5 text-center sm:p-8" height="auto">
+        <GlassBg className="p-5 text-center sm:p-8" height={280}>
           <div className="flex flex-col items-center gap-4 sm:gap-6">
             <div className="relative">
               <div className="flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-linear-to-br from-emerald-500/20 to-blue-500/20 shadow-xl shadow-emerald-500/10 sm:h-20 sm:w-20">
@@ -55,6 +64,7 @@ export function RematchOfferModal({
           </div>
         </GlassBg>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

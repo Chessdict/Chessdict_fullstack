@@ -46,8 +46,8 @@ async function serializeOpenChallenge(challenge: {
   acceptedAt: Date | null;
   cancelledAt: Date | null;
   createdAt: Date;
-  creator: { walletAddress: string };
-  acceptedBy: { walletAddress: string } | null;
+  creator: { walletAddress: string | null };
+  acceptedBy: { walletAddress: string | null } | null;
 }) {
   const game = challenge.roomId
     ? await prisma.game.findUnique({
@@ -73,7 +73,7 @@ async function serializeOpenChallenge(challenge: {
     acceptedAt: challenge.acceptedAt?.toISOString() ?? null,
     cancelledAt: challenge.cancelledAt?.toISOString() ?? null,
     createdAt: challenge.createdAt.toISOString(),
-    creatorAddress: challenge.creator.walletAddress,
+    creatorAddress: challenge.creator.walletAddress ?? "",
     acceptedByAddress: challenge.acceptedBy?.walletAddress ?? null,
   };
 }
@@ -433,7 +433,8 @@ export async function cancelOpenChallenge(
       return { success: false, error: "Challenge not found" };
     }
 
-    if (challenge.creator.walletAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+    const creatorWalletAddress = challenge.creator.walletAddress;
+    if (!creatorWalletAddress || creatorWalletAddress.toLowerCase() !== walletAddress.toLowerCase()) {
       return { success: false, error: "Only the creator can cancel this challenge" };
     }
 
@@ -518,7 +519,7 @@ export async function getUserProfile(walletAddress: string) {
     return {
       success: true,
       profile: {
-        walletAddress: user.walletAddress,
+        walletAddress: user.walletAddress ?? "",
         username: user.username,
         email: user.email,
         ratings: getAllRatings(user),

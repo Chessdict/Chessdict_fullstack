@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Chess } from "chess.js";
-import { Chessboard } from "react-chessboard";
+import { Chessboard, defaultPieces } from "react-chessboard";
+import { customPieces } from "@/components/chess/custom-pieces";
 import { getAutomaticDrawReason } from "@/lib/game-result-display";
 import { PromotionChooser } from "@/components/chess/promotion-chooser";
 import { PremoveGhostOverlay } from "@/components/chess/premove-ghost-overlay";
@@ -17,7 +18,6 @@ import {
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { type Socket } from "socket.io-client";
-import { customPieces } from "@/components/chess/custom-pieces";
 import { SignalStrength } from "@/components/game/signal-strength";
 
 function formatTime(seconds: number): string {
@@ -73,6 +73,7 @@ export function TournamentGameBoard({
   const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
   const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
@@ -118,6 +119,16 @@ export function TournamentGameBoard({
       window.removeEventListener("mouseup", handlePointerLifecycleEnd, true);
     };
   }, [clearDragInteraction]);
+
+  useEffect(() => {
+    const updateViewport = () => {
+      setIsMobileViewport(window.innerWidth < 640);
+    };
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
 
   const syncState = useCallback(() => {
     setFen(game.fen());
@@ -257,6 +268,7 @@ export function TournamentGameBoard({
 
     return `${sourcePiece.color}${promotedPiece.toUpperCase()}`;
   }, [fen, game, queuedPremove]);
+  const boardPieces = isMobileViewport ? defaultPieces : customPieces;
 
   // Timer countdown
   useEffect(() => {
@@ -717,7 +729,7 @@ export function TournamentGameBoard({
               darkSquareStyle: { backgroundColor: "#B58863" },
               lightSquareStyle: { backgroundColor: "#F0D9B5" },
               squareStyles: { ...premoveSquares, ...moveSquares },
-              pieces: customPieces,
+              pieces: boardPieces,
               onPieceDrag: () => {
                 dragInteractionRef.current = true;
                 dragStartedAtRef.current = Date.now();
@@ -741,6 +753,7 @@ export function TournamentGameBoard({
               to={queuedPremove.to}
               orientation={orientation}
               pieceCode={queuedPremovePieceCode}
+              useDefaultPieces={isMobileViewport}
             />
           ) : null}
           {promotionSelection ? (
