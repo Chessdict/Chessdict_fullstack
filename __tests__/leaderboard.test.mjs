@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildEventLeaderboard,
   pickEventLossSpotlight,
+  pickTournamentLoser,
 } from "../src/lib/server/leaderboard.ts";
 
 function player(id, walletAddress, username = null) {
@@ -142,5 +143,44 @@ describe("event leaderboard aggregation", () => {
     expect(spotlight.games).toBe(6);
     expect(spotlight.losses).toBe(6);
     expect(spotlight.adjustedLossRate).toBeCloseTo(0.75, 5);
+  });
+
+  it("picks the tournament loser by most losses and fewest wins", () => {
+    const alice = player(1, "0xalice", "alice");
+    const bob = player(2, "0xbob", "bob");
+    const carol = player(3, "0xcarol", "carol");
+
+    const entries = buildEventLeaderboard([
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `a-${index}`,
+        status: "COMPLETED",
+        onChainGameId: "100",
+        stakeToken: "0xtoken",
+        wagerAmount: 10,
+        updatedAt: new Date(),
+        whitePlayer: alice,
+        blackPlayer: bob,
+        winnerId: bob.id,
+      })),
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `c-${index}`,
+        status: "COMPLETED",
+        onChainGameId: "200",
+        stakeToken: "0xtoken",
+        wagerAmount: 10,
+        updatedAt: new Date(),
+        whitePlayer: carol,
+        blackPlayer: bob,
+        winnerId: index < 4 ? bob.id : carol.id,
+      })),
+    ]);
+
+    const loser = pickTournamentLoser(entries);
+
+    expect(loser).not.toBeNull();
+    expect(loser.username).toBe("alice");
+    expect(loser.losses).toBe(5);
+    expect(loser.wins).toBe(0);
+    expect(loser.points).toBe(0);
   });
 });
