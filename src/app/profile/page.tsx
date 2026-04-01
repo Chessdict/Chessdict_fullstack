@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useAccount } from "wagmi";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { getUserProfile, getGameHistory, updateEmail, updateUsername } from "@/app/actions";
-import { Copy, Check, Trophy, Target, Minus, TrendingUp, ChevronLeft, ChevronRight } from "lucide-react";
+import { Copy, Check, Trophy, Target, Minus, TrendingUp, ChevronLeft, ChevronRight, Share2 } from "lucide-react";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
 import { formatWalletAddress, getDisplayName } from "@/lib/utils";
@@ -26,6 +27,7 @@ type Profile = {
     wins: number;
     losses: number;
     draws: number;
+    totalStakedAmount: number;
     winRate: number;
 };
 
@@ -51,6 +53,7 @@ export default function ProfilePage() {
     const [games, setGames] = useState<GameRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [copied, setCopied] = useState(false);
+    const [shareCopied, setShareCopied] = useState(false);
     const [usernameDraft, setUsernameDraft] = useState("");
     const [emailDraft, setEmailDraft] = useState("");
     const [savingUsername, setSavingUsername] = useState(false);
@@ -58,6 +61,13 @@ export default function ProfilePage() {
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const [gamesLoading, setGamesLoading] = useState(false);
+
+    function formatStakeAmount(amount: number) {
+        const formatted = new Intl.NumberFormat("en-US", {
+            maximumFractionDigits: 2,
+        }).format(amount);
+        return `${formatted} USD`;
+    }
 
     useEffect(() => {
         if (!isConnected || !address) {
@@ -135,6 +145,58 @@ export default function ProfilePage() {
     const resultLabel = { win: "W", loss: "L", draw: "D" };
     const profileMemoji = getMemojiForAddress(profile.walletAddress);
     const displayName = getDisplayName(profile.username, profile.walletAddress, "Player");
+    const publicProfileIdentifier = profile.username || profile.walletAddress;
+    const publicProfilePath = `/player/${encodeURIComponent(publicProfileIdentifier)}`;
+    const publicProfileUrl =
+        typeof window === "undefined"
+            ? publicProfilePath
+            : `${window.location.origin}${publicProfilePath}`;
+
+    async function copyTextWithFallback(value: string) {
+        try {
+            await navigator.clipboard.writeText(value);
+            return true;
+        } catch {
+            const textarea = document.createElement("textarea");
+            textarea.value = value;
+            textarea.setAttribute("readonly", "");
+            textarea.style.position = "fixed";
+            textarea.style.opacity = "0";
+            document.body.appendChild(textarea);
+            textarea.select();
+            const copied = document.execCommand("copy");
+            document.body.removeChild(textarea);
+            return copied;
+        }
+    }
+
+    async function shareProfile() {
+        if (typeof window === "undefined") return;
+
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: `${displayName} on Chessdict`,
+                    text: `View ${displayName}'s Chessdict profile`,
+                    url: publicProfileUrl,
+                });
+                return;
+            } catch (error) {
+                if ((error as Error)?.name === "AbortError") {
+                    return;
+                }
+            }
+        }
+
+        const copied = await copyTextWithFallback(publicProfileUrl);
+        if (!copied) {
+            toast.error("Couldn't copy profile link");
+            return;
+        }
+        setShareCopied(true);
+        setTimeout(() => setShareCopied(false), 2000);
+        toast.success("Profile link copied");
+    }
 
     async function handleUsernameSave() {
         if (!address) return;
@@ -189,7 +251,7 @@ export default function ProfilePage() {
             <div className="container relative mx-auto flex flex-1 flex-col gap-6 px-3 pb-6 sm:px-6 sm:gap-8 max-w-2xl">
                 {/* Wallet Address */}
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-sm p-6">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                    <div className="flex flex-col gap-4 sm:flex-row-reverse sm:items-center">
                         <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
                             <Image
                                 src={profileMemoji}
@@ -203,7 +265,7 @@ export default function ProfilePage() {
                             <p className="text-xs uppercase tracking-widest text-white/40 mb-1">Profile</p>
                             <h1 className="truncate text-2xl font-semibold text-white">{displayName}</h1>
                             <p className="mt-1 text-xs uppercase tracking-widest text-white/30">Wallet Address</p>
-                            <div className="flex items-center gap-3">
+                            <div className="mt-2 flex items-center gap-3">
                                 <code className="text-lg sm:text-xl font-mono text-white/90 break-all">
                                     {profile.walletAddress}
                                 </code>
@@ -217,6 +279,44 @@ export default function ProfilePage() {
                             <p className="mt-3 text-xs text-white/30">
                                 Joined {new Date(profile.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
                             </p>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                                <Link
+                                    href={publicProfilePath}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/8 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/12"
+                                >
+                                    View public profile
+                                </Link>
+                                <Link
+                                    href="/claims"
+                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/8 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/12"
+                                >
+                                    Claims
+                                </Link>
+                                <button
+                                    type="button"
+                                    onClick={shareProfile}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/8 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/12"
+                                >
+                                    {shareCopied ? <Check className="h-4 w-4 text-green-400" /> : <Share2 className="h-4 w-4" />}
+                                    {shareCopied ? "Copied" : "Share profile"}
+                                </button>
+                            </div>
+                            <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                                <input
+                                    type="text"
+                                    readOnly
+                                    value={publicProfileUrl}
+                                    className="min-w-0 flex-1 bg-transparent text-sm text-white/75 outline-none"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={shareProfile}
+                                    className="shrink-0 rounded-lg border border-white/10 p-2 text-white/60 transition hover:bg-white/10 hover:text-white"
+                                    aria-label="Copy public profile link"
+                                >
+                                    {shareCopied ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
+                                </button>
+                            </div>
                             <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                                 <input
                                     type="text"
@@ -273,11 +373,12 @@ export default function ProfilePage() {
                 </div>
 
                 {/* Stats Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <StatCard icon={<Target className="h-4 w-4" />} label="Games" value={profile.totalGames} />
                     <StatCard icon={<Trophy className="h-4 w-4 text-green-400" />} label="Wins" value={profile.wins} />
                     <StatCard icon={<Minus className="h-4 w-4 text-red-400" />} label="Losses" value={profile.losses} />
                     <StatCard icon={<TrendingUp className="h-4 w-4 text-yellow-400" />} label="Win Rate" value={`${profile.winRate}%`} />
+                    <StatCard icon={<Trophy className="h-4 w-4 text-violet-300" />} label="Total Staked" value={formatStakeAmount(profile.totalStakedAmount)} />
                 </div>
 
                 {/* Recent Games */}
@@ -340,7 +441,7 @@ export default function ProfilePage() {
                                                 ) : null}
                                                 {typeof game.wagerAmount === "number" ? (
                                                     <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/55">
-                                                        Stake {game.wagerAmount}
+                                                        Stake {formatStakeAmount(game.wagerAmount)}
                                                     </span>
                                                 ) : null}
                                                 {game.stakeToken ? (

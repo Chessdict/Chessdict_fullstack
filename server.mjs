@@ -825,6 +825,7 @@ app.prepare().then(async () => {
       createdAt: game.createdAt.toISOString(),
       endedAt: game.status === "IN_PROGRESS" ? null : game.updatedAt.toISOString(),
       isStaked: isStakedGame,
+      stakeAmount: game.wagerAmount ?? null,
     };
   }
 

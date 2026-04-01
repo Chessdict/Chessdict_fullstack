@@ -495,7 +495,7 @@ export async function getUserProfile(walletAddress: string) {
 
     if (!user) return { success: false, error: "User not found" };
 
-    const [totalGames, wins, draws] = await Promise.all([
+    const [totalGames, wins, draws, stakedTotals] = await Promise.all([
       prisma.game.count({
         where: {
           status: { in: ["COMPLETED", "DRAW"] },
@@ -510,6 +510,16 @@ export async function getUserProfile(walletAddress: string) {
           status: { in: ["COMPLETED", "DRAW"] },
           winnerId: null,
           OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+        },
+      }),
+      prisma.game.aggregate({
+        where: {
+          status: { in: ["COMPLETED", "DRAW"] },
+          wagerAmount: { not: null },
+          OR: [{ whitePlayerId: user.id }, { blackPlayerId: user.id }],
+        },
+        _sum: {
+          wagerAmount: true,
         },
       }),
     ]);
@@ -528,6 +538,7 @@ export async function getUserProfile(walletAddress: string) {
         wins,
         losses,
         draws,
+        totalStakedAmount: stakedTotals._sum.wagerAmount ?? 0,
         winRate: totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0,
       },
     };

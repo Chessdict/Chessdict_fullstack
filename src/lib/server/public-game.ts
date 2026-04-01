@@ -72,6 +72,7 @@ export type PublicGameSnapshot = {
   createdAt: string;
   endedAt: string | null;
   isStaked: boolean;
+  stakeAmount: number | null;
 };
 
 function getFenTurn(fen: string) {
@@ -266,6 +267,7 @@ export async function getPublicGameSnapshot(
     createdAt: game.createdAt.toISOString(),
     endedAt: game.status === "IN_PROGRESS" ? null : game.updatedAt.toISOString(),
     isStaked,
+    stakeAmount: game.wagerAmount ?? null,
   };
 }
 

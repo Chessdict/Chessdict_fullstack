@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { getPublicLiveGames } from "@/lib/server/public-game";
+import { getPublicGameActivitySummary } from "@/lib/server/public-player";
 import { PublicGameSpectator } from "@/components/game/public-game-spectator";
 
 export const dynamic = "force-dynamic";
 
 export default async function WatchIndexPage() {
-  const games = await getPublicLiveGames();
+  const [games, activity] = await Promise.all([
+    getPublicLiveGames(),
+    getPublicGameActivitySummary(),
+  ]);
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -23,6 +27,21 @@ export default async function WatchIndexPage() {
             progress right now. Finished games clear from this wall
             automatically.
           </p>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+              <p className="text-xs uppercase tracking-[0.22em] text-white/35">Live Now</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{activity.liveNow}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+              <p className="text-xs uppercase tracking-[0.22em] text-white/35">Finished Today</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{activity.finishedToday}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+              <p className="text-xs uppercase tracking-[0.22em] text-white/35">Day Window</p>
+              <p className="mt-2 text-sm font-medium text-white">{activity.label} · WAT</p>
+            </div>
+          </div>
         </div>
 
         {games.length === 0 ? (
