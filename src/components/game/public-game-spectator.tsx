@@ -93,6 +93,16 @@ function resultLabel(snapshot: SpectatorState) {
   return snapshot.status === "IN_PROGRESS" ? "Live" : "Awaiting result";
 }
 
+function formatStakeAmount(amount: number | null) {
+  if (amount == null || !Number.isFinite(amount)) return null;
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
+}
+
+function formatStakeLabel(amount: number | null) {
+  const formatted = formatStakeAmount(amount);
+  return formatted ? `🤑💸 ${formatted}` : "🤑💸 Staked";
+}
+
 function PlayerHeader({
   label,
   player,
@@ -118,9 +128,12 @@ function PlayerHeader({
         </div>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate text-sm font-semibold text-white">
+            <Link
+              href={`/player/${player.address}`}
+              className="truncate text-sm font-semibold text-white transition hover:text-emerald-300"
+            >
               {player.displayName}
-            </p>
+            </Link>
             <PlayerRatingBadge rating={player.rating} />
           </div>
           <p className="truncate text-[11px] text-white/45">
@@ -293,6 +306,8 @@ export function PublicGameSpectator({
   }, [game.moves]);
 
   const isWallMode = mode === "wall";
+  const formattedStakeAmount = formatStakeAmount(game.stakeAmount);
+  const stakeLabel = formatStakeLabel(game.stakeAmount);
 
   useEffect(() => {
     if (!isWallMode) return;
@@ -358,9 +373,12 @@ export function PublicGameSpectator({
           <div className="min-w-0">
             <p className="truncate text-xs text-white/45">Black</p>
             <div className="mt-1 flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold text-white">
+              <Link
+                href={`/player/${game.black.address}`}
+                className="truncate text-sm font-semibold text-white transition hover:text-emerald-300"
+              >
                 {game.black.displayName}
-              </span>
+              </Link>
               <PlayerRatingBadge rating={game.black.rating} />
             </div>
             <p className="mt-1 truncate text-[11px] text-white/35">
@@ -394,9 +412,12 @@ export function PublicGameSpectator({
           <div className="min-w-0">
             <p className="truncate text-xs text-white/45">White</p>
             <div className="mt-1 flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold text-white">
+              <Link
+                href={`/player/${game.white.address}`}
+                className="truncate text-sm font-semibold text-white transition hover:text-emerald-300"
+              >
                 {game.white.displayName}
-              </span>
+              </Link>
               <PlayerRatingBadge rating={game.white.rating} />
             </div>
             <p className="mt-1 truncate text-[11px] text-white/35">
@@ -409,7 +430,10 @@ export function PublicGameSpectator({
         </div>
 
         <div className="flex items-center justify-between gap-3 text-xs text-white/55">
-          <span>{getTimeControlDisplay(game.timeControl)}</span>
+          <span>
+            {getTimeControlDisplay(game.timeControl)}
+            {game.isStaked ? ` · ${stakeLabel}` : ""}
+          </span>
           <span>{game.moves.length} ply</span>
         </div>
 
@@ -438,7 +462,9 @@ export function PublicGameSpectator({
           </h1>
           <p className="mt-1 text-sm text-white/55">
             {getTimeControlDisplay(game.timeControl)}
-            {game.isStaked ? " · staked game" : " · casual game"}
+            {game.isStaked
+              ? ` · staked game · ${stakeLabel}`
+              : " · casual game"}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-white/45">
@@ -500,6 +526,12 @@ export function PublicGameSpectator({
                 <dt className="text-white/45">Status</dt>
                 <dd className="text-white">{game.status.replace("_", " ")}</dd>
               </div>
+              {game.isStaked ? (
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-white/45">Stake</dt>
+                  <dd className="text-white">{stakeLabel}</dd>
+                </div>
+              ) : null}
               <div className="flex items-center justify-between gap-4">
                 <dt className="text-white/45">Created</dt>
                 <dd className="text-white">
