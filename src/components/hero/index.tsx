@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { GlassButton } from "../glass-button";
 import { ArrowUpRight } from "lucide-react";
 import { CHESSDICT_SOCIALS } from "@/lib/constants";
@@ -55,6 +56,12 @@ const STEPS = [
 ];
 
 export function Hero() {
+  const router = useRouter();
+
+  const handleGetStarted = () => {
+    router.push("/play");
+  };
+
   return (
     <div className="w-full relative z-10 flex flex-col items-center">
       {/* ─── Hero Section ─── */}
@@ -125,16 +132,18 @@ export function Hero() {
           animate="visible"
           className="mt-8"
         >
-          <Link href="/play">
-            <div className="hidden md:block">
-              <GlassButton className="text-sm sm:text-base">
-                Get started
-              </GlassButton>
-            </div>
-            <div className="md:hidden h-14 border-[0.8px] border-white group relative z-100 inline-flex items-center justify-center rounded-full px-14 text-sm tracking-wide text-white">
+          <div className="hidden md:block">
+            <GlassButton className="text-sm sm:text-base" onClick={handleGetStarted}>
               Get started
-            </div>
-          </Link>
+            </GlassButton>
+          </div>
+          <button
+            type="button"
+            onClick={handleGetStarted}
+            className="md:hidden h-14 border-[0.8px] border-white group relative z-100 inline-flex items-center justify-center rounded-full px-14 text-sm tracking-wide text-white"
+          >
+            Get started
+          </button>
         </motion.div>
 
         {/* Browser Mockup */}
@@ -146,7 +155,7 @@ export function Hero() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.9, delay: 0.55, ease: EASE }}
-            className="absolute z-50 right-0 left-0 -bottom-96 hidden md:block w-full h-[603px]"
+            className="pointer-events-none absolute z-50 right-0 left-0 -bottom-96 hidden md:block w-full h-[603px]"
           >
             <Image
               src="/images/hero-image.svg"
@@ -162,7 +171,7 @@ export function Hero() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.9, delay: 0.55, ease: EASE }}
-            className="absolute z-50 right-0 left-0 -bottom-128 md:hidden w-full h-[603px]"
+            className="pointer-events-none absolute z-50 right-0 left-0 -bottom-128 md:hidden w-full h-[603px]"
           >
             <Image
               src="/images/hero-image-mobile.svg"

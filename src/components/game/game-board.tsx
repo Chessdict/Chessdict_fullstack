@@ -193,6 +193,7 @@ export function GameBoard() {
     // Rejoin state
     rejoinFen,
     rejoinMoves,
+    setRejoinData,
     clearRejoinData,
     // Opponent disconnect
     opponentDisconnectDeadline,
@@ -288,6 +289,8 @@ export function GameBoard() {
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
   const dragInteractionRef = useRef(false);
   const dragStartedAtRef = useRef(0);
+  const lastSnapshotRequestAtRef = useRef(0);
+  const pendingSnapshotRequestRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [boardKey, setBoardKey] = useState(0);
 
   const resetBoardInteraction = useCallback(() => {
@@ -298,6 +301,26 @@ export function GameBoard() {
     dragInteractionRef.current = false;
     dragStartedAtRef.current = 0;
   }, []);
+
+  const clearPendingSnapshotRequest = useCallback(() => {
+    if (pendingSnapshotRequestRef.current) {
+      clearTimeout(pendingSnapshotRequestRef.current);
+      pendingSnapshotRequestRef.current = null;
+    }
+  }, []);
+
+  const requestGameSnapshot = useCallback((reason: string) => {
+    if (!socket || !roomId || !isMultiplayer) return;
+
+    const now = Date.now();
+    if (now - lastSnapshotRequestAtRef.current < 750) {
+      return;
+    }
+
+    lastSnapshotRequestAtRef.current = now;
+    console.warn(`[CLIENT] Requesting game snapshot for ${roomId}: ${reason}`);
+    socket.emit("requestGameSnapshot", { roomId, reason });
+  }, [isMultiplayer, roomId, socket]);
 
   const hasBrokenDragInteraction = useCallback(() => {
     if (!dragInteractionRef.current) return false;
@@ -328,6 +351,12 @@ export function GameBoard() {
       window.removeEventListener("mouseup", handlePointerLifecycleEnd, true);
     };
   }, [clearDragInteraction]);
+
+  useEffect(() => {
+    return () => {
+      clearPendingSnapshotRequest();
+    };
+  }, [clearPendingSnapshotRequest]);
 
   // Compute persistent check highlight from current position
   const checkSquare = useMemo<Record<string, React.CSSProperties>>(() => {
@@ -808,13 +837,48 @@ export function GameBoard() {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
     if (!socket || !isMultiplayer || !roomId) return;
 
-    const handleOpponentMove = (move: any) => {
-      safeMove(move, { preserveSelection: true, resetBoardInteraction: true, soundPerspective: "opponent" });
+    const handleOpponentMove = (payload: any) => {
+      const localMoveCount = useGameStore.getState().moves.length;
+      const incomingMove = payload?.move ?? payload;
+      const incomingVersion =
+        typeof payload?.version === "number" && Number.isFinite(payload.version)
+          ? payload.version
+          : null;
+
+      if (incomingVersion !== null) {
+        if (incomingVersion <= localMoveCount) {
+          return;
+        }
+
+        if (incomingVersion !== localMoveCount + 1) {
+          requestGameSnapshot(`opponent-move-gap:${localMoveCount}->${incomingVersion}`);
+          return;
+        }
+      }
+
+      clearPendingSnapshotRequest();
+      const result = safeMove(incomingMove, {
+        preserveSelection: true,
+        resetBoardInteraction: true,
+        soundPerspective: "opponent",
+      });
+
+      if (!result) {
+        requestGameSnapshot("opponent-move-apply-failed");
+        return;
+      }
+
+      if (
+        typeof payload?.turn === "string" &&
+        normalizeClockTurn(payload.turn) !== normalizeClockTurn(game.turn())
+      ) {
+        requestGameSnapshot("turn-mismatch-after-opponent-move");
+      }
     };
 
     socket.on('opponentMove', handleOpponentMove);
     return () => { socket.off('opponentMove', handleOpponentMove); };
-  }, [socket, gameMode, roomId, safeMove]);
+  }, [socket, gameMode, roomId, safeMove, requestGameSnapshot, clearPendingSnapshotRequest, game]);
 
   useEffect(() => {
     if (!queuedPremove || status !== "in-progress" || game.isGameOver() || !playerTurnCode) {
@@ -893,7 +957,32 @@ export function GameBoard() {
       setOpponentPing(data.ping);
     };
 
-    const handleTimeSync = (data: { whiteTime: number; blackTime: number; initialTime?: number; turn?: "w" | "b" }) => {
+    const handleTimeSync = (data: {
+      whiteTime: number;
+      blackTime: number;
+      initialTime?: number;
+      turn?: "w" | "b";
+      version?: number;
+    }) => {
+      const localMoveCount = useGameStore.getState().moves.length;
+      if (typeof data.version === "number" && Number.isFinite(data.version)) {
+        if (data.version < localMoveCount) {
+          return;
+        }
+
+        if (data.version > localMoveCount) {
+          clearPendingSnapshotRequest();
+          pendingSnapshotRequestRef.current = setTimeout(() => {
+            const latestMoveCount = useGameStore.getState().moves.length;
+            if (latestMoveCount < data.version!) {
+              requestGameSnapshot(`time-sync-gap:${latestMoveCount}->${data.version}`);
+            }
+          }, 450);
+        } else {
+          clearPendingSnapshotRequest();
+        }
+      }
+
       const {
         initialTime: currentInitialTime,
         whiteTime: curWhite,
@@ -918,6 +1007,44 @@ export function GameBoard() {
       setTimerTurn(normalizeClockTurn(data.turn ?? game.turn()));
       setTimerSyncedAtMs(Date.now());
       setClockNowMs(Date.now());
+    };
+
+    const handleGameSnapshot = (data: {
+      roomId: string;
+      fen: string;
+      moves: any[];
+      whiteTime: number;
+      blackTime: number;
+      initialTime?: number;
+      turn?: "w" | "b";
+      disconnectGrace?: {
+        deadline: number;
+        disconnectedWallets: string[];
+      } | null;
+    }) => {
+      if (data.roomId !== roomId) return;
+
+      clearPendingSnapshotRequest();
+      const currentInitialTime = useGameStore.getState().initialTime;
+      const syncedInitialTime =
+        typeof data.initialTime === "number" && data.initialTime > 0
+          ? data.initialTime
+          : Math.max(currentInitialTime, data.whiteTime, data.blackTime);
+
+      if (syncedInitialTime !== currentInitialTime) {
+        setClockConfig(syncedInitialTime);
+      }
+
+      setWhiteTime(Math.min(data.whiteTime, syncedInitialTime));
+      setBlackTime(Math.min(data.blackTime, syncedInitialTime));
+      setTimerTurn(normalizeClockTurn(data.turn ?? game.turn()));
+      setTimerSyncedAtMs(Date.now());
+      setClockNowMs(Date.now());
+      setRejoinData(data.fen, Array.isArray(data.moves) ? data.moves : []);
+      applyDisconnectGraceState(
+        data.disconnectGrace?.deadline ?? null,
+        data.disconnectGrace?.disconnectedWallets ?? [],
+      );
     };
 
     const handleOpponentDisconnecting = (data: { deadline: number }) => {
@@ -970,6 +1097,7 @@ export function GameBoard() {
     socket.on('drawDeclined', handleDrawDeclined);
     socket.on('drawCancelled', handleDrawCancelled);
     socket.on('timeSync', handleTimeSync);
+    socket.on('gameSnapshot', handleGameSnapshot);
     socket.on('opponentDisconnecting', handleOpponentDisconnecting);
     socket.on('opponentReconnected', handleOpponentReconnected);
     socket.on('disconnectGraceState', handleDisconnectGraceState);
@@ -987,12 +1115,13 @@ export function GameBoard() {
       socket.off('drawDeclined', handleDrawDeclined);
       socket.off('drawCancelled', handleDrawCancelled);
       socket.off('timeSync', handleTimeSync);
+      socket.off('gameSnapshot', handleGameSnapshot);
       socket.off('opponentDisconnecting', handleOpponentDisconnecting);
       socket.off('opponentReconnected', handleOpponentReconnected);
       socket.off('disconnectGraceState', handleDisconnectGraceState);
       socket.off('disconnectGraceCleared', handleDisconnectGraceCleared);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState, clearPendingSnapshotRequest, requestGameSnapshot, setRejoinData]);
 
   useEffect(() => {
     if (!socket || !roomId || !canRequestRematch) return;

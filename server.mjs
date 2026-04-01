@@ -984,6 +984,10 @@ app.prepare().then(async () => {
     };
   }
 
+  function getRegularGameVersion(gameState) {
+    return Array.isArray(gameState?.moves) ? gameState.moves.length : 0;
+  }
+
   function trackActiveRegularGame({
     roomId,
     whiteWallet,
@@ -1173,6 +1177,56 @@ app.prepare().then(async () => {
     }
 
     return null;
+  }
+
+  async function buildRegularGameSnapshot(activeGame, options = {}) {
+    const initialTime = getActiveGameInitialTimeSeconds(activeGame);
+    const disconnectGraceUpdate = options.removeDisconnectWallet
+      ? await removePlayerFromDisconnectGrace(activeGame.roomId, options.removeDisconnectWallet)
+      : {
+          graceState: await getDisconnectGraceState(activeGame.roomId),
+          wasCleared: false,
+          changed: false,
+        };
+    const gameState =
+      (await getStoredGameState(activeGame.roomId)) ??
+      buildInitialRegularGameState(activeGame.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
+    const timerSnapshot =
+      (await getLiveTimerSnapshot(activeGame.roomId, initialTime)) ?? {
+        initialTime,
+        whiteTime: initialTime,
+        blackTime: initialTime,
+        turn: getFenTurn(gameState.fen || INITIAL_BOARD_FEN),
+      };
+    const stakeState = await getGameStakeState(activeGame.roomId);
+    const fen = typeof gameState?.fen === "string" && gameState.fen ? gameState.fen : INITIAL_BOARD_FEN;
+
+    return {
+      wasDisconnectGraceCleared: disconnectGraceUpdate.wasCleared,
+      payload: {
+        status: stakeState.status,
+        roomId: activeGame.roomId,
+        color: activeGame.color,
+        opponentAddress: activeGame.opponentWallet,
+        opponentName: activeGame.opponentName ?? null,
+        playerName: activeGame.playerName ?? null,
+        opponentRating: activeGame.opponentRating,
+        playerRating: activeGame.playerRating,
+        fen,
+        moves: Array.isArray(gameState?.moves) ? gameState.moves : [],
+        chatMessages: Array.isArray(gameState?.chatMessages) ? gameState.chatMessages : [],
+        whiteTime: timerSnapshot.whiteTime,
+        blackTime: timerSnapshot.blackTime,
+        initialTime: timerSnapshot.initialTime,
+        timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
+        turn: timerSnapshot.turn ?? getFenTurn(fen),
+        version: getRegularGameVersion(gameState),
+        onChainGameId: stakeState.onChainGameId,
+        stakeToken: stakeState.stakeToken,
+        stakeAmount: stakeState.stakeAmount,
+        disconnectGrace: disconnectGraceUpdate.graceState,
+      },
+    };
   }
 
   function initGameTimer(roomId, timeInSeconds = DEFAULT_GAME_TIME) {
@@ -2347,42 +2401,17 @@ app.prepare().then(async () => {
           : null;
         if (!activeGame) return;
 
-        const disconnectGraceUpdate = await removePlayerFromDisconnectGrace(activeGame.roomId, userId);
-
-        const gs = await getStoredGameState(activeGame.roomId);
-        const stakeState = await getGameStakeState(activeGame.roomId);
-        const initialTime = getActiveGameInitialTimeSeconds(activeGame);
-        const timerSnapshot =
-          await getLiveTimerSnapshot(activeGame.roomId, initialTime) ?? {
-            initialTime,
-            whiteTime: initialTime,
-            blackTime: initialTime,
-          };
+        const snapshot = await buildRegularGameSnapshot(activeGame, {
+          removeDisconnectWallet: userId,
+        });
 
         socket.join(activeGame.roomId);
         activeGames.set(socket.id, activeGame.roomId);
-        if (disconnectGraceUpdate.wasCleared) {
+        if (snapshot.wasDisconnectGraceCleared) {
           socket.to(activeGame.roomId).emit("opponentReconnected");
         }
 
-        socket.emit("gameRejoined", {
-          status: stakeState.status,
-          roomId: activeGame.roomId,
-          color: activeGame.color,
-          opponentAddress: activeGame.opponentWallet,
-          opponentRating: activeGame.opponentRating,
-          playerRating: activeGame.playerRating,
-          fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-          moves: gs?.moves || [],
-          chatMessages: gs?.chatMessages || [],
-          whiteTime: timerSnapshot.whiteTime,
-          blackTime: timerSnapshot.blackTime,
-          timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
-          onChainGameId: stakeState.onChainGameId,
-          stakeToken: stakeState.stakeToken,
-          stakeAmount: stakeState.stakeAmount,
-          disconnectGrace: disconnectGraceUpdate.graceState,
-        });
+        socket.emit("gameRejoined", snapshot.payload);
         console.log(`[RECONNECT] Player ${userId} rejoined active game ${activeGame.roomId}`);
       })().catch((e) => {
         console.error("[RECONNECT] Failed to restore active game:", e);
@@ -2635,45 +2664,26 @@ app.prepare().then(async () => {
         return;
       }
 
-      const initialTime = getActiveGameInitialTimeSeconds(activeGame);
-      const disconnectGraceUpdate = await removePlayerFromDisconnectGrace(activeGame.roomId, userId);
-      const gs = await getStoredGameState(activeGame.roomId);
-      const timerSnapshot =
-        await getLiveTimerSnapshot(activeGame.roomId, initialTime) ?? {
-          initialTime,
-          whiteTime: initialTime,
-          blackTime: initialTime,
-        };
-
-      const stakeState = await getGameStakeState(activeGame.roomId);
+      const snapshot = await buildRegularGameSnapshot(activeGame, {
+        removeDisconnectWallet: userId,
+      });
 
       socket.join(activeGame.roomId);
       activeGames.set(socket.id, activeGame.roomId);
-      if (disconnectGraceUpdate.wasCleared) {
+      if (snapshot.wasDisconnectGraceCleared) {
         socket.to(activeGame.roomId).emit("opponentReconnected");
       }
 
-      socket.emit("gameRejoined", {
-        status: stakeState.status,
-        roomId: activeGame.roomId,
-        color: activeGame.color,
-        opponentAddress: activeGame.opponentWallet,
-        opponentName: activeGame.opponentName ?? null,
-        playerName: activeGame.playerName ?? null,
-        opponentRating: activeGame.opponentRating,
-        playerRating: activeGame.playerRating,
-        fen: gs?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-        moves: gs?.moves || [],
-        chatMessages: gs?.chatMessages || [],
-        whiteTime: timerSnapshot.whiteTime,
-        blackTime: timerSnapshot.blackTime,
-        timeControl: activeGame.timeControl ?? DEFAULT_GAME_TIME / 60,
-        onChainGameId: stakeState.onChainGameId,
-        stakeToken: stakeState.stakeToken,
-        stakeAmount: stakeState.stakeAmount,
-        disconnectGrace: disconnectGraceUpdate.graceState,
-      });
+      socket.emit("gameRejoined", snapshot.payload);
       console.log(`[REJOIN] Player ${userId} explicitly rejoined game ${activeGame.roomId}`);
+    });
+
+    socket.on("requestGameSnapshot", async ({ roomId }) => {
+      const activeGame = await requireActivePlayerInRoom(socket, roomId, "requestGameSnapshot");
+      if (!activeGame) return;
+
+      const snapshot = await buildRegularGameSnapshot(activeGame);
+      socket.emit("gameSnapshot", snapshot.payload);
     });
 
     socket.on("leaveRoom", async ({ roomId }) => {
@@ -2891,14 +2901,10 @@ app.prepare().then(async () => {
       if (!activeGame) return;
 
       console.log(`Move in ${activeGame.roomId}:`, move);
-      socket.to(activeGame.roomId).emit("opponentMove", move);
       const opponentSocketId = getSocketIdForWallet(activeGame.opponentWallet);
-      if (opponentSocketId && opponentSocketId !== socket.id) {
-        // Direct opponent emit keeps live play resilient if room membership briefly lags behind reconnects.
-        io.to(opponentSocketId).emit("opponentMove", move);
-      }
 
-      // Store game state for reconnection
+      // Persist the new authoritative room state before emitting live events.
+      // That way a fast reload/rejoin cannot race ahead and fetch the pre-move snapshot.
       const gs = await getStoredGameState(activeGame.roomId) ??
         buildInitialRegularGameState(activeGame.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
       if (gs) {
@@ -2907,28 +2913,43 @@ app.prepare().then(async () => {
         gameStateStore.set(activeGame.roomId, gs);
         setGameState(activeGame.roomId, gs).catch(() => { });
       }
+      const resolvedFen = typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN;
+      const version = getRegularGameVersion(gs);
+      const movePayload = {
+        move,
+        version,
+        turn: getFenTurn(resolvedFen),
+        serverTimestamp: Date.now(),
+      };
+
+      socket.to(activeGame.roomId).emit("opponentMove", movePayload);
+      if (opponentSocketId && opponentSocketId !== socket.id) {
+        // Direct opponent emit keeps live play resilient if room membership briefly lags behind reconnects.
+        io.to(opponentSocketId).emit("opponentMove", movePayload);
+      }
 
       emitToSpectators(activeGame.roomId, "spectatorMove", {
         roomId: activeGame.roomId,
-        fen: typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN,
+        fen: resolvedFen,
         moves: Array.isArray(gs?.moves)
           ? gs.moves.map((entry) => sanitizePublicMoveRecord(entry)).filter(Boolean)
           : [],
-        turn: getFenTurn(typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN),
+        turn: getFenTurn(resolvedFen),
       });
 
       // Update server-authoritative timer and broadcast synced times
       const times = processMoveTiming(activeGame.roomId);
       if (times) {
-        io.to(activeGame.roomId).emit("timeSync", times);
-        io.to(socket.id).emit("timeSync", times);
+        const timeSyncPayload = { ...times, version, turn: getFenTurn(resolvedFen) };
+        io.to(activeGame.roomId).emit("timeSync", timeSyncPayload);
+        io.to(socket.id).emit("timeSync", timeSyncPayload);
         if (opponentSocketId && opponentSocketId !== socket.id) {
-          io.to(opponentSocketId).emit("timeSync", times);
+          io.to(opponentSocketId).emit("timeSync", timeSyncPayload);
         }
         const timer = gameTimers.get(activeGame.roomId);
         emitToSpectators(activeGame.roomId, "spectatorTimeSync", {
           roomId: activeGame.roomId,
-          ...(timer ? getPublicTimerSnapshot(timer) : { ...times, turn: getFenTurn(typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN) }),
+          ...(timer ? getPublicTimerSnapshot(timer) : { ...times, turn: getFenTurn(resolvedFen) }),
         });
       }
     });
