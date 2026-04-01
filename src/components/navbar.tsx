@@ -23,7 +23,6 @@ const navItems = [
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/play", label: "Tournaments" },
   { href: "/", label: "Creator program" },
-  { href: "/", label: "Markets" },
   // { href: "#community", label: "Community" },
   // { href: "#blog", label: "Blog" },
   // { href: "#whitepaper", label: "Whitepaper" },
