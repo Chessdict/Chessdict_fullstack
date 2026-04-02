@@ -35,7 +35,7 @@ interface MatchFoundModalProps {
 type CreatorState = "idle" | "creating" | "waiting" | "failed" | "expired" | "opponent-left" | "cancelling" | "reclaimed";
 type JoinerState = "waiting-for-creator" | "creator-failed" | "expired" | "idle" | "joining" | "confirmed" | "failed";
 
-const FACE_OFF_AUTO_ENTER_DELAY_MS = 2200;
+const FACE_OFF_AUTO_ENTER_DELAY_MS = 1200;
 
 function formatAmountDisplay(value: number | null) {
     if (value == null || !Number.isFinite(value)) return null;

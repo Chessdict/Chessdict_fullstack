@@ -477,8 +477,10 @@ export async function getUserProfile(walletAddress: string) {
     return { success: false, error: "Wallet address is required" };
 
   try {
-    const user = await prisma.user.findUnique({
+    const user = await prisma.user.upsert({
       where: { walletAddress },
+      update: {},
+      create: { walletAddress },
       select: {
         id: true,
         walletAddress: true,
@@ -492,8 +494,6 @@ export async function getUserProfile(walletAddress: string) {
         createdAt: true,
       },
     });
-
-    if (!user) return { success: false, error: "User not found" };
 
     const [totalGames, wins, draws, stakedTotals] = await Promise.all([
       prisma.game.count({

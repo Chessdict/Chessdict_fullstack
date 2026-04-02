@@ -17,6 +17,8 @@ import {
 } from "@/lib/chess-promotion";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
+import { useBoardTheme } from "@/hooks/useBoardTheme";
+import { useBoardPieces } from "@/hooks/useBoardPieces";
 import { type Socket } from "socket.io-client";
 import { SignalStrength } from "@/components/game/signal-strength";
 
@@ -43,6 +45,8 @@ export function TournamentGameBoard({
   socket,
   myAddress,
 }: TournamentGameBoardProps) {
+  const { boardTheme } = useBoardTheme();
+  const { useCustomPiecesOnMobile } = useBoardPieces();
   const {
     tournamentId,
     gameId,
@@ -268,7 +272,7 @@ export function TournamentGameBoard({
 
     return `${sourcePiece.color}${promotedPiece.toUpperCase()}`;
   }, [fen, game, queuedPremove]);
-  const boardPieces = isMobileViewport ? defaultPieces : customPieces;
+  const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
 
   // Timer countdown
   useEffect(() => {
@@ -726,8 +730,8 @@ export function TournamentGameBoard({
               allowDragOffBoard: false,
               allowDragging: !gameResult && !promotionSelection,
               boardStyle: { borderRadius: "4px" },
-              darkSquareStyle: { backgroundColor: "#B58863" },
-              lightSquareStyle: { backgroundColor: "#F0D9B5" },
+              darkSquareStyle: boardTheme.darkSquareStyle,
+              lightSquareStyle: boardTheme.lightSquareStyle,
               squareStyles: { ...premoveSquares, ...moveSquares },
               pieces: boardPieces,
               onPieceDrag: () => {
@@ -753,7 +757,7 @@ export function TournamentGameBoard({
               to={queuedPremove.to}
               orientation={orientation}
               pieceCode={queuedPremovePieceCode}
-              useDefaultPieces={isMobileViewport}
+              useDefaultPieces={isMobileViewport && !useCustomPiecesOnMobile}
             />
           ) : null}
           {promotionSelection ? (
