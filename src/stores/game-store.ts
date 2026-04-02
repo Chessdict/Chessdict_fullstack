@@ -105,8 +105,10 @@ type GameState = {
   // Opponent disconnect countdown
   opponentDisconnectDeadline: number | null;
   selfDisconnectDeadline: number | null;
+  autoAbortDeadline: number | null;
   setOpponentDisconnectDeadline: (deadline: number | null) => void;
   setSelfDisconnectDeadline: (deadline: number | null) => void;
+  setAutoAbortDeadline: (deadline: number | null) => void;
   gameResultModalDismissed: boolean;
   setGameResultModalDismissed: (dismissed: boolean) => void;
   clearMatchState: () => void;
@@ -140,6 +142,7 @@ const initialState = {
   rejoinChatMessages: [] as { sender: string; text: string; timestamp: number }[],
   opponentDisconnectDeadline: null,
   selfDisconnectDeadline: null,
+  autoAbortDeadline: null,
   gameResultModalDismissed: false,
 };
 
@@ -185,6 +188,7 @@ export const useGameStore = create<GameState>((set) => ({
   clearRejoinChatMessages: () => set({ rejoinChatMessages: [] }),
   setOpponentDisconnectDeadline: (deadline) => set({ opponentDisconnectDeadline: deadline }),
   setSelfDisconnectDeadline: (deadline) => set({ selfDisconnectDeadline: deadline }),
+  setAutoAbortDeadline: (deadline) => set({ autoAbortDeadline: deadline }),
   setGameResultModalDismissed: (dismissed) => set({ gameResultModalDismissed: dismissed }),
   clearMatchState: () =>
     set((state) => ({
@@ -209,6 +213,7 @@ export const useGameStore = create<GameState>((set) => ({
       rejoinChatMessages: [],
       opponentDisconnectDeadline: null,
       selfDisconnectDeadline: null,
+      autoAbortDeadline: null,
       gameResultModalDismissed: false,
     })),
   reset: () =>
@@ -232,6 +237,7 @@ export const useGameStore = create<GameState>((set) => ({
       rejoinChatMessages: [],
       opponentDisconnectDeadline: null,
       selfDisconnectDeadline: null,
+      autoAbortDeadline: null,
       gameResultModalDismissed: false,
     }),
 }));

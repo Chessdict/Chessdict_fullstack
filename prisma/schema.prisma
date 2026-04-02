@@ -17,6 +17,14 @@ model User {
   blitzRating   Int       @default(1200)
   rapidRating   Int       @default(1200)
   stakedRating  Int       @default(1200)
+  bulletRatingDeviation Float    @default(350)
+  blitzRatingDeviation  Float    @default(350)
+  rapidRatingDeviation  Float    @default(350)
+  stakedRatingDeviation Float    @default(350)
+  bulletRatingLastGameAt DateTime?
+  blitzRatingLastGameAt  DateTime?
+  rapidRatingLastGameAt  DateTime?
+  stakedRatingLastGameAt DateTime?
   accounts      Account[]
   sessions      Session[]
 
@@ -81,6 +89,9 @@ model Game {
   status        GameStatus @default(WAITING)
   fen           String
   pgn           String?
+  startedAt     DateTime?
+  endedAt       DateTime?
+  resultReason  String?
   timeControl   Int        @default(3)
   
   wagerAmount   Float?

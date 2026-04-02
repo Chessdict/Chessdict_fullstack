@@ -1,12 +1,15 @@
 "use client";
 
+import { Chess } from "chess.js";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Chessboard, defaultPieces } from "react-chessboard";
+import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { useAccount } from "wagmi";
 import { useBoardTheme } from "@/hooks/useBoardTheme";
 import { useBoardPieces } from "@/hooks/useBoardPieces";
+import { useChessSounds } from "@/hooks/useChessSounds";
 import { useSocket } from "@/hooks/useSocket";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
@@ -47,6 +50,8 @@ type SpectatorState = PublicGameSnapshot & {
 };
 
 const MOVE_ANIMATION_DURATION_MS = 150;
+const INITIAL_BOARD_FEN =
+  "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 function formatClock(seconds: number) {
   const safeSeconds = Math.max(0, Math.round(seconds));
@@ -57,6 +62,46 @@ function formatClock(seconds: number) {
 
 function getFenTurn(fen: string) {
   return fen.split(" ")[1] === "b" ? "b" : "w";
+}
+
+function getPromotionPiece(move: PublicMoveRecord) {
+  const match = move.san.match(/=([QRBN])/i);
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+function buildFenAtMove(moves: PublicMoveRecord[], moveIndex: number) {
+  if (moveIndex < 0) {
+    return INITIAL_BOARD_FEN;
+  }
+
+  const chess = new Chess();
+  for (let index = 0; index <= moveIndex; index += 1) {
+    const move = moves[index];
+    if (!move) break;
+
+    const promotion = getPromotionPiece(move);
+    let appliedMove = null;
+
+    try {
+      appliedMove = chess.move({
+        from: move.from,
+        to: move.to,
+        ...(promotion ? { promotion } : {}),
+      });
+    } catch (_error) {
+      appliedMove = null;
+    }
+
+    if (!appliedMove) {
+      try {
+        appliedMove = chess.move(move.san);
+      } catch (_error) {
+        return index === moves.length - 1 ? null : chess.fen();
+      }
+    }
+  }
+
+  return chess.fen();
 }
 
 function normalizeSnapshot(
@@ -103,6 +148,42 @@ function formatStakeAmount(amount: number | null) {
 function formatStakeLabel(amount: number | null) {
   const formatted = formatStakeAmount(amount);
   return formatted ? `🤑💸 ${formatted}` : "🤑💸 Staked";
+}
+
+function formatDuration(startedAt: string | null, endedAt: string | null) {
+  if (!startedAt || !endedAt) return null;
+  const startedMs = new Date(startedAt).getTime();
+  const endedMs = new Date(endedAt).getTime();
+  if (!Number.isFinite(startedMs) || !Number.isFinite(endedMs) || endedMs <= startedMs) {
+    return null;
+  }
+
+  const totalSeconds = Math.round((endedMs - startedMs) / 1000);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+}
+
+function formatResultReason(reason: string | null) {
+  if (!reason) return null;
+  return reason
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildReviewSoundMove(move: PublicMoveRecord) {
+  const san = move.san ?? "";
+  let flags = "";
+
+  if (san.includes("=")) flags += "p";
+  if (san === "O-O" || san === "O-O+") flags += "k";
+  if (san === "O-O-O" || san === "O-O-O+") flags += "q";
+
+  return {
+    san,
+    captured: san.includes("x") ? "x" : undefined,
+    flags,
+  };
 }
 
 function PlayerHeader({
@@ -165,13 +246,28 @@ export function PublicGameSpectator({
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const { address } = useAccount();
   const { useCustomPiecesOnMobile } = useBoardPieces();
+  const { playMoveSound } = useChessSounds();
   const { socket, isConnected } = useSocket(address ?? undefined);
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
+  const [reviewMoveIndex, setReviewMoveIndex] = useState<number>(() =>
+    initialGame.status === "IN_PROGRESS" || initialGame.moves.length === 0
+      ? -1
+      : initialGame.moves.length - 1,
+  );
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
+  const lastPlayedReviewMoveRef = useRef<number | null>(null);
 
   useEffect(() => {
     setGame(normalizeSnapshot(initialGame));
     setIsUnavailable(false);
     setIsWallDismissed(false);
+    setReviewMoveIndex(
+      initialGame.status === "IN_PROGRESS" || initialGame.moves.length === 0
+        ? -1
+        : initialGame.moves.length - 1,
+    );
+    setIsAutoPlaying(false);
+    lastPlayedReviewMoveRef.current = null;
   }, [initialGame]);
 
   useEffect(() => {
@@ -193,6 +289,10 @@ export function PublicGameSpectator({
   }, []);
 
   useEffect(() => {
+    if (initialGame.status !== "IN_PROGRESS") {
+      return;
+    }
+
     if (!socket) return;
 
     const joinSpectatorRoom = () => {
@@ -278,7 +378,7 @@ export function PublicGameSpectator({
       socket.off("spectatorUnavailable", handleUnavailable);
       socket.off("connect", joinSpectatorRoom);
     };
-  }, [initialGame.roomId, socket]);
+  }, [initialGame.roomId, initialGame.status, socket]);
 
   const displayedTimes = useMemo(() => {
     let whiteTime = game.whiteTime;
@@ -299,19 +399,94 @@ export function PublicGameSpectator({
     return { whiteTime, blackTime };
   }, [game.blackTime, game.moves.length, game.status, game.syncedAtMs, game.turn, game.whiteTime, now]);
 
+  const effectiveReviewMoveIndex =
+    game.status === "IN_PROGRESS"
+      ? game.moves.length - 1
+      : Math.min(Math.max(reviewMoveIndex, -1), game.moves.length - 1);
+
+  const displayedFen = useMemo(() => {
+    if (game.status === "IN_PROGRESS") {
+      return game.fen;
+    }
+
+    if (game.moves.length === 0) {
+      return game.fen;
+    }
+
+    const reviewFen = buildFenAtMove(game.moves, effectiveReviewMoveIndex);
+    return reviewFen ?? game.fen;
+  }, [effectiveReviewMoveIndex, game.fen, game.moves, game.status]);
+
+  const displayedTurn = useMemo(() => {
+    if (game.status === "IN_PROGRESS") {
+      return game.turn;
+    }
+    return getFenTurn(displayedFen);
+  }, [displayedFen, game.status, game.turn]);
+
+  const highlightedMove =
+    effectiveReviewMoveIndex >= 0 ? game.moves[effectiveReviewMoveIndex] : null;
+
   const lastMoveStyles = useMemo(() => {
-    const lastMove = game.moves[game.moves.length - 1];
-    if (!lastMove) return {};
+    if (!highlightedMove) return {};
 
     return {
-      [lastMove.from]: { backgroundColor: "rgba(251, 191, 36, 0.25)" },
-      [lastMove.to]: { backgroundColor: "rgba(251, 191, 36, 0.4)" },
+      [highlightedMove.from]: { backgroundColor: "rgba(251, 191, 36, 0.25)" },
+      [highlightedMove.to]: { backgroundColor: "rgba(251, 191, 36, 0.4)" },
     };
-  }, [game.moves]);
+  }, [highlightedMove]);
 
   const isWallMode = mode === "wall";
   const formattedStakeAmount = formatStakeAmount(game.stakeAmount);
   const stakeLabel = formatStakeLabel(game.stakeAmount);
+  const isLiveGame = game.status === "IN_PROGRESS";
+  const durationLabel = formatDuration(game.startedAt, game.endedAt);
+  const resultReasonLabel = formatResultReason(game.resultReason);
+
+  useEffect(() => {
+    if (isLiveGame || !isAutoPlaying || game.moves.length === 0) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setReviewMoveIndex((current) => {
+        if (current >= game.moves.length - 1) {
+          window.clearInterval(interval);
+          setIsAutoPlaying(false);
+          return current;
+        }
+        return current + 1;
+      });
+    }, 700);
+
+    return () => window.clearInterval(interval);
+  }, [game.moves.length, isAutoPlaying, isLiveGame]);
+
+  useEffect(() => {
+    if (isLiveGame || game.moves.length === 0) {
+      lastPlayedReviewMoveRef.current = null;
+      return;
+    }
+
+    if (lastPlayedReviewMoveRef.current == null) {
+      lastPlayedReviewMoveRef.current = effectiveReviewMoveIndex;
+      return;
+    }
+
+    if (
+      effectiveReviewMoveIndex < 0 ||
+      effectiveReviewMoveIndex === lastPlayedReviewMoveRef.current
+    ) {
+      lastPlayedReviewMoveRef.current = effectiveReviewMoveIndex;
+      return;
+    }
+
+    const move = game.moves[effectiveReviewMoveIndex];
+    if (move) {
+      playMoveSound(buildReviewSoundMove(move), "self");
+    }
+    lastPlayedReviewMoveRef.current = effectiveReviewMoveIndex;
+  }, [effectiveReviewMoveIndex, game.moves, isLiveGame, playMoveSound]);
 
   useEffect(() => {
     if (!isWallMode) return;
@@ -397,7 +572,7 @@ export function PublicGameSpectator({
         <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#1A1A1A]/80 p-2">
           <Chessboard
             options={{
-              id: `spectator-wall-board-${game.roomId}`,
+                id: `spectator-wall-board-${game.roomId}`,
               position: game.fen,
               boardOrientation: "white",
               showAnimations: true,
@@ -459,7 +634,7 @@ export function PublicGameSpectator({
       <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-white/[0.03] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-300/70">
-            Live Spectator
+            {isLiveGame ? "Live Spectator" : "Game Review"}
           </p>
           <h1 className="mt-1 text-xl font-semibold text-white sm:text-2xl">
             {resultLabel(game)}
@@ -474,10 +649,12 @@ export function PublicGameSpectator({
         <div className="flex items-center gap-2 text-xs text-white/45">
           <span
             className={`inline-block h-2.5 w-2.5 rounded-full ${
-              isConnected ? "bg-emerald-400" : "bg-amber-400"
+              isLiveGame && isConnected ? "bg-emerald-400" : "bg-white/25"
             }`}
           />
-          {isConnected ? "Live updates connected" : "Reconnecting to live updates"}
+          {isLiveGame
+            ? (isConnected ? "Live updates connected" : "Reconnecting to live updates")
+            : "Replay ready"}
         </div>
       </div>
 
@@ -487,14 +664,14 @@ export function PublicGameSpectator({
             label="Black"
             player={game.black}
             time={displayedTimes.blackTime}
-            isTurn={game.turn === "b" && game.status === "IN_PROGRESS"}
+            isTurn={displayedTurn === "b" && game.status === "IN_PROGRESS"}
           />
 
           <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#1A1A1A]/80 p-2 sm:p-3">
             <Chessboard
               options={{
                 id: `spectator-board-${game.roomId}`,
-                position: game.fen,
+                position: displayedFen,
                 boardOrientation: "white",
                 showAnimations: true,
                 animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
@@ -512,8 +689,99 @@ export function PublicGameSpectator({
             label="White"
             player={game.white}
             time={displayedTimes.whiteTime}
-            isTurn={game.turn === "w" && game.status === "IN_PROGRESS"}
+            isTurn={displayedTurn === "w" && game.status === "IN_PROGRESS"}
           />
+
+          {!isLiveGame ? (
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/40">
+                  Review Controls
+                </p>
+                <p className="text-xs text-white/45">
+                  {game.moves.length === 0
+                    ? "Replay unavailable"
+                    : effectiveReviewMoveIndex < 0
+                      ? "Start position"
+                      : `Move ${effectiveReviewMoveIndex + 1} of ${game.moves.length}`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAutoPlaying(false);
+                    setReviewMoveIndex(-1);
+                  }}
+                  disabled={game.moves.length === 0 || effectiveReviewMoveIndex <= -1}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Start
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAutoPlaying(false);
+                    setReviewMoveIndex((current) => Math.max(-1, current - 1));
+                  }}
+                  disabled={game.moves.length === 0 || effectiveReviewMoveIndex <= -1}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (game.moves.length === 0) return;
+                    if (effectiveReviewMoveIndex >= game.moves.length - 1) {
+                      setReviewMoveIndex(-1);
+                    }
+                    setIsAutoPlaying((current) => !current);
+                  }}
+                  disabled={game.moves.length === 0}
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  {isAutoPlaying ? (
+                    <>
+                      <Pause className="h-3.5 w-3.5" />
+                      Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-3.5 w-3.5" />
+                      Play
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAutoPlaying(false);
+                    setReviewMoveIndex((current) =>
+                      Math.min(game.moves.length - 1, current + 1),
+                    );
+                  }}
+                  disabled={game.moves.length === 0 || effectiveReviewMoveIndex >= game.moves.length - 1}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Next
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAutoPlaying(false);
+                    setReviewMoveIndex(game.moves.length - 1);
+                  }}
+                  disabled={game.moves.length === 0 || effectiveReviewMoveIndex >= game.moves.length - 1}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  End
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <aside className="flex flex-col gap-4">
@@ -530,6 +798,12 @@ export function PublicGameSpectator({
                 <dt className="text-white/45">Status</dt>
                 <dd className="text-white">{game.status.replace("_", " ")}</dd>
               </div>
+              {resultReasonLabel ? (
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-white/45">Reason</dt>
+                  <dd className="text-white">{resultReasonLabel}</dd>
+                </div>
+              ) : null}
               {game.isStaked ? (
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-white/45">Stake</dt>
@@ -542,12 +816,26 @@ export function PublicGameSpectator({
                   {new Date(game.createdAt).toLocaleString()}
                 </dd>
               </div>
+              {game.startedAt ? (
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-white/45">Started</dt>
+                  <dd className="text-white">
+                    {new Date(game.startedAt).toLocaleString()}
+                  </dd>
+                </div>
+              ) : null}
               {game.endedAt ? (
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-white/45">Ended</dt>
                   <dd className="text-white">
                     {new Date(game.endedAt).toLocaleString()}
                   </dd>
+                </div>
+              ) : null}
+              {durationLabel ? (
+                <div className="flex items-center justify-between gap-4">
+                  <dt className="text-white/45">Duration</dt>
+                  <dd className="text-white">{durationLabel}</dd>
                 </div>
               ) : null}
             </dl>
@@ -562,7 +850,9 @@ export function PublicGameSpectator({
             </div>
             {game.moves.length === 0 ? (
               <p className="mt-4 text-sm text-white/45">
-                Waiting for the first move.
+                {game.status === "IN_PROGRESS"
+                  ? "Waiting for the first move."
+                  : "This older game ended before replay moves were saved."}
               </p>
             ) : (
               <div className="mt-4 max-h-[420px] overflow-y-auto pr-1 [scrollbar-width:thin]">
@@ -573,20 +863,38 @@ export function PublicGameSpectator({
                       const blackMove = game.moves[index * 2 + 1];
 
                       return (
-                        <div
+                        <button
+                          type="button"
                           key={`move-pair-${index}`}
-                          className="grid grid-cols-[36px_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2 rounded-2xl border border-white/5 bg-black/25 px-3 py-2"
+                          onClick={() =>
+                            setReviewMoveIndex(
+                              blackMove ? index * 2 + 1 : index * 2,
+                            )
+                          }
+                          className="grid w-full grid-cols-[36px_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2 rounded-2xl border border-white/5 bg-black/25 px-3 py-2 text-left transition hover:border-white/15 hover:bg-white/[0.06]"
                         >
                           <span className="text-xs font-semibold text-white/40">
                             {index + 1}.
                           </span>
-                          <span className="truncate text-white">
+                          <span
+                            className={`truncate rounded-md px-2 py-1 ${
+                              effectiveReviewMoveIndex === index * 2
+                                ? "bg-emerald-400/20 text-emerald-200"
+                                : "text-white"
+                            }`}
+                          >
                             {whiteMove?.san ?? "—"}
                           </span>
-                          <span className="truncate text-white/70">
+                          <span
+                            className={`truncate rounded-md px-2 py-1 ${
+                              effectiveReviewMoveIndex === index * 2 + 1
+                                ? "bg-emerald-400/20 text-emerald-200"
+                                : "text-white/70"
+                            }`}
+                          >
                             {blackMove?.san ?? "—"}
                           </span>
-                        </div>
+                        </button>
                       );
                     },
                   )}

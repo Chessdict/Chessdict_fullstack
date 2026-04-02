@@ -618,6 +618,7 @@ export async function getGameHistory(
       return {
         id: g.id,
         result,
+        resultReason: g.resultReason ?? null,
         playedAs: isWhite ? ("white" as const) : ("black" as const),
         opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
         opponentUsername: opponentPlayer?.username ?? null,
@@ -631,7 +632,9 @@ export async function getGameHistory(
         onChainGameId: g.onChainGameId,
         stakeToken: g.stakeToken ?? null,
         wagerAmount: g.wagerAmount ?? null,
-        date: g.updatedAt.toISOString(),
+        startedAt: g.startedAt?.toISOString() ?? null,
+        endedAt: g.endedAt?.toISOString() ?? g.updatedAt.toISOString(),
+        date: g.endedAt?.toISOString() ?? g.updatedAt.toISOString(),
       };
     });
 
@@ -702,6 +705,7 @@ export async function getStakedGameHistory(
         stakeToken: g.stakeToken ?? "",
         wagerAmount: g.wagerAmount ?? 0,
         result,
+        resultReason: g.resultReason ?? null,
         playedAs: isWhite ? ("white" as const) : ("black" as const),
         opponentAddress: opponentPlayer?.walletAddress ?? "Unknown",
         opponentUsername: opponentPlayer?.username ?? null,
