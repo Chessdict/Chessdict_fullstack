@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Chess } from "chess.js";
 import prisma from "@/lib/prisma";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getPlayerRatingForTimeControl } from "@/lib/player-ratings";
@@ -67,9 +68,12 @@ export type PublicGameSnapshot = {
   fen: string;
   pgn: string | null;
   moves: PublicMoveRecord[];
+  hasReplayMoves: boolean;
+  resultReason: string | null;
   white: PublicPlayerInfo;
   black: PublicPlayerInfo;
   createdAt: string;
+  startedAt: string | null;
   endedAt: string | null;
   isStaked: boolean;
   stakeAmount: number | null;
@@ -104,6 +108,81 @@ function sanitizeMoveRecord(move: RedisMoveRecord): PublicMoveRecord | null {
     timestamp: Number.isFinite(numericTimestamp)
       ? numericTimestamp
       : Date.now(),
+  };
+}
+
+function parseMovesFromPgn(pgn: string): PublicMoveRecord[] {
+  if (typeof pgn !== "string" || !pgn.trim()) return [];
+
+  const chess = new Chess();
+  try {
+    chess.loadPgn(pgn);
+  } catch (_error) {
+    return [];
+  }
+
+  return chess.history({ verbose: true }).map((move, index) => ({
+    san: move.san,
+    from: move.from,
+    to: move.to,
+    color: move.color,
+    piece: move.piece,
+    timestamp: index,
+  }));
+}
+
+function getPromotionPiece(move: PublicMoveRecord) {
+  const match = move.san.match(/=([QRBN])/i);
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+function buildReplayArtifactsFromMoves(moves: PublicMoveRecord[]) {
+  if (!Array.isArray(moves) || moves.length === 0) {
+    return {
+      pgn: null,
+      fen: INITIAL_BOARD_FEN,
+      startedAt: null as Date | null,
+    };
+  }
+
+  const chess = new Chess();
+  let startedAt: Date | null = null;
+
+  for (const move of moves) {
+    const numericTimestamp =
+      typeof move.timestamp === "number"
+        ? move.timestamp
+        : Number.parseInt(String(move.timestamp ?? ""), 10);
+    if (startedAt == null && Number.isFinite(numericTimestamp)) {
+      startedAt = new Date(numericTimestamp);
+    }
+
+    const promotion = getPromotionPiece(move);
+    let appliedMove = null;
+
+    try {
+      appliedMove = chess.move({
+        from: move.from,
+        to: move.to,
+        ...(promotion ? { promotion } : {}),
+      });
+    } catch (_error) {
+      appliedMove = null;
+    }
+
+    if (!appliedMove) {
+      try {
+        appliedMove = chess.move(move.san);
+      } catch (_error) {
+        break;
+      }
+    }
+  }
+
+  return {
+    pgn: chess.history().length > 0 ? chess.pgn() : null,
+    fen: chess.fen(),
+    startedAt,
   };
 }
 
@@ -208,15 +287,6 @@ export async function getPublicGameSnapshot(
     return null;
   }
 
-  if (
-    game.status !== "IN_PROGRESS" &&
-    !hasLiveMoves &&
-    typeof game.pgn !== "string"
-  ) {
-    // Finished-game replay needs persisted PGN or moves after live Redis cleanup.
-    return null;
-  }
-
   const timeControl = normalizeTimeControlMinutes(game.timeControl);
   const isStaked =
     !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
@@ -234,11 +304,37 @@ export async function getPublicGameSnapshot(
       : game.fen === "start"
         ? INITIAL_BOARD_FEN
         : game.fen || INITIAL_BOARD_FEN;
-  const moves = Array.isArray(redisGameState?.moves)
+  const liveMoves = Array.isArray(redisGameState?.moves)
     ? redisGameState.moves
         .map((move) => sanitizeMoveRecord(move as RedisMoveRecord))
         .filter((move): move is PublicMoveRecord => !!move)
     : [];
+  const repairedReplay =
+    liveMoves.length > 0 &&
+    (!game.pgn || game.fen === "start" || !game.startedAt)
+      ? buildReplayArtifactsFromMoves(liveMoves)
+      : null;
+
+  if (repairedReplay?.pgn) {
+    try {
+      await prisma.game.updateMany({
+        where: { id: roomId },
+        data: {
+          fen,
+          pgn: repairedReplay.pgn,
+          ...(repairedReplay.startedAt ? { startedAt: repairedReplay.startedAt } : {}),
+        },
+      });
+    } catch (_error) {
+      // Review should still load even if the backfill write fails.
+    }
+  }
+
+  const persistedPgn = game.pgn ?? repairedReplay?.pgn ?? null;
+  const moves =
+    liveMoves.length > 0
+      ? liveMoves
+      : parseMovesFromPgn(persistedPgn ?? "");
   const timerSnapshot = getLiveTimerSnapshot(redisTimerState, timeControl, fen);
 
   let result: PublicGameSnapshot["result"] = null;
@@ -260,12 +356,21 @@ export async function getPublicGameSnapshot(
     blackTime: timerSnapshot.blackTime,
     turn: timerSnapshot.turn,
     fen,
-    pgn: game.pgn ?? null,
+    pgn: persistedPgn,
     moves,
+    hasReplayMoves: moves.length > 0,
+    resultReason: game.resultReason ?? null,
     white,
     black,
     createdAt: game.createdAt.toISOString(),
-    endedAt: game.status === "IN_PROGRESS" ? null : game.updatedAt.toISOString(),
+    startedAt:
+      game.startedAt?.toISOString() ??
+      repairedReplay?.startedAt?.toISOString() ??
+      null,
+    endedAt:
+      game.status === "IN_PROGRESS"
+        ? null
+        : game.endedAt?.toISOString() ?? game.updatedAt.toISOString(),
     isStaked,
     stakeAmount: game.wagerAmount ?? null,
   };

@@ -2,8 +2,10 @@
 
 import { useEffect, use, useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { X } from "lucide-react";
 import { GameBoard } from "@/components/game/game-board";
 import { GameInfoPanel } from "@/components/game/game-info-panel";
+import { GlassBg } from "@/components/glass-bg";
 import { useGameStore } from "@/stores/game-store";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccount } from "wagmi";
@@ -49,8 +51,10 @@ export default function GamePage({
   const setBlackTime = useGameStore((s) => s.setBlackTime);
   const setRejoinData = useGameStore((s) => s.setRejoinData);
   const setRejoinChatMessages = useGameStore((s) => s.setRejoinChatMessages);
+  const initialTime = useGameStore((s) => s.initialTime);
   const setInitialTime = useGameStore((s) => s.setInitialTime);
   const setClockConfig = useGameStore((s) => s.setClockConfig);
+  const setAutoAbortDeadline = useGameStore((s) => s.setAutoAbortDeadline);
   const setOpponentDisconnectDeadline = useGameStore((s) => s.setOpponentDisconnectDeadline);
   const setSelfDisconnectDeadline = useGameStore((s) => s.setSelfDisconnectDeadline);
   const initialRejoinRequestedRef = useRef(false);
@@ -58,7 +62,11 @@ export default function GamePage({
   const [initialRoomStateResolved, setInitialRoomStateResolved] = useState(
     roomId === gameId && status === "in-progress",
   );
+  const [abortedReason, setAbortedReason] = useState<string | null>(null);
   const isStoreReadyForCurrentGame = roomId === gameId && status === "in-progress";
+  const abortedGameTimeControl = normalizeTimeControlMinutes(
+    Math.max(1, Math.round(initialTime / 60)),
+  );
 
   const enterMatchedGame = useCallback((data: {
     roomId: string;
@@ -69,6 +77,7 @@ export default function GamePage({
     opponentRating: number;
     playerRating: number;
     timeControl?: number;
+    autoAbortDeadline?: number | null;
   }) => {
     const timeControlMinutes = normalizeTimeControlMinutes(data.timeControl);
     const initialSeconds = getTimeControlSeconds(timeControlMinutes);
@@ -78,10 +87,12 @@ export default function GamePage({
     }
 
     clearMatchState();
+    setAbortedReason(null);
     setInitialTime(initialSeconds);
     setOnChainGameId(null);
     setStakeToken(null);
     setStakeAmountRaw(null);
+    setAutoAbortDeadline(data.autoAbortDeadline ?? null);
     setRoomId(data.roomId);
     setPlayerColor(data.color as "white" | "black");
     setOpponent({
@@ -101,7 +112,7 @@ export default function GamePage({
     if (!gameMode) setGameMode("online");
     setStatus("in-progress");
     router.push(`/play/game/${data.roomId}`);
-  }, [address, clearMatchState, gameMode, roomId, router, setGameMode, setInitialTime, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus, socket]);
+  }, [address, clearMatchState, gameMode, roomId, router, setAutoAbortDeadline, setGameMode, setInitialTime, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus, socket]);
 
   // Login with wallet on mount
   useEffect(() => {
@@ -147,6 +158,7 @@ export default function GamePage({
       opponentRating: number;
       playerRating: number;
       timeControl?: number;
+      autoAbortDeadline?: number | null;
     }) => {
       enterMatchedGame(data);
     };
@@ -168,6 +180,7 @@ export default function GamePage({
       onChainGameId?: string | null;
       stakeToken?: string | null;
       stakeAmount?: string | null;
+      autoAbortDeadline?: number | null;
       disconnectGrace?: {
         deadline: number;
         disconnectedWallets: string[];
@@ -178,6 +191,7 @@ export default function GamePage({
       if (roomId !== data.roomId || status !== "in-progress") {
         clearMatchState();
       }
+      setAbortedReason(null);
       const timeControlMinutes = normalizeTimeControlMinutes(
         data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
       );
@@ -186,6 +200,7 @@ export default function GamePage({
       setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
       setStakeToken(data.stakeToken ?? null);
       setStakeAmountRaw(data.stakeAmount ?? null);
+      setAutoAbortDeadline(data.autoAbortDeadline ?? null);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
@@ -220,7 +235,7 @@ export default function GamePage({
       socket.off("matchFound", handleMatchFound);
       socket.off("gameRejoined", handleGameRejoined);
     };
-  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, enterMatchedGame, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setClockConfig, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
+  }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, enterMatchedGame, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setAutoAbortDeadline, setClockConfig, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
 
   // Request one authoritative rejoin for this page load.
   // Subsequent socket reconnects are handled by the server auto-rejoin path.
@@ -249,8 +264,17 @@ export default function GamePage({
       }
     };
 
+    const handleGameAborted = ({ roomId: abortedRoomId, reason }: { roomId?: string; reason?: string }) => {
+      if (abortedRoomId !== gameId) return;
+      setStatus("finished");
+      setAutoAbortDeadline(null);
+      setInitialRoomStateResolved(true);
+      setAbortedReason(reason ?? "aborted");
+    };
+
     socket.on("rejoinError", handleRejoinError);
     socket.on("roomAccessDenied", handleRoomAccessDenied);
+    socket.on("gameAborted", handleGameAborted);
 
     if (socket.connected) {
       emitRejoin();
@@ -262,8 +286,9 @@ export default function GamePage({
       socket.off("connect", emitRejoin);
       socket.off("rejoinError", handleRejoinError);
       socket.off("roomAccessDenied", handleRoomAccessDenied);
+      socket.off("gameAborted", handleGameAborted);
     };
-  }, [socket, gameId, router]);
+  }, [socket, gameId, router, clearMatchState, setAutoAbortDeadline, setStatus]);
 
   return (
     <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
@@ -292,6 +317,48 @@ export default function GamePage({
           </div>
         )}
       </div>
+      {abortedReason ? (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm"
+          onClick={() => setAbortedReason(null)}
+        >
+          <div
+            className="relative w-full max-w-sm rounded-3xl border border-white/10 bg-[#121212]/95 p-6 text-center shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setAbortedReason(null)}
+              className="absolute right-3 top-3 rounded-full p-1.5 text-white/45 transition hover:bg-white/10 hover:text-white"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <h2 className="text-lg font-semibold text-white">Game Aborted</h2>
+            <p className="mt-2 text-sm text-white/65">
+              {abortedReason === "no_first_move_timeout"
+                ? "No move was played in time, so the game was aborted."
+                : "This game was aborted."}
+            </p>
+            <div className="mt-5">
+              <GlassBg
+                onClick={() => {
+                  setAbortedReason(null);
+                  clearMatchState();
+                  router.push(
+                    `/play?autoQueue=online&timeControl=${abortedGameTimeControl}`,
+                  );
+                }}
+                className="mx-auto max-w-[220px] px-5 py-3 text-sm font-semibold"
+                height={52}
+                minWidth={220}
+              >
+                New Game
+              </GlassBg>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

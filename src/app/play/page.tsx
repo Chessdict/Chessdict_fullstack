@@ -38,6 +38,7 @@ type PendingMatch = {
   requestedStakeAmount?: string | null;
   onChainGameId?: string | null;
   readyToEnter?: boolean;
+  autoAbortDeadline?: number | null;
 };
 
 type IncomingChallenge = {
@@ -92,6 +93,7 @@ export default function PlayPage() {
   const setClockConfig = useGameStore((s) => s.setClockConfig);
   const setOpponentDisconnectDeadline = useGameStore((s) => s.setOpponentDisconnectDeadline);
   const setSelfDisconnectDeadline = useGameStore((s) => s.setSelfDisconnectDeadline);
+  const setAutoAbortDeadline = useGameStore((s) => s.setAutoAbortDeadline);
 
   const clearSocketRetryTimeout = useCallback(() => {
     if (socketRetryTimeoutRef.current) {
@@ -159,6 +161,7 @@ export default function PlayPage() {
     }
     setStakeToken(match.staked ? (match.stakeToken ?? null) : null);
     setStakeAmountRaw(match.staked ? (match.stakeAmount ?? null) : null);
+    setAutoAbortDeadline(match.autoAbortDeadline ?? null);
     queuedStakeAmountRef.current = null;
     setRoomId(match.roomId);
     setPlayerColor(match.color);
@@ -178,7 +181,7 @@ export default function PlayPage() {
     setStatus("in-progress");
     setPendingMatch(null);
     router.push(`/play/game/${match.roomId}`);
-  }, [address, clearMatchState, gameMode, router, setGameMode, setInitialTime, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus]);
+  }, [address, clearMatchState, gameMode, router, setAutoAbortDeadline, setGameMode, setInitialTime, setOnChainGameId, setOpponent, setPlayer, setPlayerColor, setRoomId, setStakeAmountRaw, setStakeToken, setStatus]);
 
   useEffect(() => {
     if (isConnected && address) {
@@ -279,7 +282,35 @@ export default function PlayPage() {
       toast.error(data.error);
     });
 
-    socket.on('gameRejoined', (data: { status?: string | null; roomId: string; color: string; opponentAddress: string; opponentName?: string | null; playerName?: string | null; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null; disconnectGrace?: { deadline: number; disconnectedWallets: string[]; turn: "w" | "b"; bothDisconnected?: boolean } | null }) => {
+    socket.on("queueError", (data: { error: string }) => {
+      setIsSearchOpen(false);
+      setPendingQueueRequest(null);
+      toast.error(data.error);
+    });
+
+    socket.on("gameAborted", (data: { roomId?: string; reason?: string }) => {
+      setPendingMatch((prev) => {
+        if (!prev || prev.roomId !== data.roomId) return prev;
+        toast.error(
+          data.reason === "no_first_move_timeout"
+            ? "Game aborted. No move was played in time."
+            : "Game aborted.",
+        );
+        return null;
+      });
+
+      if (roomId && data.roomId === roomId) {
+        clearMatchState();
+        toast.error(
+          data.reason === "no_first_move_timeout"
+            ? "Game aborted. No move was played in time."
+            : "Game aborted.",
+        );
+        router.push("/play");
+      }
+    });
+
+    socket.on('gameRejoined', (data: { status?: string | null; roomId: string; color: string; opponentAddress: string; opponentName?: string | null; playerName?: string | null; opponentRating: number; playerRating: number; fen: string; moves: any[]; chatMessages?: { sender: string; text: string; timestamp: number }[]; whiteTime: number; blackTime: number; timeControl?: number; onChainGameId?: string | null; stakeToken?: string | null; stakeAmount?: string | null; autoAbortDeadline?: number | null; disconnectGrace?: { deadline: number; disconnectedWallets: string[]; turn: "w" | "b"; bothDisconnected?: boolean } | null }) => {
       console.log("GAME REJOINED EVENT:", data);
       const timeControlMinutes = normalizeTimeControlMinutes(
         data.timeControl ?? Math.ceil(Math.max(data.whiteTime, data.blackTime) / 60),
@@ -315,6 +346,7 @@ export default function PlayPage() {
         setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
         setStakeToken(data.stakeToken ?? null);
         setStakeAmountRaw(data.stakeAmount ?? null);
+        setAutoAbortDeadline(data.autoAbortDeadline ?? null);
         setRoomId(data.roomId);
         setPlayerColor(data.color as "white" | "black");
         setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
@@ -335,6 +367,7 @@ export default function PlayPage() {
       setOnChainGameId(data.onChainGameId ? BigInt(data.onChainGameId) : null);
       setStakeToken(data.stakeToken ?? null);
       setStakeAmountRaw(data.stakeAmount ?? null);
+      setAutoAbortDeadline(data.autoAbortDeadline ?? null);
       setRoomId(data.roomId);
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
@@ -372,9 +405,11 @@ export default function PlayPage() {
       socket.off('challengeReceived');
       socket.off('challengeDeclined');
       socket.off('challengeError');
+      socket.off("queueError");
+      socket.off("gameAborted");
       socket.off('gameRejoined');
     };
-  }, [socket, status, roomId, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, enterMatchedGame, clearMatchState, setClockConfig, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
+  }, [socket, status, roomId, setRoomId, setPlayerColor, setOpponent, setStatus, address, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, gameMode, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, enterMatchedGame, clearMatchState, setAutoAbortDeadline, setClockConfig, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
 
   const handleStartGame = (stakeInfo?: StakeInfo, timeControl?: number) => {
     if (!isConnected) {

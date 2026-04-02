@@ -4,6 +4,7 @@ import next from "next";
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { PrismaClient } from "@prisma/client";
+import { Chess } from "chess.js";
 import { createMatchmaking } from "./lib/matchmaking.mjs";
 import {
   assertMainnetInProduction,
@@ -34,6 +35,7 @@ import {
   getGameDisconnectGrace,
   deleteGameDisconnectGrace,
 } from "./lib/redis.mjs";
+import { calculateHeadToHeadGlicko } from "./lib/glicko-rating.mjs";
 import { isTimeoutDrawByInsufficientWinningMaterial } from "./lib/timeout-material.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -93,27 +95,6 @@ async function settleStakedGame(onChainGameId, winnerAddress, isDraw) {
   }
 }
 
-// ELO rating calculation
-const K_FACTOR = 32; // Standard K-factor for chess ratings
-
-function calculateElo(winnerRating, loserRating, isDraw = false) {
-  const expectedWinner = 1 / (1 + Math.pow(10, (loserRating - winnerRating) / 400));
-  const expectedLoser = 1 - expectedWinner;
-
-  if (isDraw) {
-    const newRatingA = Math.round(winnerRating + K_FACTOR * (0.5 - expectedWinner));
-    const newRatingB = Math.round(loserRating + K_FACTOR * (0.5 - expectedLoser));
-    return { newRatingA, newRatingB };
-  }
-
-  const newWinnerRating = Math.round(winnerRating + K_FACTOR * (1 - expectedWinner));
-  const newLoserRating = Math.round(loserRating + K_FACTOR * (0 - expectedLoser));
-  return {
-    newWinnerRating,
-    newLoserRating: Math.max(100, newLoserRating), // Floor at 100
-  };
-}
-
 function getRatingFieldForTimeControl(timeControl, isStaked = false) {
   if (isStaked) return "stakedRating";
 
@@ -142,17 +123,53 @@ function getPlayerRatingForTimeControl(player, timeControl, isStaked = false) {
     : 1200;
 }
 
-function buildRatingUpdate(ratingField, rating) {
+function getRatingDeviationField(ratingField) {
+  if (ratingField === "bulletRating") return "bulletRatingDeviation";
+  if (ratingField === "rapidRating") return "rapidRatingDeviation";
+  if (ratingField === "stakedRating") return "stakedRatingDeviation";
+  return "blitzRatingDeviation";
+}
+
+function getRatingLastGameAtField(ratingField) {
+  if (ratingField === "bulletRating") return "bulletRatingLastGameAt";
+  if (ratingField === "rapidRating") return "rapidRatingLastGameAt";
+  if (ratingField === "stakedRating") return "stakedRatingLastGameAt";
+  return "blitzRatingLastGameAt";
+}
+
+function getPlayerRatingDeviationForField(player, ratingField) {
+  if (!player) return 350;
+
+  const rdField = getRatingDeviationField(ratingField);
+  const rd = player[rdField];
+  return typeof rd === "number" && Number.isFinite(rd) ? rd : 350;
+}
+
+function getPlayerLastRatedAtForField(player, ratingField) {
+  if (!player) return null;
+
+  const lastGameAtField = getRatingLastGameAtField(ratingField);
+  const lastGameAt = player[lastGameAtField];
+  return lastGameAt instanceof Date ? lastGameAt : lastGameAt ? new Date(lastGameAt) : null;
+}
+
+function buildRatingUpdate(ratingField, rating, ratingDeviation, lastGameAt) {
+  const rdField = getRatingDeviationField(ratingField);
+  const lastGameAtField = getRatingLastGameAtField(ratingField);
+  const baseUpdate = {
+    [ratingField]: rating,
+    [rdField]: ratingDeviation,
+    [lastGameAtField]: lastGameAt,
+  };
+
   if (ratingField === "blitzRating") {
     return {
-      [ratingField]: rating,
+      ...baseUpdate,
       rating,
     };
   }
 
-  return {
-    [ratingField]: rating,
-  };
+  return baseUpdate;
 }
 
 async function updateRatings(game, isDraw = false) {
@@ -163,38 +180,35 @@ async function updateRatings(game, isDraw = false) {
   const ratingField = getRatingFieldForTimeControl(game.timeControl, isStakedGame);
   const whiteRating = getPlayerRatingForTimeControl(whitePlayer, game.timeControl, isStakedGame);
   const blackRating = getPlayerRatingForTimeControl(blackPlayer, game.timeControl, isStakedGame);
-
-  if (isDraw) {
-    const { newRatingA, newRatingB } = calculateElo(whiteRating, blackRating, true);
-    await prisma.user.update({
-      where: { id: whitePlayer.id },
-      data: buildRatingUpdate(ratingField, newRatingA),
-    });
-    await prisma.user.update({
-      where: { id: blackPlayer.id },
-      data: buildRatingUpdate(ratingField, newRatingB),
-    });
-    console.log(`[ELO] Draw (${ratingField}): ${whitePlayer.walletAddress} ${whiteRating} -> ${newRatingA}, ${blackPlayer.walletAddress} ${blackRating} -> ${newRatingB}`);
-    return { [whitePlayer.walletAddress]: newRatingA, [blackPlayer.walletAddress]: newRatingB };
-  }
-
-  const winnerId = game.winnerId;
-  const winner = winnerId === whitePlayer.id ? whitePlayer : blackPlayer;
-  const loser = winnerId === whitePlayer.id ? blackPlayer : whitePlayer;
-  const winnerRating = getPlayerRatingForTimeControl(winner, game.timeControl, isStakedGame);
-  const loserRating = getPlayerRatingForTimeControl(loser, game.timeControl, isStakedGame);
-  const { newWinnerRating, newLoserRating } = calculateElo(winnerRating, loserRating);
+  const whiteRd = getPlayerRatingDeviationForField(whitePlayer, ratingField);
+  const blackRd = getPlayerRatingDeviationForField(blackPlayer, ratingField);
+  const whiteLastGameAt = getPlayerLastRatedAtForField(whitePlayer, ratingField);
+  const blackLastGameAt = getPlayerLastRatedAtForField(blackPlayer, ratingField);
+  const now = new Date();
+  const whiteScore = isDraw ? 0.5 : game.winnerId === whitePlayer.id ? 1 : 0;
+  const { white, black } = calculateHeadToHeadGlicko({
+    whiteRating,
+    whiteRd,
+    whiteLastGameAt,
+    blackRating,
+    blackRd,
+    blackLastGameAt,
+    score: whiteScore,
+    now,
+  });
 
   await prisma.user.update({
-    where: { id: winner.id },
-    data: buildRatingUpdate(ratingField, newWinnerRating),
+    where: { id: whitePlayer.id },
+    data: buildRatingUpdate(ratingField, white.rating, white.rd, now),
   });
   await prisma.user.update({
-    where: { id: loser.id },
-    data: buildRatingUpdate(ratingField, newLoserRating),
+    where: { id: blackPlayer.id },
+    data: buildRatingUpdate(ratingField, black.rating, black.rd, now),
   });
-  console.log(`[ELO] Win (${ratingField}): ${winner.walletAddress} ${winnerRating} -> ${newWinnerRating}, Loss: ${loser.walletAddress} ${loserRating} -> ${newLoserRating}`);
-  return { [winner.walletAddress]: newWinnerRating, [loser.walletAddress]: newLoserRating };
+  console.log(
+    `[GLICKO] ${isDraw ? "Draw" : "Result"} (${ratingField}): ${whitePlayer.walletAddress} ${whiteRating} (${whiteRd.toFixed(1)}) -> ${white.rating} (${white.rd.toFixed(1)}), ${blackPlayer.walletAddress} ${blackRating} (${blackRd.toFixed(1)}) -> ${black.rating} (${black.rd.toFixed(1)})`,
+  );
+  return { [whitePlayer.walletAddress]: white.rating, [blackPlayer.walletAddress]: black.rating };
 }
 
 app.prepare().then(async () => {
@@ -253,12 +267,19 @@ app.prepare().then(async () => {
   const STAKE_CREATE_TIMEOUT_MS = 45000;
   const STAKE_CREATION_FAILURE_GRACE_MS = 8000;
   const STAKE_CONFIRM_TIMEOUT_MS = 45000;
+  const STAKED_LINK_CREATE_TIMEOUT_MS = 90000;
+  const STAKED_LINK_CONFIRM_TIMEOUT_MS = 90000;
   const REMATCH_REQUEST_TTL_MS = 120000;
   const REGULAR_GAME_DISCONNECT_GRACE_MS = 30000;
+  const BULLET_FIRST_MOVE_ABORT_MS = 15000;
+  const BLITZ_FIRST_MOVE_ABORT_MS = 20000;
+  const RAPID_FIRST_MOVE_ABORT_MS = 60000;
   const SPECTATOR_JOIN_WINDOW_MS = 10000;
   const SPECTATOR_JOIN_LIMIT = 12;
   const SPECTATOR_ROOM_PREFIX = "spectators:";
   const gameTimers = new Map(); // roomId -> { whiteTime, blackTime, turn, lastMoveTimestamp, timeoutHandle }
+  const firstMoveAbortTimers = new Map(); // roomId -> timeoutHandle
+  const stakedChallengeRooms = new Set(); // roomIds created from accepted staked challenge links
 
   // ─── Reconnection / Disconnect Grace Period (regular games) ───
   const userActiveGames = new Map(); // walletAddress -> { roomId, color, opponentWallet, opponentRating, playerRating }
@@ -298,6 +319,124 @@ app.prepare().then(async () => {
 
   function getPublicTimerSnapshot(timer) {
     return getTimerSnapshot(timer);
+  }
+
+  function parseMoveTimestamp(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    const parsed = Number.parseInt(String(value ?? ""), 10);
+    return Number.isFinite(parsed) ? parsed : Date.now();
+  }
+
+  function getPromotionPieceFromSan(san) {
+    const promotionMatch = String(san ?? "").match(/=([qrbn])/i);
+    return promotionMatch ? promotionMatch[1].toLowerCase() : undefined;
+  }
+
+  function buildReplayArtifactsFromMoveRecords(rawMoves) {
+    if (!Array.isArray(rawMoves) || rawMoves.length === 0) {
+      return {
+        pgn: null,
+        fen: INITIAL_BOARD_FEN,
+        startedAt: null,
+      };
+    }
+
+    const chess = new Chess();
+    let startedAt = null;
+
+    for (const rawMove of rawMoves) {
+      if (
+        typeof rawMove?.from !== "string" ||
+        typeof rawMove?.to !== "string"
+      ) {
+        break;
+      }
+
+      const timestamp = parseMoveTimestamp(rawMove?.timestamp);
+      if (startedAt == null) {
+        startedAt = new Date(timestamp);
+      }
+
+      const promotion = getPromotionPieceFromSan(rawMove?.san);
+      let appliedMove = null;
+
+      try {
+        appliedMove = chess.move({
+          from: rawMove.from,
+          to: rawMove.to,
+          ...(promotion ? { promotion } : {}),
+        });
+      } catch (_error) {
+        appliedMove = null;
+      }
+
+      if (!appliedMove && typeof rawMove?.san === "string") {
+        try {
+          appliedMove = chess.move(rawMove.san);
+        } catch (_error) {
+          appliedMove = null;
+        }
+      }
+
+      if (!appliedMove) {
+        break;
+      }
+    }
+
+    return {
+      pgn: chess.history().length > 0 ? chess.pgn() : null,
+      fen: chess.fen(),
+      startedAt,
+    };
+  }
+
+  async function buildFinishedGamePersistenceData(roomId, options = {}) {
+    const {
+      fallbackFen = INITIAL_BOARD_FEN,
+      endedAt = new Date(),
+    } = options;
+    const liveState = await getStoredGameState(roomId);
+    const replayArtifacts = buildReplayArtifactsFromMoveRecords(liveState?.moves);
+    const liveFen =
+      typeof liveState?.fen === "string" && liveState.fen
+        ? liveState.fen
+        : null;
+
+    return {
+      fen: liveFen ?? replayArtifacts.fen ?? fallbackFen,
+      pgn: replayArtifacts.pgn,
+      startedAt: replayArtifacts.startedAt ?? undefined,
+      endedAt,
+    };
+  }
+
+  async function persistReplayProgress(roomId, liveState, options = {}) {
+    const { fallbackFen = INITIAL_BOARD_FEN } = options;
+    const replayArtifacts = buildReplayArtifactsFromMoveRecords(liveState?.moves);
+    const liveFen =
+      typeof liveState?.fen === "string" && liveState.fen
+        ? liveState.fen
+        : null;
+
+    const data = {
+      fen: liveFen ?? replayArtifacts.fen ?? fallbackFen,
+      pgn: replayArtifacts.pgn,
+      ...(replayArtifacts.startedAt ? { startedAt: replayArtifacts.startedAt } : {}),
+    };
+
+    try {
+      await prisma.game.updateMany({
+        where: { id: roomId },
+        data,
+      });
+    } catch (error) {
+      console.error("[GAME] Failed to persist replay progress:", error);
+    }
+
+    return data;
   }
 
   function persistGameTimer(roomId, timer) {
@@ -405,6 +544,41 @@ app.prepare().then(async () => {
           `[TIMER] Restored live timer for room ${activeGame.id}: ${restoredTimer.whiteTime}s/${restoredTimer.blackTime}s`,
         );
       }
+    }
+  }
+
+  async function restorePendingFirstMoveAbortTimers() {
+    const activeGamesInDb = await prisma.game.findMany({
+      where: {
+        status: "IN_PROGRESS",
+        onChainGameId: null,
+        stakeToken: null,
+        wagerAmount: null,
+      },
+      select: {
+        id: true,
+        timeControl: true,
+        createdAt: true,
+      },
+    });
+
+    for (const activeGame of activeGamesInDb) {
+      const liveState = await getStoredGameState(activeGame.id);
+      const hasLiveMoves = Array.isArray(liveState?.moves) && liveState.moves.length > 0;
+      if (hasLiveMoves) continue;
+
+      const abortWindowMs = getFirstMoveAbortWindowMs(activeGame.timeControl);
+      const ageMs = Date.now() - new Date(activeGame.createdAt).getTime();
+
+      if (ageMs >= abortWindowMs) {
+        await abortRegularGameWithoutFirstMove(activeGame.id);
+        continue;
+      }
+
+      scheduleFirstMoveAbortTimer(activeGame.id, activeGame.timeControl, activeGame.createdAt);
+      console.log(
+        `[ABORT] Restored first-move abort window for room ${activeGame.id}`,
+      );
     }
   }
 
@@ -541,7 +715,16 @@ app.prepare().then(async () => {
     }
 
     if (winnerId) {
-      await prisma.game.update({ where: { id: roomId }, data: { status: "COMPLETED", winnerId } });
+      const finishedData = await buildFinishedGamePersistenceData(roomId);
+      await prisma.game.update({
+        where: { id: roomId },
+        data: {
+          status: "COMPLETED",
+          winnerId,
+          resultReason: "disconnection",
+          ...finishedData,
+        },
+      });
       const updatedGame = { ...freshGame, winnerId };
       const newRatings = await updateRatings(updatedGame);
 
@@ -751,10 +934,6 @@ app.prepare().then(async () => {
       return null;
     }
 
-    if (game.status !== "IN_PROGRESS" && !hasLiveMoves && !game.pgn) {
-      return null;
-    }
-
     const timeControl = normalizeQueueTimeControl(game.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL);
     const isStakedGame = !!game.onChainGameId || !!game.stakeToken || game.wagerAmount != null;
     const fen =
@@ -831,10 +1010,16 @@ app.prepare().then(async () => {
             .map((move) => sanitizePublicMoveRecord(move))
             .filter(Boolean)
         : [],
+      hasReplayMoves: Array.isArray(liveState?.moves) && liveState.moves.length > 0,
+      resultReason: game.resultReason ?? null,
       white: buildPublicPlayerInfo(game.whitePlayer, timeControl, isStakedGame),
       black: buildPublicPlayerInfo(game.blackPlayer, timeControl, isStakedGame),
       createdAt: game.createdAt.toISOString(),
-      endedAt: game.status === "IN_PROGRESS" ? null : game.updatedAt.toISOString(),
+      startedAt: game.startedAt?.toISOString() ?? null,
+      endedAt:
+        game.status === "IN_PROGRESS"
+          ? null
+          : game.endedAt?.toISOString() ?? game.updatedAt.toISOString(),
       isStaked: isStakedGame,
       stakeAmount: game.wagerAmount ?? null,
     };
@@ -880,8 +1065,52 @@ app.prepare().then(async () => {
     }
   }
 
+  function isStakedChallengeLinkRoom(roomId) {
+    return stakedChallengeRooms.has(roomId);
+  }
+
+  function rememberStakedChallengeRoom(roomId) {
+    if (typeof roomId === "string" && roomId) {
+      stakedChallengeRooms.add(roomId);
+    }
+  }
+
+  function forgetStakedChallengeRoom(roomId) {
+    stakedChallengeRooms.delete(roomId);
+  }
+
+  function getStakeCreationTimeoutMs(roomId) {
+    return isStakedChallengeLinkRoom(roomId)
+      ? STAKED_LINK_CREATE_TIMEOUT_MS
+      : STAKE_CREATE_TIMEOUT_MS;
+  }
+
+  function getStakeConfirmTimeoutMs(roomId) {
+    return isStakedChallengeLinkRoom(roomId)
+      ? STAKED_LINK_CONFIRM_TIMEOUT_MS
+      : STAKE_CONFIRM_TIMEOUT_MS;
+  }
+
+  async function hydrateStakedChallengeRoomCache() {
+    const acceptedLinkRooms = await prisma.openChallenge.findMany({
+      where: {
+        staked: true,
+        status: "ACCEPTED",
+        roomId: { not: null },
+      },
+      select: { roomId: true },
+    });
+
+    for (const challenge of acceptedLinkRooms) {
+      if (challenge.roomId) {
+        stakedChallengeRooms.add(challenge.roomId);
+      }
+    }
+  }
+
   function scheduleStakeCreationTimeout(roomId) {
     clearStakeCreationTimeout(roomId);
+    const timeoutMs = getStakeCreationTimeoutMs(roomId);
 
     // Abort staked setup if the creator never gets as far as creating the on-chain game.
     const creationTimeout = setTimeout(async () => {
@@ -890,14 +1119,17 @@ app.prepare().then(async () => {
         const waitingGame = await prisma.game.findUnique({ where: { id: roomId } });
         if (!waitingGame || waitingGame.status !== "WAITING" || waitingGame.onChainGameId) return;
 
-        await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+        await prisma.game.update({
+          where: { id: roomId },
+          data: { status: "ABORTED", endedAt: new Date() },
+        });
         io.to(roomId).emit("stakeCreationExpired", { roomId });
-        console.log(`[STAKE] ${Math.round(STAKE_CREATE_TIMEOUT_MS / 1000)}s pre-create timeout — room ${roomId} expired before on-chain game creation`);
+        console.log(`[STAKE] ${Math.round(timeoutMs / 1000)}s pre-create timeout — room ${roomId} expired before on-chain game creation`);
         cleanupRegularGame(roomId);
       } catch (e) {
         console.error("[STAKE] Pre-create timeout cleanup error:", e);
       }
-    }, STAKE_CREATE_TIMEOUT_MS);
+    }, timeoutMs);
 
     stakeCreationTimeouts.set(roomId, creationTimeout);
   }
@@ -931,7 +1163,10 @@ app.prepare().then(async () => {
         if (!blackPlayer) return;
 
         if (abortGame) {
-          await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+          await prisma.game.update({
+            where: { id: roomId },
+            data: { status: "ABORTED", endedAt: new Date() },
+          });
         }
 
         const blackSid = getSocketIdForWallet(blackPlayer.walletAddress);
@@ -954,6 +1189,8 @@ app.prepare().then(async () => {
   function cleanupRegularGame(roomId) {
     clearStakeCreationTimeout(roomId);
     clearStakeCreationFailureDelay(roomId);
+    clearFirstMoveAbortTimer(roomId);
+    forgetStakedChallengeRoom(roomId);
     gameStateStore.delete(roomId);
     deleteGameState(roomId).catch(() => { });
     deleteGameTimer(roomId).catch(() => { });
@@ -976,6 +1213,7 @@ app.prepare().then(async () => {
         onChainGameId: true,
         stakeToken: true,
         wagerAmount: true,
+        createdAt: true,
       },
     });
 
@@ -984,6 +1222,7 @@ app.prepare().then(async () => {
       onChainGameId: game?.onChainGameId ?? null,
       stakeToken: game?.stakeToken ?? null,
       stakeAmount: game?.wagerAmount != null ? String(game.wagerAmount) : null,
+      createdAt: game?.createdAt ?? null,
     };
   }
 
@@ -994,6 +1233,89 @@ app.prepare().then(async () => {
       chatMessages: [],
       timeControl,
     };
+  }
+
+  function getFirstMoveAbortWindowMs(timeControl) {
+    const normalizedTimeControl = normalizeQueueTimeControl(timeControl);
+    if (normalizedTimeControl <= 2) return BULLET_FIRST_MOVE_ABORT_MS;
+    if (normalizedTimeControl <= 5) return BLITZ_FIRST_MOVE_ABORT_MS;
+    return RAPID_FIRST_MOVE_ABORT_MS;
+  }
+
+  function getFirstMoveAbortDeadline(timeControl, createdAt = new Date()) {
+    const createdAtDate =
+      createdAt instanceof Date && !Number.isNaN(createdAt.getTime())
+        ? createdAt
+        : new Date(createdAt);
+    return createdAtDate.getTime() + getFirstMoveAbortWindowMs(timeControl);
+  }
+
+  function clearFirstMoveAbortTimer(roomId) {
+    const timeoutHandle = firstMoveAbortTimers.get(roomId);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      firstMoveAbortTimers.delete(roomId);
+    }
+  }
+
+  async function abortRegularGameWithoutFirstMove(roomId) {
+    clearFirstMoveAbortTimer(roomId);
+
+    try {
+      const game = await prisma.game.findUnique({
+        where: { id: roomId },
+        include: {
+          whitePlayer: true,
+          blackPlayer: true,
+        },
+      });
+      if (!game || game.status !== "IN_PROGRESS") return;
+      if (game.onChainGameId || game.stakeToken || game.wagerAmount != null) return;
+
+      const liveState = await getStoredGameState(roomId);
+      const hasLiveMoves = Array.isArray(liveState?.moves) && liveState.moves.length > 0;
+      if (hasLiveMoves) return;
+
+      await prisma.game.update({
+        where: { id: roomId },
+        data: { status: "ABORTED", endedAt: new Date() },
+      });
+
+      const payload = { roomId, reason: "no_first_move_timeout" };
+      io.to(roomId).emit("gameAborted", payload);
+
+      const players = [game.whitePlayer, game.blackPlayer].filter(Boolean);
+      for (const player of players) {
+        const sid = getSocketIdForWallet(player.walletAddress);
+        if (sid) {
+          io.to(sid).emit("gameAborted", payload);
+        }
+      }
+
+      cleanupRegularGame(roomId);
+      console.log(`[ABORT] Regular game ${roomId} aborted before first move`);
+    } catch (error) {
+      console.error(`[ABORT] Failed to auto-abort room ${roomId}:`, error);
+    }
+  }
+
+  function scheduleFirstMoveAbortTimer(roomId, timeControl, createdAt = new Date()) {
+    clearFirstMoveAbortTimer(roomId);
+
+    const abortWindowMs = getFirstMoveAbortWindowMs(timeControl);
+    const createdAtDate =
+      createdAt instanceof Date && !Number.isNaN(createdAt.getTime())
+        ? createdAt
+        : new Date(createdAt);
+    const remainingMs = Math.max(
+      0,
+      abortWindowMs - (Date.now() - createdAtDate.getTime()),
+    );
+
+    const timeoutHandle = setTimeout(() => {
+      abortRegularGameWithoutFirstMove(roomId);
+    }, remainingMs);
+    firstMoveAbortTimers.set(roomId, timeoutHandle);
   }
 
   function getRegularGameVersion(gameState) {
@@ -1178,6 +1500,90 @@ app.prepare().then(async () => {
       : userActiveGames.get(game.blackPlayer.walletAddress);
   }
 
+  async function findLiveGameForWallet(walletAddress, options = {}) {
+    const { tx = prisma, excludeRoomId = null, skipCache = false } = options;
+    if (!walletAddress) return null;
+
+    if (!skipCache && tx === prisma) {
+      const cached = await hydrateActiveGame(walletAddress);
+      if (cached?.roomId) {
+        const resolved = await resolveActiveGameForRoom(walletAddress, cached.roomId);
+        if (resolved) {
+          return {
+            roomId: resolved.roomId,
+            status: "IN_PROGRESS",
+            timeControl: resolved.timeControl ?? null,
+          };
+        }
+      }
+    }
+
+    const user = await tx.user.findFirst({
+      where: {
+        walletAddress: {
+          equals: String(walletAddress),
+          mode: "insensitive",
+        },
+      },
+      select: {
+        id: true,
+        walletAddress: true,
+      },
+    });
+
+    if (!user) {
+      return null;
+    }
+
+    const liveGame = await tx.game.findFirst({
+      where: {
+        status: { in: ["WAITING", "IN_PROGRESS"] },
+        ...(excludeRoomId ? { id: { not: excludeRoomId } } : {}),
+        OR: [
+          { whitePlayerId: user.id },
+          { blackPlayerId: user.id },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        status: true,
+        timeControl: true,
+      },
+    });
+
+    if (!liveGame) {
+      return null;
+    }
+
+    if (!skipCache && tx === prisma) {
+      const resolved = await resolveActiveGameForRoom(user.walletAddress, liveGame.id);
+      if (resolved) {
+        return {
+          roomId: resolved.roomId,
+          status: liveGame.status,
+          timeControl: resolved.timeControl ?? liveGame.timeControl ?? null,
+        };
+      }
+    }
+
+    return {
+      roomId: liveGame.id,
+      status: liveGame.status,
+      timeControl: liveGame.timeControl ?? null,
+    };
+  }
+
+  async function findBusyWallet(walletAddresses, options = {}) {
+    for (const walletAddress of walletAddresses) {
+      const liveGame = await findLiveGameForWallet(walletAddress, options);
+      if (liveGame) {
+        return { walletAddress, liveGame };
+      }
+    }
+    return null;
+  }
+
   async function getStoredGameState(roomId) {
     const inMemory = gameStateStore.get(roomId);
     if (inMemory) return inMemory;
@@ -1212,6 +1618,17 @@ app.prepare().then(async () => {
       };
     const stakeState = await getGameStakeState(activeGame.roomId);
     const fen = typeof gameState?.fen === "string" && gameState.fen ? gameState.fen : INITIAL_BOARD_FEN;
+    const autoAbortDeadline =
+      stakeState.status === "IN_PROGRESS" &&
+      !stakeState.onChainGameId &&
+      !stakeState.stakeToken &&
+      stakeState.stakeAmount == null &&
+      (!Array.isArray(gameState?.moves) || gameState.moves.length === 0)
+        ? getFirstMoveAbortDeadline(
+            activeGame.timeControl ?? DEFAULT_QUEUE_TIME_CONTROL,
+            stakeState.createdAt ?? new Date(),
+          )
+        : null;
 
     return {
       wasDisconnectGraceCleared: disconnectGraceUpdate.wasCleared,
@@ -1236,6 +1653,7 @@ app.prepare().then(async () => {
         onChainGameId: stakeState.onChainGameId,
         stakeToken: stakeState.stakeToken,
         stakeAmount: stakeState.stakeAmount,
+        autoAbortDeadline,
         disconnectGrace: disconnectGraceUpdate.graceState,
       },
     };
@@ -1320,9 +1738,18 @@ app.prepare().then(async () => {
             ? game.blackPlayerId
             : game.whitePlayerId;
 
+        const finishedData = await buildFinishedGamePersistenceData(roomId, {
+          fallbackFen: timeoutFen,
+        });
+        const reason = isDraw ? 'timeout_insufficient_material' : 'timeout';
         await prisma.game.update({
           where: { id: roomId },
-          data: { status: isDraw ? 'DRAW' : 'COMPLETED', winnerId },
+          data: {
+            status: isDraw ? 'DRAW' : 'COMPLETED',
+            winnerId,
+            resultReason: reason,
+            ...finishedData,
+          },
         });
 
         const updatedGame = { ...game, winnerId };
@@ -1345,7 +1772,6 @@ app.prepare().then(async () => {
         }
 
         const resolvedWinner = isDraw ? 'draw' : winnerColor;
-        const reason = isDraw ? 'timeout_insufficient_material' : 'timeout';
         const payload = { winner: resolvedWinner, reason, ratings: newRatings, ...(settlementFailed && { settlementFailed: true }) };
         io.to(roomId).emit('gameOver', payload);
         emitToSpectators(roomId, 'spectatorGameOver', {
@@ -2248,33 +2674,83 @@ app.prepare().then(async () => {
 
   // ─── Matchmaking (extracted module) ───
   async function createMatchedGame(p1, p2, stakeInfo) {
-    const whiteUser = await prisma.user.findUnique({ where: { walletAddress: p1.userId } });
-    const blackUser = await prisma.user.findUnique({ where: { walletAddress: p2.userId } });
-    if (!whiteUser || !blackUser) return;
-
     const isStaked = !!stakeInfo;
     const matchedTimeControl = isStaked
       ? normalizeStakedTimeControl(stakeInfo?.timeControl ?? p1.timeControl ?? p2.timeControl)
       : normalizeQueueTimeControl(stakeInfo?.timeControl ?? p1.timeControl ?? p2.timeControl);
-    const gameData = {
-      whitePlayerId: whiteUser.id,
-      blackPlayerId: blackUser.id,
-      fen: "start",
-      status: isStaked ? "WAITING" : "IN_PROGRESS",
-      timeControl: matchedTimeControl,
-    };
-    if (isStaked) {
-      gameData.stakeToken = stakeInfo.token;
-      gameData.wagerAmount = stakeInfo.effectiveAmount ?? (parseFloat(stakeInfo.stakeAmount) || 0);
+    const createdMatch = await prisma.$transaction(async (tx) => {
+      const conflictingPlayer = await findBusyWallet(
+        [p1.userId, p2.userId],
+        { tx, skipCache: true },
+      );
+      if (conflictingPlayer) {
+        return { conflictingPlayer };
+      }
+
+      const whiteUser = await tx.user.findFirst({
+        where: {
+          walletAddress: {
+            equals: String(p1.userId),
+            mode: "insensitive",
+          },
+        },
+      });
+      const blackUser = await tx.user.findFirst({
+        where: {
+          walletAddress: {
+            equals: String(p2.userId),
+            mode: "insensitive",
+          },
+        },
+      });
+      if (!whiteUser || !blackUser) {
+        return null;
+      }
+
+      const gameData = {
+        whitePlayerId: whiteUser.id,
+        blackPlayerId: blackUser.id,
+        fen: "start",
+        status: isStaked ? "WAITING" : "IN_PROGRESS",
+        timeControl: matchedTimeControl,
+      };
+      if (isStaked) {
+        gameData.stakeToken = stakeInfo.token;
+        gameData.wagerAmount = stakeInfo.effectiveAmount ?? (parseFloat(stakeInfo.stakeAmount) || 0);
+      }
+
+      const game = await tx.game.create({ data: gameData });
+      return { whiteUser, blackUser, game };
+    });
+
+    if (!createdMatch) return;
+
+    if (createdMatch.conflictingPlayer) {
+      const conflictingWallet = normalizeWalletAddress(createdMatch.conflictingPlayer.walletAddress);
+      const firstPlayerConflicted = normalizeWalletAddress(p1.userId) === conflictingWallet;
+      io.to(p1.socketId).emit("queueError", {
+        error: firstPlayerConflicted
+          ? "Finish your current game before starting another one"
+          : "Match unavailable. Search again.",
+      });
+      io.to(p2.socketId).emit("queueError", {
+        error: firstPlayerConflicted
+          ? "Match unavailable. Search again."
+          : "Finish your current game before starting another one",
+      });
+      return;
     }
 
-    const game = await prisma.game.create({ data: gameData });
+    const { whiteUser, blackUser, game } = createdMatch;
     const roomId = game.id;
 
     const matchPayload = {
       roomId,
       timeControl: matchedTimeControl,
       staked: isStaked,
+      autoAbortDeadline: !isStaked
+        ? getFirstMoveAbortDeadline(matchedTimeControl, game.createdAt)
+        : null,
       stakeToken: stakeInfo?.token ?? null,
       stakeAmount: isStaked
         ? (stakeInfo?.effectiveAmount != null ? String(stakeInfo.effectiveAmount) : stakeInfo?.stakeAmount ?? null)
@@ -2327,6 +2803,8 @@ app.prepare().then(async () => {
     if (isStaked) {
       // Staked games wait for the creator to create on-chain before the confirm window starts.
       scheduleStakeCreationTimeout(roomId);
+    } else {
+      scheduleFirstMoveAbortTimer(roomId, matchedTimeControl, game.createdAt);
     }
 
     console.log(`Match found and persisted: ${p1.userId} vs ${p2.userId} in ${roomId} (staked=${isStaked})`);
@@ -2342,6 +2820,7 @@ app.prepare().then(async () => {
     blackSocketId,
     timeControl,
     emitEvent = "matchFound",
+    timeControlNormalizer = normalizeQueueTimeControl,
   }) {
     const whiteSocket = whiteSocketId ? io.sockets.sockets.get(whiteSocketId) : null;
     const blackSocket = blackSocketId ? io.sockets.sockets.get(blackSocketId) : null;
@@ -2349,26 +2828,62 @@ app.prepare().then(async () => {
       throw new Error("Both players must be connected");
     }
 
-    const whiteUser = await prisma.user.findUnique({ where: { walletAddress: whiteWallet } });
-    const blackUser = await prisma.user.findUnique({ where: { walletAddress: blackWallet } });
-    if (!whiteUser || !blackUser) {
+    const matchedTimeControl = timeControlNormalizer(timeControl);
+    const createdGame = await prisma.$transaction(async (tx) => {
+      const conflictingPlayer = await findBusyWallet(
+        [whiteWallet, blackWallet],
+        { tx, skipCache: true },
+      );
+      if (conflictingPlayer) {
+        return { conflictingPlayer };
+      }
+
+      const whiteUser = await tx.user.findFirst({
+        where: {
+          walletAddress: {
+            equals: String(whiteWallet),
+            mode: "insensitive",
+          },
+        },
+      });
+      const blackUser = await tx.user.findFirst({
+        where: {
+          walletAddress: {
+            equals: String(blackWallet),
+            mode: "insensitive",
+          },
+        },
+      });
+      if (!whiteUser || !blackUser) {
+        return null;
+      }
+
+      const game = await tx.game.create({
+        data: {
+          whitePlayerId: whiteUser.id,
+          blackPlayerId: blackUser.id,
+          fen: "start",
+          status: "IN_PROGRESS",
+          timeControl: matchedTimeControl,
+        },
+      });
+
+      return { whiteUser, blackUser, game };
+    });
+
+    if (!createdGame) {
       throw new Error("Players not found");
     }
 
-    const matchedTimeControl = normalizeQueueTimeControl(timeControl);
+    if (createdGame.conflictingPlayer) {
+      throw new Error("One of the players is already in another game");
+    }
+
+    const { whiteUser, blackUser, game } = createdGame;
     const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, matchedTimeControl, false);
     const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, matchedTimeControl, false);
     const whitePlayerName = getWalletDisplayName(whiteUser.username, whiteUser.walletAddress);
     const blackPlayerName = getWalletDisplayName(blackUser.username, blackUser.walletAddress);
-    const game = await prisma.game.create({
-      data: {
-        whitePlayerId: whiteUser.id,
-        blackPlayerId: blackUser.id,
-        fen: "start",
-        status: "IN_PROGRESS",
-        timeControl: matchedTimeControl,
-      },
-    });
 
     const roomId = game.id;
 
@@ -2388,6 +2903,7 @@ app.prepare().then(async () => {
       playerRating: whitePlayerRating,
       opponentRating: blackPlayerRating,
       timeControl: matchedTimeControl,
+      autoAbortDeadline: getFirstMoveAbortDeadline(matchedTimeControl, game.createdAt),
     });
     io.to(blackSocket.id).emit(emitEvent, {
       roomId,
@@ -2398,6 +2914,7 @@ app.prepare().then(async () => {
       playerRating: blackPlayerRating,
       opponentRating: whitePlayerRating,
       timeControl: matchedTimeControl,
+      autoAbortDeadline: getFirstMoveAbortDeadline(matchedTimeControl, game.createdAt),
     });
 
     trackActiveRegularGame({
@@ -2410,6 +2927,7 @@ app.prepare().then(async () => {
       blackPlayerName,
       timeControl: matchedTimeControl,
     });
+    scheduleFirstMoveAbortTimer(roomId, matchedTimeControl, game.createdAt);
     return {
       roomId,
       timeControl: matchedTimeControl,
@@ -2461,9 +2979,18 @@ app.prepare().then(async () => {
       });
     }
 
-    socket.on("joinQueue", (data) => {
+    socket.on("joinQueue", async (data) => {
       const uid = typeof userId === "string" ? userId : null;
       if (!uid) return;
+
+      const activeGame = await findLiveGameForWallet(uid);
+      if (activeGame) {
+        removeFromAllQueues(socket.id);
+        socket.emit("queueError", {
+          error: "Finish your current game before starting another one",
+        });
+        return;
+      }
 
       const normalizedData = {
         ...data,
@@ -2526,20 +3053,24 @@ app.prepare().then(async () => {
         await prisma.game.update({ where: { id: roomId }, data: { onChainGameId: String(onChainGameId) } });
 
         // Start post-create timeout for Player 2 to confirm
+        const confirmTimeoutMs = getStakeConfirmTimeoutMs(roomId);
         const timeout = setTimeout(async () => {
           stakeTimeouts.delete(roomId);
           try {
             const g = await prisma.game.findUnique({ where: { id: roomId } });
             if (g && g.status === "WAITING") {
-              await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+              await prisma.game.update({
+                where: { id: roomId },
+                data: { status: "ABORTED", endedAt: new Date() },
+              });
               io.to(roomId).emit("stakeTimeout", { roomId, onChainGameId: g.onChainGameId });
-              console.log(`[STAKE] ${Math.round(STAKE_CONFIRM_TIMEOUT_MS / 1000)}s timeout — game ${roomId} aborted (Player 1 must cancel on-chain to reclaim)`);
+              console.log(`[STAKE] ${Math.round(confirmTimeoutMs / 1000)}s timeout — game ${roomId} aborted (Player 1 must cancel on-chain to reclaim)`);
               cleanupRegularGame(roomId);
             }
           } catch (e) {
             console.error("[STAKE] Timeout cleanup error:", e);
           }
-        }, STAKE_CONFIRM_TIMEOUT_MS);
+        }, confirmTimeoutMs);
         stakeTimeouts.set(roomId, timeout);
 
         // Forward onChainGameId to Player 2 (black) via stakeReady
@@ -2645,7 +3176,10 @@ app.prepare().then(async () => {
         }
 
         // Abort the game
-        await prisma.game.update({ where: { id: roomId }, data: { status: "ABORTED" } });
+        await prisma.game.update({
+          where: { id: roomId },
+          data: { status: "ABORTED", endedAt: new Date() },
+        });
 
         // Notify Player1 (white) so they can cancel on-chain and reclaim stake
         if (whitePlayer) {
@@ -2775,12 +3309,12 @@ app.prepare().then(async () => {
           return;
         }
 
-        if (await hydrateActiveGame(String(userId))) {
+        if (await findLiveGameForWallet(String(userId))) {
           socket.emit("rematchUnavailable", { roomId, error: "Finish your current game before requesting a rematch" });
           return;
         }
 
-        if (await hydrateActiveGame(opponentWallet)) {
+        if (await findLiveGameForWallet(opponentWallet)) {
           socket.emit("rematchUnavailable", { roomId, error: "Opponent is already in another game" });
           return;
         }
@@ -2900,7 +3434,7 @@ app.prepare().then(async () => {
         const whiteWallet = game.whitePlayer.walletAddress;
         const blackWallet = game.blackPlayer.walletAddress;
 
-        if (await hydrateActiveGame(existingRequest.requesterWallet) || await hydrateActiveGame(existingRequest.targetWallet)) {
+        if (await findLiveGameForWallet(existingRequest.requesterWallet) || await findLiveGameForWallet(existingRequest.targetWallet)) {
           const error = "One of the players already entered another game";
           socket.emit("rematchUnavailable", { roomId, error });
           if (requesterSocketId) {
@@ -2955,6 +3489,11 @@ app.prepare().then(async () => {
         setGameState(activeGame.roomId, gs).catch(() => { });
       }
       const resolvedFen = typeof fen === "string" ? fen : gs?.fen ?? INITIAL_BOARD_FEN;
+      if (gs && Array.isArray(gs.moves) && gs.moves.length > 0) {
+        await persistReplayProgress(activeGame.roomId, gs, {
+          fallbackFen: resolvedFen,
+        });
+      }
       const version = getRegularGameVersion(gs);
       const movePayload = {
         move,
@@ -2980,6 +3519,9 @@ app.prepare().then(async () => {
 
       // Start clocks only after the first move. After that, use the normal
       // authoritative move timing path.
+      if (Array.isArray(gs?.moves) && gs.moves.length === 1) {
+        clearFirstMoveAbortTimer(activeGame.roomId);
+      }
       const times =
         !gameTimers.has(activeGame.roomId) &&
         Array.isArray(gs?.moves) &&
@@ -3010,22 +3552,45 @@ app.prepare().then(async () => {
         socket.emit("challengeError", { error: "Unauthorized challenge request", toUserId });
         return;
       }
-      const targetSocketId = userSocketMap.get(toUserId);
+      const targetSocketId = getSocketIdForWallet(toUserId);
       const normalizedTimeControl = stakeEnabled
         ? normalizeStakedTimeControl(timeControl)
         : normalizeQueueTimeControl(timeControl);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit("challengeReceived", {
-          from: fromUserId,
-          stakeEnabled: !!stakeEnabled,
-          stakeToken: stakeToken ?? null,
-          stakeAmount: stakeAmount ?? null,
-          timeControl: normalizedTimeControl,
-        });
-        console.log(`Challenge sent from ${fromUserId} to ${toUserId}`);
-      } else {
-        socket.emit("challengeError", { error: "User is offline", toUserId });
-      }
+      Promise.all([
+        findLiveGameForWallet(String(userId)),
+        findLiveGameForWallet(toUserId),
+      ]).then(([senderActiveGame, targetActiveGame]) => {
+        if (senderActiveGame) {
+          socket.emit("challengeError", {
+            error: "Finish your current game before sending a challenge",
+            toUserId,
+          });
+          return;
+        }
+        if (targetActiveGame) {
+          socket.emit("challengeError", {
+            error: "That player is already in another game",
+            toUserId,
+          });
+          return;
+        }
+
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("challengeReceived", {
+            from: fromUserId,
+            stakeEnabled: !!stakeEnabled,
+            stakeToken: stakeToken ?? null,
+            stakeAmount: stakeAmount ?? null,
+            timeControl: normalizedTimeControl,
+          });
+          console.log(`Challenge sent from ${fromUserId} to ${toUserId}`);
+        } else {
+          socket.emit("challengeError", { error: "User is offline", toUserId });
+        }
+      }).catch((error) => {
+        console.error("[CHALLENGE] sendChallenge error:", error);
+        socket.emit("challengeError", { error: "Unable to send challenge", toUserId });
+      });
     });
 
     // ─── In-Game Chat ───
@@ -3097,6 +3662,7 @@ app.prepare().then(async () => {
     socket.on("acceptDraw", async ({ roomId }) => {
       const activeGame = await requireActivePlayerInRoom(socket, roomId, "acceptDraw");
       if (!activeGame) return;
+      const finishedData = await buildFinishedGamePersistenceData(activeGame.roomId);
 
       console.log(`[SERVER] Draw accepted in room ${activeGame.roomId} by socket ${socket.id}`);
       cleanupRegularGame(activeGame.roomId);
@@ -3109,7 +3675,12 @@ app.prepare().then(async () => {
 
         await prisma.game.update({
           where: { id: activeGame.roomId },
-          data: { status: "COMPLETED", winnerId: null },
+          data: {
+            status: "DRAW",
+            winnerId: null,
+            resultReason: "agreement",
+            ...finishedData,
+          },
         });
 
         // Update ELO ratings for draw
@@ -3186,6 +3757,7 @@ app.prepare().then(async () => {
     socket.on("resign", async ({ roomId }) => {
       const activeGame = await requireActivePlayerInRoom(socket, roomId, "resign");
       if (!activeGame) return;
+      const finishedData = await buildFinishedGamePersistenceData(activeGame.roomId);
 
       console.log(`[SERVER] Resignation received from ${userId} in room ${activeGame.roomId}`);
       console.log(`[SERVER] Socket ${socket.id} rooms:`, Array.from(socket.rooms));
@@ -3232,7 +3804,9 @@ app.prepare().then(async () => {
           where: { id: activeGame.roomId },
           data: {
             status: "COMPLETED",
-            winnerId: winnerId
+            winnerId: winnerId,
+            resultReason: "resignation",
+            ...finishedData,
           }
         });
 
@@ -3293,6 +3867,7 @@ app.prepare().then(async () => {
     socket.on("gameComplete", async ({ roomId, winner, reason }) => {
       const activeGame = await requireActivePlayerInRoom(socket, roomId, "gameComplete");
       if (!activeGame) return;
+      const finishedData = await buildFinishedGamePersistenceData(activeGame.roomId);
 
       console.log(`[SERVER] Game complete received for room ${activeGame.roomId}: winner=${winner}, reason=${reason}`);
       cleanupRegularGame(activeGame.roomId);
@@ -3318,16 +3893,18 @@ app.prepare().then(async () => {
         // For draw, winnerId remains null
 
         // Update game in database
+        const isDraw = winner === "draw" || reason === "stalemate";
         await prisma.game.update({
           where: { id: activeGame.roomId },
           data: {
-            status: "COMPLETED",
-            winnerId: winnerId
+            status: isDraw ? "DRAW" : "COMPLETED",
+            winnerId: winnerId,
+            resultReason: reason ?? (isDraw ? "draw" : "completed"),
+            ...finishedData,
           }
         });
 
         // Update ELO ratings
-        const isDraw = winner === "draw" || reason === "stalemate";
         const updatedGame = { ...game, winnerId };
         const newRatings = await updateRatings(updatedGame, isDraw);
 
@@ -3387,62 +3964,51 @@ app.prepare().then(async () => {
         return;
       }
 
-      const targetSocketId = userSocketMap.get(opponentId);
+      const targetSocketId = getSocketIdForWallet(opponentId);
+      if (!targetSocketId) {
+        socket.emit("challengeError", { error: "User is offline", toUserId: opponentId });
+        return;
+      }
 
-      if (targetSocketId) {
-        try {
-          const whiteUser = await prisma.user.findUnique({ where: { walletAddress: opponentId } });
-          const blackUser = await prisma.user.findUnique({ where: { walletAddress: myId } });
-          const challengeTimeControl = stakeEnabled
-            ? normalizeStakedTimeControl(timeControl)
-            : normalizeQueueTimeControl(timeControl ?? DEFAULT_GAME_TIME / 60);
+      const myActiveGame = await findLiveGameForWallet(String(userId));
+      if (myActiveGame) {
+        socket.emit("challengeError", {
+          error: "Finish your current game before accepting a challenge",
+          toUserId: opponentId,
+        });
+        return;
+      }
 
-          if (whiteUser && blackUser) {
-            const whitePlayerRating = getPlayerRatingForTimeControl(whiteUser, challengeTimeControl, !!stakeEnabled);
-            const blackPlayerRating = getPlayerRatingForTimeControl(blackUser, challengeTimeControl, !!stakeEnabled);
-            const whitePlayerName = getWalletDisplayName(whiteUser.username, whiteUser.walletAddress);
-            const blackPlayerName = getWalletDisplayName(blackUser.username, blackUser.walletAddress);
-            const game = await prisma.game.create({
-              data: {
-                whitePlayerId: whiteUser.id,
-                blackPlayerId: blackUser.id,
-                fen: "start",
-                status: "IN_PROGRESS",
-                timeControl: challengeTimeControl,
-              },
-            });
+      const opponentActiveGame = await findLiveGameForWallet(opponentId);
+      if (opponentActiveGame) {
+        socket.emit("challengeError", {
+          error: "That player is already in another game",
+          toUserId: opponentId,
+        });
+        return;
+      }
 
-            const roomId = game.id;
-            const s1 = socket;
-            const s2 = io.sockets.sockets.get(targetSocketId);
+      try {
+        const challengeTimeControl = stakeEnabled
+          ? normalizeStakedTimeControl(timeControl)
+          : normalizeQueueTimeControl(timeControl ?? DEFAULT_GAME_TIME / 60);
 
-            if (s1 && s2) {
-              s1.join(roomId);
-              s2.join(roomId);
-              activeGames.set(s1.id, roomId);
-              activeGames.set(s2.id, roomId);
-              removeFromAllQueues(s1.id);
-              removeFromAllQueues(s2.id);
+        await createDirectRegularGame({
+          whiteWallet: opponentId,
+          blackWallet: myId,
+          whiteSocketId: targetSocketId,
+          blackSocketId: socket.id,
+          timeControl: challengeTimeControl,
+          timeControlNormalizer: stakeEnabled
+            ? normalizeStakedTimeControl
+            : normalizeQueueTimeControl,
+        });
 
-              io.to(s1.id).emit("matchFound", { roomId, color: "black", opponent: opponentId, playerName: blackPlayerName, opponentName: whitePlayerName, playerRating: blackPlayerRating, opponentRating: whitePlayerRating, timeControl: challengeTimeControl });
-              io.to(s2.id).emit("matchFound", { roomId, color: "white", opponent: myId, playerName: whitePlayerName, opponentName: blackPlayerName, playerRating: whitePlayerRating, opponentRating: blackPlayerRating, timeControl: challengeTimeControl });
-              trackActiveRegularGame({
-                roomId,
-                whiteWallet: opponentId,
-                blackWallet: myId,
-                whitePlayerRating,
-                blackPlayerRating,
-                whitePlayerName,
-                blackPlayerName,
-                timeControl: challengeTimeControl,
-              });
-
-              console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId} in ${roomId}`);
-            }
-          }
-        } catch (error) {
-          console.error("Error creating challenge game in DB:", error);
-        }
+        console.log(`Challenge accepted and persisted: ${opponentId} vs ${myId}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to start challenge game";
+        console.error("Error creating challenge game in DB:", error);
+        socket.emit("challengeError", { error: message, toUserId: opponentId });
       }
     });
 
@@ -3465,7 +4031,7 @@ app.prepare().then(async () => {
           return;
         }
 
-        const joinerActiveGame = await hydrateActiveGame(String(userId));
+        const joinerActiveGame = await findLiveGameForWallet(String(userId));
         if (joinerActiveGame) {
           socket.emit("openChallengeError", {
             challengeId,
@@ -3474,7 +4040,7 @@ app.prepare().then(async () => {
           return;
         }
 
-        const creatorActiveGame = await hydrateActiveGame(challengeSnapshot.creator.walletAddress);
+        const creatorActiveGame = await findLiveGameForWallet(challengeSnapshot.creator.walletAddress);
         if (creatorActiveGame) {
           await prisma.openChallenge.updateMany({
             where: {
@@ -3580,6 +4146,13 @@ app.prepare().then(async () => {
           const timeControl = isStaked
             ? normalizeStakedTimeControl(challenge.timeControl)
             : normalizeQueueTimeControl(challenge.timeControl);
+          const conflictingPlayer = await findBusyWallet(
+            [challenge.creator.walletAddress, String(userId)],
+            { tx, skipCache: true },
+          );
+          if (conflictingPlayer) {
+            throw new Error("One of the players already entered another game");
+          }
           const game = await tx.game.create({
             data: {
               whitePlayerId: challenge.creator.id,
@@ -3684,6 +4257,7 @@ app.prepare().then(async () => {
           });
           if (isStakedChallenge) {
             // Apply the same pre-create expiry to staked share-link games.
+            rememberStakedChallengeRoom(acceptedRoomId);
             scheduleStakeCreationTimeout(acceptedRoomId);
           } 
 
@@ -4050,7 +4624,10 @@ app.prepare().then(async () => {
                   const timeout = stakeTimeouts.get(activeRoomId);
                   if (timeout) { clearTimeout(timeout); stakeTimeouts.delete(activeRoomId); }
 
-                  await prisma.game.update({ where: { id: activeRoomId }, data: { status: "ABORTED" } });
+                  await prisma.game.update({
+                    where: { id: activeRoomId },
+                    data: { status: "ABORTED", endedAt: new Date() },
+                  });
 
                   // Notify Player 1 (white) so they can cancel on-chain and reclaim stake
                   const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
@@ -4191,9 +4768,21 @@ app.prepare().then(async () => {
     }
 
     try {
+      await hydrateStakedChallengeRoomCache();
+    } catch (error) {
+      console.error("[STARTUP] Failed to hydrate staked challenge room cache:", error);
+    }
+
+    try {
       await restorePersistedGameTimers();
     } catch (error) {
       console.error("[STARTUP] Failed to restore live game timers:", error);
+    }
+
+    try {
+      await restorePendingFirstMoveAbortTimers();
+    } catch (error) {
+      console.error("[STARTUP] Failed to restore first-move abort windows:", error);
     }
 
     try {

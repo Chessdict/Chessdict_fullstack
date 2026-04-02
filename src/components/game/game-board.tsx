@@ -200,8 +200,10 @@ export function GameBoard() {
     // Opponent disconnect
     opponentDisconnectDeadline,
     selfDisconnectDeadline,
+    autoAbortDeadline,
     setOpponentDisconnectDeadline,
     setSelfDisconnectDeadline,
+    setAutoAbortDeadline,
     // On-chain state
     onChainGameId,
     stakeToken,
@@ -219,6 +221,7 @@ export function GameBoard() {
   const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
   const [selfDisconnectCountdown, setSelfDisconnectCountdown] = useState<number | null>(null);
+  const [autoAbortCountdown, setAutoAbortCountdown] = useState<number | null>(null);
   const [prizeClaimed, setPrizeClaimed] = useState(false);
   const [settlementFailed, setSettlementFailed] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
@@ -710,6 +713,25 @@ export function GameBoard() {
   }, [selfDisconnectDeadline, setSelfDisconnectDeadline]);
 
   useEffect(() => {
+    if (!autoAbortDeadline || isStakedMatch || status !== "in-progress" || storeMoves.length > 0) {
+      setAutoAbortCountdown(null);
+      return;
+    }
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((autoAbortDeadline - Date.now()) / 1000));
+      setAutoAbortCountdown(remaining);
+      if (remaining <= 0) {
+        setAutoAbortDeadline(null);
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [autoAbortDeadline, isStakedMatch, setAutoAbortDeadline, status, storeMoves.length]);
+
+  useEffect(() => {
     if (!isMultiplayer || status !== "in-progress" || gameOver) return;
 
     const interval = setInterval(() => {
@@ -953,6 +975,7 @@ export function GameBoard() {
       console.log("[CLIENT] gameOver event received:", { winner, reason, ratings, settlementFailed: settFailed });
       setGameOver(winner, reason);
       setStatus("finished");
+      setAutoAbortDeadline(null);
       setGameResultModalDismissed(false);
       playGameOver();
       if (settFailed) {
@@ -1057,6 +1080,7 @@ export function GameBoard() {
       blackTime: number;
       initialTime?: number;
       turn?: "w" | "b";
+      autoAbortDeadline?: number | null;
       disconnectGrace?: {
         deadline: number;
         disconnectedWallets: string[];
@@ -1081,6 +1105,7 @@ export function GameBoard() {
       setTimerSyncedAtMs(Date.now());
       setClockNowMs(Date.now());
       setRejoinData(data.fen, Array.isArray(data.moves) ? data.moves : []);
+      setAutoAbortDeadline(data.autoAbortDeadline ?? null);
       applyDisconnectGraceState(
         data.disconnectGrace?.deadline ?? null,
         data.disconnectGrace?.disconnectedWallets ?? [],
@@ -1161,7 +1186,7 @@ export function GameBoard() {
       socket.off('disconnectGraceState', handleDisconnectGraceState);
       socket.off('disconnectGraceCleared', handleDisconnectGraceCleared);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState, clearPendingSnapshotRequest, requestGameSnapshot, setRejoinData]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setAutoAbortDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState, clearPendingSnapshotRequest, requestGameSnapshot, setRejoinData]);
 
   useEffect(() => {
     if (!socket || !roomId || !canRequestRematch) return;
@@ -1683,10 +1708,15 @@ export function GameBoard() {
         </div>
       )}
 
-      {/* Main Board Container */}
-        <div className="relative left-1/2 aspect-square w-screen max-w-none -translate-x-1/2 sm:left-auto sm:w-full sm:translate-x-0">
-        <div className="relative h-full w-full overflow-hidden rounded-none bg-[#1a1816] sm:rounded-xl">
-          <Chessboard
+	      {/* Main Board Container */}
+	        <div className="relative left-1/2 aspect-square w-screen max-w-none -translate-x-1/2 sm:left-auto sm:w-full sm:translate-x-0">
+	        <div className="relative h-full w-full overflow-hidden rounded-none bg-[#1a1816] sm:rounded-xl">
+	          {autoAbortCountdown !== null && autoAbortCountdown > 0 && status === "in-progress" && storeMoves.length === 0 && !isStakedMatch ? (
+	            <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 rounded-full border border-amber-400/20 bg-black/45 px-2.5 py-0.5 text-[10px] font-medium tracking-wide text-amber-200 backdrop-blur-sm sm:top-3 sm:text-[11px]">
+	              Auto abort in {autoAbortCountdown}s
+	            </div>
+	          ) : null}
+	          <Chessboard
             key={`board-${boardKey}-${orientation}`}
             options={{
               id: chessboardId,

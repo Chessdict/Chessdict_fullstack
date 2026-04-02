@@ -38,6 +38,7 @@ type Profile = {
 type GameRecord = {
     id: string;
     result: "win" | "loss" | "draw";
+    resultReason: string | null;
     playedAs: "white" | "black";
     opponentAddress: string;
     opponentUsername?: string | null;
@@ -47,8 +48,17 @@ type GameRecord = {
     onChainGameId: string | null;
     stakeToken: string | null;
     wagerAmount: number | null;
+    startedAt: string | null;
+    endedAt: string | null;
     date: string;
 };
+
+function formatResultReason(reason: string | null) {
+    if (!reason) return null;
+    return reason
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 export default function ProfilePage() {
     const { address, isConnected } = useAccount();
@@ -467,9 +477,10 @@ export default function ProfilePage() {
                     ) : (
                         <div className="space-y-2">
                             {games.map((game) => (
-                                <div
+                                <Link
                                     key={game.id}
-                                    className="flex items-center justify-between rounded-xl border border-white/5 bg-white/[0.02] px-4 py-3"
+                                    href={`/watch/${game.id}`}
+                                    className="flex items-center justify-between rounded-xl border border-white/5 bg-white/[0.02] px-4 py-3 transition hover:border-white/15 hover:bg-white/[0.05]"
                                 >
                                     <div className="flex items-center gap-3">
                                         <span
@@ -504,6 +515,26 @@ export default function ProfilePage() {
                                             <p className="text-[11px] text-white/40">
                                                 {getTimeControlDisplay(game.timeControl)}
                                             </p>
+                                            {formatResultReason(game.resultReason) ? (
+                                                <p className="text-[11px] text-white/35">
+                                                    {game.result === "win"
+                                                        ? "Won by"
+                                                        : game.result === "loss"
+                                                            ? "Lost by"
+                                                            : "Draw by"}{" "}
+                                                    {formatResultReason(game.resultReason)}
+                                                </p>
+                                            ) : null}
+                                            {game.startedAt ? (
+                                                <p className="text-[11px] text-white/35">
+                                                    Started {new Date(game.startedAt).toLocaleString("en-US", {
+                                                        month: "short",
+                                                        day: "numeric",
+                                                        hour: "numeric",
+                                                        minute: "2-digit",
+                                                    })}
+                                                </p>
+                                            ) : null}
                                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${game.isStaked ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-white/5 text-white/45"}`}>
                                                     {game.isStaked ? "Staked" : "Casual"}
@@ -533,8 +564,11 @@ export default function ProfilePage() {
                                         <p className="mt-1 text-[11px] text-white/40">
                                             {new Date(game.date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
                                         </p>
+                                        <p className="mt-2 text-[11px] font-medium text-emerald-300/80">
+                                            Review
+                                        </p>
                                     </div>
-                                </div>
+                                </Link>
                             ))}
                         </div>
                     )}
