@@ -44,6 +44,7 @@ export type PublicPlayerProfile = {
 
 export type PublicGameActivitySummary = {
   liveNow: number;
+  livePlayers: number;
   finishedToday: number;
   startUtc: string;
   endUtc: string;
@@ -223,11 +224,15 @@ export async function getPublicPlayerProfile(identifier: string): Promise<Public
 export async function getPublicGameActivitySummary(): Promise<PublicGameActivitySummary> {
   const { startUtc, endUtc, label } = getWatTodayWindow();
 
-  const [liveNow, finishedToday] = await Promise.all([
-    prisma.game.count({
+  const [liveGames, finishedToday] = await Promise.all([
+    prisma.game.findMany({
       where: {
         status: "IN_PROGRESS",
         updatedAt: { gte: new Date(Date.now() - PUBLIC_LIVE_ACTIVITY_WINDOW_MS) },
+      },
+      select: {
+        whitePlayerId: true,
+        blackPlayerId: true,
       },
     }),
     prisma.game.count({
@@ -241,8 +246,15 @@ export async function getPublicGameActivitySummary(): Promise<PublicGameActivity
     }),
   ]);
 
+  const livePlayers = new Set<number>();
+  for (const game of liveGames) {
+    if (typeof game.whitePlayerId === "number") livePlayers.add(game.whitePlayerId);
+    if (typeof game.blackPlayerId === "number") livePlayers.add(game.blackPlayerId);
+  }
+
   return {
-    liveNow,
+    liveNow: liveGames.length,
+    livePlayers: livePlayers.size,
     finishedToday,
     startUtc: startUtc.toISOString(),
     endUtc: endUtc.toISOString(),

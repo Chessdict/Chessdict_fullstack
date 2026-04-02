@@ -30,8 +30,9 @@ export default async function WatchIndexPage() {
 
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.22em] text-white/35">Live Now</p>
-              <p className="mt-2 text-2xl font-semibold text-white">{activity.liveNow}</p>
+              <p className="text-xs uppercase tracking-[0.22em] text-white/35">Online In Games</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{activity.livePlayers}</p>
+              <p className="mt-1 text-xs text-white/40">{activity.liveNow} live game{activity.liveNow === 1 ? "" : "s"}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
               <p className="text-xs uppercase tracking-[0.22em] text-white/35">Finished Today</p>

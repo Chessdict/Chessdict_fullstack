@@ -30,6 +30,8 @@ import {
 import { canSetPremove, getPremoveTargets, type Premove } from "@/lib/premove";
 import { getMaterialBalance, getSideMaterialDisplay } from "@/lib/material-balance";
 import { getRatingFieldForTimeControl } from "@/lib/player-ratings";
+import { useBoardTheme } from "@/hooks/useBoardTheme";
+import { useBoardPieces } from "@/hooks/useBoardPieces";
 import { SignalStrength } from "./signal-strength";
 import { X } from "lucide-react";
 import Image from "next/image";
@@ -228,6 +230,8 @@ export function GameBoard() {
   const router = useRouter();
   const { address } = useAccount();
   const { socket } = useSocket(address ?? undefined);
+  const { boardTheme } = useBoardTheme();
+  const { useCustomPiecesOnMobile } = useBoardPieces();
   const { playMoveSound, playGameOver, playLowTime } = useChessSounds();
   const { claimPrizeSingle, isLoading: isClaimLoading } = useChessdict();
 
@@ -271,7 +275,7 @@ export function GameBoard() {
     status === "finished" &&
     isMultiplayer &&
     !isStakedMatch;
-  const boardPieces = isMobileViewport ? defaultPieces : customPieces;
+  const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
 
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
@@ -612,6 +616,59 @@ export function GameBoard() {
     }
   }, [status, rejoinFen, rejoinMoves, game, syncState, clearMoves, addMove, clearRejoinData, clearSelection, resetBoardInteraction, clearDragInteraction]);
 
+  // If the board component remounts mid-game before a fresh rejoin snapshot lands,
+  // rebuild the internal chess instance from the store move history so the board
+  // does not flash back to the starting position.
+  useEffect(() => {
+    if (status !== "in-progress" || rejoinFen || storeMoves.length === 0) {
+      return;
+    }
+
+    if (game.history().length > 0) {
+      return;
+    }
+
+    try {
+      game.reset();
+      for (const move of storeMoves) {
+        const applied =
+          typeof move.san === "string" && move.san
+            ? game.move(move.san)
+            : game.move({ from: move.from, to: move.to });
+        if (!applied) {
+          throw new Error(`Failed to replay move ${move.san ?? `${move.from}-${move.to}`}`);
+        }
+      }
+
+      syncState();
+      setLastMoveSquares({});
+      const lastStoreMove = storeMoves[storeMoves.length - 1];
+      if (lastStoreMove) {
+        setLastMoveSquares({
+          [lastStoreMove.from]: { background: "rgba(255, 255, 0, 0.3)" },
+          [lastStoreMove.to]: { background: "rgba(255, 255, 0, 0.4)" },
+        });
+      }
+      setTimerTurn(normalizeClockTurn(game.turn()));
+      clearSelection();
+      clearDragInteraction();
+      resetBoardInteraction();
+    } catch (error) {
+      console.error("[CLIENT] Failed to rebuild board from move history:", error);
+      requestGameSnapshot("rebuild-from-store-failed");
+    }
+  }, [
+    clearDragInteraction,
+    clearSelection,
+    game,
+    rejoinFen,
+    requestGameSnapshot,
+    resetBoardInteraction,
+    status,
+    storeMoves,
+    syncState,
+  ]);
+
   useEffect(() => {
     if (status !== "in-progress" || gameOver) {
       clearSelection();
@@ -666,7 +723,7 @@ export function GameBoard() {
     let displayedWhiteTime = whiteTime;
     let displayedBlackTime = blackTime;
 
-    if (isMultiplayer && status === "in-progress" && !gameOver) {
+    if (isMultiplayer && status === "in-progress" && !gameOver && storeMoves.length > 0) {
       const elapsedSeconds = Math.max(0, (clockNowMs - timerSyncedAtMs) / 1000);
 
       if (timerTurn === "w") {
@@ -680,7 +737,7 @@ export function GameBoard() {
       whiteTime: displayedWhiteTime,
       blackTime: displayedBlackTime,
     };
-  }, [blackTime, clockNowMs, gameOver, isMultiplayer, status, timerSyncedAtMs, timerTurn, whiteTime]);
+  }, [blackTime, clockNowMs, gameOver, isMultiplayer, status, storeMoves.length, timerSyncedAtMs, timerTurn, whiteTime]);
 
   useEffect(() => {
     if (!isMultiplayer || status !== "in-progress" || gameOver) return;
@@ -814,23 +871,6 @@ export function GameBoard() {
       playGameOver();
     }
   }, [fen, status, game, gameMode, socket, roomId, setGameOver, setStatus, playGameOver]);
-
-  // Join room when entering multiplayer game
-  useEffect(() => {
-    const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
-    if (!socket || !isMultiplayer || !roomId) return;
-
-    const joinRoom = () => {
-      socket.emit("joinRoom", { roomId });
-    };
-
-    joinRoom();
-    socket.on("connect", joinRoom);
-
-    return () => {
-      socket.off("connect", joinRoom);
-    };
-  }, [socket, gameMode, roomId]);
 
   // Network Logic - Listen for opponent moves
   useEffect(() => {
@@ -1662,8 +1702,8 @@ export function GameBoard() {
                 !isViewingHistory &&
                 !promotionSelection,
               boardStyle: { borderRadius: isMobileViewport ? "0px" : "4px" },
-              darkSquareStyle: { backgroundColor: "#B58863" },
-              lightSquareStyle: { backgroundColor: "#F0D9B5" },
+              darkSquareStyle: boardTheme.darkSquareStyle,
+              lightSquareStyle: boardTheme.lightSquareStyle,
               squareStyles: { ...lastMoveSquares, ...checkSquare, ...premoveSquares, ...moveSquares, ...checkFlash },
               pieces: boardPieces,
               onPieceDrag: () => {
@@ -1690,7 +1730,7 @@ export function GameBoard() {
               to={queuedPremove.to}
               orientation={orientation}
               pieceCode={queuedPremovePieceCode}
-              useDefaultPieces={isMobileViewport}
+              useDefaultPieces={isMobileViewport && !useCustomPiecesOnMobile}
             />
           ) : null}
 

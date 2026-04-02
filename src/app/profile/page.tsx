@@ -7,6 +7,10 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { getUserProfile, getGameHistory, updateEmail, updateUsername } from "@/app/actions";
 import { Copy, Check, Trophy, Target, Minus, TrendingUp, ChevronLeft, ChevronRight, Share2 } from "lucide-react";
+import { BOARD_THEMES, type BoardThemePreference } from "@/lib/board-theme";
+import { MOBILE_PIECES_OPTIONS, type MobilePiecesPreference } from "@/lib/board-pieces";
+import { useBoardTheme } from "@/hooks/useBoardTheme";
+import { useBoardPieces } from "@/hooks/useBoardPieces";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
 import { formatWalletAddress, getDisplayName } from "@/lib/utils";
@@ -61,6 +65,8 @@ export default function ProfilePage() {
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const [gamesLoading, setGamesLoading] = useState(false);
+    const { boardThemePreference, setBoardTheme } = useBoardTheme();
+    const { mobilePiecesPreference, setMobilePiecesPreference } = useBoardPieces();
 
     function formatStakeAmount(amount: number) {
         const formatted = new Intl.NumberFormat("en-US", {
@@ -369,6 +375,74 @@ export default function ProfilePage() {
                         <RatingCard label="Blitz" value={profile.ratings.blitz} accent="text-amber-300" />
                         <RatingCard label="Rapid" value={profile.ratings.rapid} accent="text-emerald-300" />
                         <RatingCard label="Staked" value={profile.ratings.staked} accent="text-violet-300" />
+                    </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-sm sm:p-6">
+                    <p className="text-xs uppercase tracking-widest text-white/40">Board Theme</p>
+                    <p className="mt-1 text-sm text-white/55">Pick the board colors you want to use on this device.</p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        {(Object.values(BOARD_THEMES) as Array<(typeof BOARD_THEMES)[BoardThemePreference]>).map((theme) => {
+                            const selected = boardThemePreference === theme.id;
+                            return (
+                                <button
+                                    key={theme.id}
+                                    type="button"
+                                    onClick={() => setBoardTheme(theme.id)}
+                                    className={`rounded-2xl border p-3 text-left transition ${selected ? "border-emerald-400/40 bg-emerald-400/10" : "border-white/10 bg-black/20 hover:bg-white/5"}`}
+                                >
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-white">{theme.label}</p>
+                                            <p className="text-[11px] text-white/40">{selected ? "Selected" : "Tap to use"}</p>
+                                        </div>
+                                        {selected ? <Check className="h-4 w-4 text-emerald-300" /> : null}
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-4 overflow-hidden rounded-xl border border-white/10">
+                                        {Array.from({ length: 8 }, (_, index) => {
+                                            const isLight = (Math.floor(index / 4) + index) % 2 === 0;
+                                            return (
+                                                <div
+                                                    key={`${theme.id}-${index}`}
+                                                    className="aspect-square"
+                                                    style={{
+                                                        backgroundColor: isLight
+                                                            ? theme.lightSquareStyle.backgroundColor
+                                                            : theme.darkSquareStyle.backgroundColor,
+                                                    }}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-sm sm:p-6">
+                    <p className="text-xs uppercase tracking-widest text-white/40">Mobile Pieces</p>
+                    <p className="mt-1 text-sm text-white/55">Desktop keeps custom pieces. On mobile, the default stays the current stable set unless you switch it.</p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        {(Object.values(MOBILE_PIECES_OPTIONS) as Array<(typeof MOBILE_PIECES_OPTIONS)[MobilePiecesPreference]>).map((option) => {
+                            const selected = mobilePiecesPreference === option.id;
+                            return (
+                                <button
+                                    key={option.id}
+                                    type="button"
+                                    onClick={() => setMobilePiecesPreference(option.id)}
+                                    className={`rounded-2xl border p-3 text-left transition ${selected ? "border-emerald-400/40 bg-emerald-400/10" : "border-white/10 bg-black/20 hover:bg-white/5"}`}
+                                >
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-white">{option.label}</p>
+                                            <p className="text-[11px] text-white/40">{option.description}</p>
+                                        </div>
+                                        {selected ? <Check className="h-4 w-4 text-emerald-300" /> : null}
+                                    </div>
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
 

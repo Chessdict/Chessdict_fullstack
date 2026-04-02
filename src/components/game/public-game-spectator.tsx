@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Chessboard, defaultPieces } from "react-chessboard";
 import { useAccount } from "wagmi";
+import { useBoardTheme } from "@/hooks/useBoardTheme";
+import { useBoardPieces } from "@/hooks/useBoardPieces";
 import { useSocket } from "@/hooks/useSocket";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
@@ -153,6 +155,7 @@ export function PublicGameSpectator({
   initialGame,
   mode = "full",
 }: PublicGameSpectatorProps) {
+  const { boardTheme } = useBoardTheme();
   const [game, setGame] = useState<SpectatorState>(() =>
     normalizeSnapshot(initialGame),
   );
@@ -161,8 +164,9 @@ export function PublicGameSpectator({
   const [isWallDismissed, setIsWallDismissed] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const { address } = useAccount();
+  const { useCustomPiecesOnMobile } = useBoardPieces();
   const { socket, isConnected } = useSocket(address ?? undefined);
-  const boardPieces = isMobileViewport ? defaultPieces : customPieces;
+  const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
 
   useEffect(() => {
     setGame(normalizeSnapshot(initialGame));
@@ -280,7 +284,7 @@ export function PublicGameSpectator({
     let whiteTime = game.whiteTime;
     let blackTime = game.blackTime;
 
-    if (game.status === "IN_PROGRESS") {
+    if (game.status === "IN_PROGRESS" && game.moves.length > 0) {
       const elapsedSeconds = Math.max(
         0,
         Math.floor((now - game.syncedAtMs) / 1000),
@@ -293,7 +297,7 @@ export function PublicGameSpectator({
     }
 
     return { whiteTime, blackTime };
-  }, [game.blackTime, game.status, game.syncedAtMs, game.turn, game.whiteTime, now]);
+  }, [game.blackTime, game.moves.length, game.status, game.syncedAtMs, game.turn, game.whiteTime, now]);
 
   const lastMoveStyles = useMemo(() => {
     const lastMove = game.moves[game.moves.length - 1];
@@ -400,8 +404,8 @@ export function PublicGameSpectator({
               animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
               allowDragging: false,
               boardStyle: { borderRadius: "14px" },
-              darkSquareStyle: { backgroundColor: "#B58863" },
-              lightSquareStyle: { backgroundColor: "#F0D9B5" },
+              darkSquareStyle: boardTheme.darkSquareStyle,
+              lightSquareStyle: boardTheme.lightSquareStyle,
               squareStyles: lastMoveStyles,
               pieces: boardPieces,
             }}
@@ -496,8 +500,8 @@ export function PublicGameSpectator({
                 animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
                 allowDragging: false,
                 boardStyle: { borderRadius: "16px" },
-                darkSquareStyle: { backgroundColor: "#B58863" },
-                lightSquareStyle: { backgroundColor: "#F0D9B5" },
+                darkSquareStyle: boardTheme.darkSquareStyle,
+                lightSquareStyle: boardTheme.lightSquareStyle,
                 squareStyles: lastMoveStyles,
                 pieces: boardPieces,
               }}

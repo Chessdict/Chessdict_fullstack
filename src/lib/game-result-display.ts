@@ -36,6 +36,8 @@ export function formatGameReason(
       return didPlayerWin ? "Opponent Resigned" : "You Resigned";
     case "timeout":
       return didPlayerWin ? "Opponent Ran Out of Time" : "You Ran Out of Time";
+    case "timeout_insufficient_material":
+      return "Draw by Timeout vs Insufficient Material";
     case "draw":
       return "Draw by Agreement";
     case "stalemate":

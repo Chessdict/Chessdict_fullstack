@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, use, useCallback } from "react";
+import { useEffect, use, useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GameBoard } from "@/components/game/game-board";
 import { GameInfoPanel } from "@/components/game/game-info-panel";
@@ -53,6 +53,12 @@ export default function GamePage({
   const setClockConfig = useGameStore((s) => s.setClockConfig);
   const setOpponentDisconnectDeadline = useGameStore((s) => s.setOpponentDisconnectDeadline);
   const setSelfDisconnectDeadline = useGameStore((s) => s.setSelfDisconnectDeadline);
+  const initialRejoinRequestedRef = useRef(false);
+  const roomAccessRecoveryRef = useRef<number>(0);
+  const [initialRoomStateResolved, setInitialRoomStateResolved] = useState(
+    roomId === gameId && status === "in-progress",
+  );
+  const isStoreReadyForCurrentGame = roomId === gameId && status === "in-progress";
 
   const enterMatchedGame = useCallback((data: {
     roomId: string;
@@ -117,6 +123,17 @@ export default function GamePage({
         .catch(console.error);
     }
   }, [isConnected, address, setPlayer]);
+
+  useEffect(() => {
+    initialRejoinRequestedRef.current = false;
+    setInitialRoomStateResolved(roomId === gameId && status === "in-progress");
+  }, [gameId]);
+
+  useEffect(() => {
+    if (isStoreReadyForCurrentGame) {
+      setInitialRoomStateResolved(true);
+    }
+  }, [isStoreReadyForCurrentGame]);
 
   // Effect 1: Always listen for gameRejoined (survives socket reconnections)
   // This listener persists because it only depends on socket & gameId (not isSocketConnected)
@@ -194,6 +211,7 @@ export default function GamePage({
       setOpponentConnected(!opponentDisconnected);
       if (!gameMode) setGameMode("online");
       setStatus("in-progress");
+      setInitialRoomStateResolved(true);
     };
 
     socket.on("matchFound", handleMatchFound);
@@ -204,31 +222,46 @@ export default function GamePage({
     };
   }, [socket, gameId, address, gameMode, roomId, status, clearMatchState, enterMatchedGame, router, setRoomId, setPlayerColor, setOpponent, setPlayer, setWhiteTime, setBlackTime, setRejoinData, setRejoinChatMessages, setGameMode, setOnChainGameId, setStakeAmountRaw, setStakeToken, setStatus, setClockConfig, setOpponentConnected, setOpponentDisconnectDeadline, setSelfDisconnectDeadline]);
 
-  // Effect 2: Emit rejoinGame on initial page load AND on every socket reconnection
-  // This ensures we always get fresh game state + chat even after tab close/reopen
+  // Request one authoritative rejoin for this page load.
+  // Subsequent socket reconnects are handled by the server auto-rejoin path.
   useEffect(() => {
     if (!socket || !gameId) return;
 
     const emitRejoin = () => {
+      if (initialRejoinRequestedRef.current) return;
+      initialRejoinRequestedRef.current = true;
       socket.emit("rejoinGame", { roomId: gameId });
     };
 
     const handleRejoinError = () => {
+      setInitialRoomStateResolved(true);
       toast.error("No active game found. Redirecting...");
       router.push("/play");
     };
 
-    socket.on("rejoinError", handleRejoinError);
+    const handleRoomAccessDenied = ({ event }: { event?: string }) => {
+      const now = Date.now();
+      if (now - roomAccessRecoveryRef.current < 1500) return;
+      roomAccessRecoveryRef.current = now;
 
-    // Emit immediately if connected, AND on every future reconnect
+      if (event === "movePiece" || event === "requestGameSnapshot" || event === "joinRoom") {
+        socket.emit("rejoinGame", { roomId: gameId });
+      }
+    };
+
+    socket.on("rejoinError", handleRejoinError);
+    socket.on("roomAccessDenied", handleRoomAccessDenied);
+
     if (socket.connected) {
       emitRejoin();
+    } else {
+      socket.once("connect", emitRejoin);
     }
-    socket.on("connect", emitRejoin);
 
     return () => {
       socket.off("connect", emitRejoin);
       socket.off("rejoinError", handleRejoinError);
+      socket.off("roomAccessDenied", handleRoomAccessDenied);
     };
   }, [socket, gameId, router]);
 
@@ -237,15 +270,27 @@ export default function GamePage({
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
 
       <div className="container relative mx-auto flex flex-1 flex-col items-center gap-2 px-0 pb-3 sm:px-6 sm:gap-12 sm:pb-6 lg:flex-row lg:items-start lg:justify-center">
-        {/* Chess Board */}
-        <div className="w-full max-w-none flex-none px-0 sm:max-w-[760px] sm:px-0">
-          <GameBoard />
-        </div>
+        {initialRoomStateResolved ? (
+          <>
+            {/* Chess Board */}
+            <div className="w-full max-w-none flex-none px-0 sm:max-w-[760px] sm:px-0">
+              <GameBoard />
+            </div>
 
-        {/* Game Info Panel */}
-        <div className="w-full max-w-none flex-none px-0 sm:max-w-sm sm:px-0">
-          <GameInfoPanel isSocketConnected={isSocketConnected} />
-        </div>
+            {/* Game Info Panel */}
+            <div className="w-full max-w-none flex-none px-0 sm:max-w-sm sm:px-0">
+              <GameInfoPanel isSocketConnected={isSocketConnected} />
+            </div>
+          </>
+        ) : (
+          <div className="flex w-full max-w-3xl flex-col items-center justify-center gap-4 rounded-3xl border border-white/10 bg-white/[0.03] px-6 py-20 text-center backdrop-blur-sm">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+            <div>
+              <p className="text-sm font-medium text-white/80">Restoring game</p>
+              <p className="mt-1 text-sm text-white/45">Syncing the latest board and clocks.</p>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
