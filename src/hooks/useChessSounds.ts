@@ -19,6 +19,8 @@ const SOUND_PATHS = {
 const decodedAssetCache = new Map<string, AudioBuffer | null>();
 const decodedAssetPromiseCache = new Map<string, Promise<AudioBuffer | null>>();
 let hasPrimedLowLatencyAssets = false;
+const MASTER_OUTPUT_GAIN = 1.18;
+const FALLBACK_AUDIO_GAIN = 1.12;
 
 function createNoiseBuffer(
   ctx: AudioContext,
@@ -38,6 +40,8 @@ function createNoiseBuffer(
 
 export function useChessSounds() {
   const ctxRef = useRef<AudioContext | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
   const audioCacheRef = useRef(new Map<string, HTMLAudioElement>());
   const failedAssetRef = useRef(new Set<string>());
 
@@ -50,6 +54,28 @@ export function useChessSounds() {
     }
     return ctxRef.current;
   }, []);
+
+  const getOutputNode = useCallback(() => {
+    const ctx = getCtx();
+
+    if (!masterGainRef.current || !compressorRef.current) {
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -18;
+      compressor.knee.value = 12;
+      compressor.ratio.value = 3;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.2;
+
+      const masterGain = ctx.createGain();
+      masterGain.gain.value = MASTER_OUTPUT_GAIN;
+
+      compressor.connect(masterGain).connect(ctx.destination);
+      compressorRef.current = compressor;
+      masterGainRef.current = masterGain;
+    }
+
+    return compressorRef.current ?? ctx.destination;
+  }, [getCtx]);
 
   const loadDecodedAsset = useCallback(async (ctx: AudioContext, src: string) => {
     if (decodedAssetCache.has(src)) {
@@ -97,10 +123,10 @@ export function useChessSounds() {
     const gain = ctx.createGain();
     gain.gain.value = volume;
 
-    source.connect(gain).connect(ctx.destination);
+    source.connect(gain).connect(getOutputNode());
     source.start();
     return true;
-  }, [getCtx, loadDecodedAsset]);
+  }, [getCtx, getOutputNode, loadDecodedAsset]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -147,7 +173,7 @@ export function useChessSounds() {
       audioCacheRef.current.set(src, audio);
     }
 
-    audio.volume = volume;
+    audio.volume = Math.min(1, volume * FALLBACK_AUDIO_GAIN);
     audio.currentTime = 0;
 
     const playPromise = audio.play();
@@ -181,10 +207,10 @@ export function useChessSounds() {
     gain.gain.setValueAtTime(0.3, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
-    source.connect(bandpass).connect(gain).connect(ctx.destination);
+    source.connect(bandpass).connect(gain).connect(getOutputNode());
     source.start(t);
     source.stop(t + duration);
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playOpponentMove = useCallback(() => {
     if (playAsset(SOUND_PATHS.opponentMove, 0.82)) return;
@@ -206,7 +232,7 @@ export function useChessSounds() {
     oscGain.gain.setValueAtTime(0.35, t);
     oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
 
-    osc.connect(oscGain).connect(ctx.destination);
+    osc.connect(oscGain).connect(getOutputNode());
     osc.start(t);
     osc.stop(t + 0.15);
 
@@ -222,10 +248,10 @@ export function useChessSounds() {
     noiseGain.gain.setValueAtTime(0.25, t);
     noiseGain.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
-    source.connect(lp).connect(noiseGain).connect(ctx.destination);
+    source.connect(lp).connect(noiseGain).connect(getOutputNode());
     source.start(t);
     source.stop(t + duration);
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playCheck = useCallback(() => {
     if (playAsset(SOUND_PATHS.check, 0.88)) return;
@@ -244,10 +270,10 @@ export function useChessSounds() {
     gain.gain.linearRampToValueAtTime(0.25, t + 0.09);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
 
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(getOutputNode());
     osc.start(t);
     osc.stop(t + 0.2);
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playPromotion = useCallback(() => {
     if (playAsset(SOUND_PATHS.promotion, 0.88)) return;
@@ -267,11 +293,11 @@ export function useChessSounds() {
       gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
 
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(getOutputNode());
       osc.start(start);
       osc.stop(start + 0.25);
     });
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playWhenCastle = useCallback(() => {
     if (playAsset(SOUND_PATHS.castle, 0.88)) return;
@@ -295,11 +321,11 @@ export function useChessSounds() {
       gain.gain.linearRampToValueAtTime(0.12, t + 0.05);
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
 
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(getOutputNode());
       osc.start(t);
       osc.stop(t + 0.6);
     });
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playNotification = useCallback(() => {
     if (playAsset(SOUND_PATHS.notification, 0.85)) return;
@@ -318,11 +344,11 @@ export function useChessSounds() {
       gain.gain.linearRampToValueAtTime(0.14, start + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.15);
 
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(getOutputNode());
       osc.start(start);
       osc.stop(start + 0.15);
     });
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playTimeOut = useCallback(() => {
     if (playAsset(SOUND_PATHS.timeOut, 0.9)) return;
@@ -341,11 +367,11 @@ export function useChessSounds() {
       gain.gain.linearRampToValueAtTime(0.15, start + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.1);
 
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(getOutputNode());
       osc.start(start);
       osc.stop(start + 0.1);
     });
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playLowTime = useCallback(() => {
     playTimeOut();
@@ -365,10 +391,10 @@ export function useChessSounds() {
     gain.gain.setValueAtTime(0.14, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
 
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(getOutputNode());
     osc.start(t);
     osc.stop(t + 0.15);
-  }, [getCtx, playAsset]);
+  }, [getCtx, getOutputNode, playAsset]);
 
   const playGameStart = useCallback(() => {
     if (playAsset(SOUND_PATHS.gameStart, 0.88)) return;
