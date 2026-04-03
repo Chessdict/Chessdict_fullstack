@@ -12,7 +12,7 @@ export const EVENT_LEADERBOARD_WINDOW = {
   label: "March 29, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
-export const APRIL_3_2026_STAKED_LEADERBOARD_WINDOW = {
+export const APRIL_3_2026_LEADERBOARD_WINDOW = {
   // 7:30 PM to 9:30 PM WAT on April 3, 2026. WAT is UTC+1.
   startUtc: new Date("2026-04-03T18:30:00.000Z"),
   endUtc: new Date("2026-04-03T20:30:00.000Z"),
@@ -332,21 +332,16 @@ export async function getEventLeaderboard() {
   };
 }
 
-export async function getApril3StakedLeaderboard() {
+export async function getApril3Leaderboard() {
   const games = await prisma.game.findMany({
     where: {
       status: {
         in: ["COMPLETED", "DRAW"],
       },
       updatedAt: {
-        gte: APRIL_3_2026_STAKED_LEADERBOARD_WINDOW.startUtc,
-        lt: APRIL_3_2026_STAKED_LEADERBOARD_WINDOW.endUtc,
+        gte: APRIL_3_2026_LEADERBOARD_WINDOW.startUtc,
+        lt: APRIL_3_2026_LEADERBOARD_WINDOW.endUtc,
       },
-      OR: [
-        { onChainGameId: { not: null } },
-        { stakeToken: { not: null } },
-        { wagerAmount: { not: null } },
-      ],
     },
     orderBy: {
       updatedAt: "desc",
@@ -392,7 +387,7 @@ export async function getApril3StakedLeaderboard() {
   );
 
   return {
-    window: APRIL_3_2026_STAKED_LEADERBOARD_WINDOW,
+    window: APRIL_3_2026_LEADERBOARD_WINDOW,
     totalGames: games.length,
     totalPlayers: leaderboard.length,
     entries: leaderboard,
