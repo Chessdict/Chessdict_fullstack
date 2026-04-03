@@ -273,6 +273,7 @@ export function TournamentGameBoard({
     return `${sourcePiece.color}${promotedPiece.toUpperCase()}`;
   }, [fen, game, queuedPremove]);
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
+  const boardAnimationsEnabled = !(isMobileViewport && useCustomPiecesOnMobile);
 
   // Timer countdown
   useEffect(() => {
@@ -725,8 +726,8 @@ export function TournamentGameBoard({
               id: chessboardId,
               position: fen,
               boardOrientation: orientation,
-              showAnimations: true,
-              animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              showAnimations: boardAnimationsEnabled,
+              animationDurationInMs: boardAnimationsEnabled ? MOVE_ANIMATION_DURATION_MS : 0,
               allowDragOffBoard: false,
               allowDragging: !gameResult && !promotionSelection,
               boardStyle: { borderRadius: "4px" },

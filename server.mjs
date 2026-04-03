@@ -581,6 +581,14 @@ app.prepare().then(async () => {
     }
   }
 
+  async function reconcilePendingFirstMoveAborts() {
+    try {
+      await restorePendingFirstMoveAbortTimers();
+    } catch (error) {
+      console.error("[ABORT] Failed to reconcile first-move abort windows:", error);
+    }
+  }
+
   function buildDisconnectGraceSnapshot(graceState) {
     if (!graceState) return null;
 
@@ -1915,6 +1923,11 @@ app.prepare().then(async () => {
       }
     }
   }, 60000);
+
+  // ─── Periodic first-move abort reconciliation (every 5 seconds) ───
+  setInterval(() => {
+    void reconcilePendingFirstMoveAborts();
+  }, 5000);
 
   function generateRoundRobinSchedule(playerUserIds) {
     const players = [...playerUserIds];

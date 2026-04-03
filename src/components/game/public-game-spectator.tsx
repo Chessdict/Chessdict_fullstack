@@ -249,6 +249,7 @@ export function PublicGameSpectator({
   const { playMoveSound } = useChessSounds();
   const { socket, isConnected } = useSocket(address ?? undefined);
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
+  const boardAnimationsEnabled = !(isMobileViewport && useCustomPiecesOnMobile);
   const [reviewMoveIndex, setReviewMoveIndex] = useState<number>(() =>
     initialGame.status === "IN_PROGRESS" || initialGame.moves.length === 0
       ? -1
@@ -572,11 +573,11 @@ export function PublicGameSpectator({
         <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#1A1A1A]/80 p-2">
           <Chessboard
             options={{
-                id: `spectator-wall-board-${game.roomId}`,
+              id: `spectator-wall-board-${game.roomId}`,
               position: game.fen,
               boardOrientation: "white",
-              showAnimations: true,
-              animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              showAnimations: boardAnimationsEnabled,
+              animationDurationInMs: boardAnimationsEnabled ? MOVE_ANIMATION_DURATION_MS : 0,
               allowDragging: false,
               boardStyle: { borderRadius: "14px" },
               darkSquareStyle: boardTheme.darkSquareStyle,
@@ -673,8 +674,8 @@ export function PublicGameSpectator({
                 id: `spectator-board-${game.roomId}`,
                 position: displayedFen,
                 boardOrientation: "white",
-                showAnimations: true,
-                animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+                showAnimations: boardAnimationsEnabled,
+                animationDurationInMs: boardAnimationsEnabled ? MOVE_ANIMATION_DURATION_MS : 0,
                 allowDragging: false,
                 boardStyle: { borderRadius: "16px" },
                 darkSquareStyle: boardTheme.darkSquareStyle,
