@@ -35,7 +35,7 @@ interface MatchFoundModalProps {
 type CreatorState = "idle" | "creating" | "waiting" | "failed" | "expired" | "opponent-left" | "cancelling" | "reclaimed";
 type JoinerState = "waiting-for-creator" | "creator-failed" | "expired" | "idle" | "joining" | "confirmed" | "failed";
 
-const FACE_OFF_AUTO_ENTER_DELAY_MS = 1200;
+const FACE_OFF_AUTO_ENTER_DELAY_MS = 700;
 
 function formatAmountDisplay(value: number | null) {
     if (value == null || !Number.isFinite(value)) return null;
@@ -60,7 +60,7 @@ function MatchFaceoffHero({
         <div className="relative flex h-36 w-full items-center justify-center overflow-hidden">
             <div
                 className={cn(
-                    "absolute left-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-500 ease-out",
+                    "absolute left-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-300 ease-out",
                     introReady ? "translate-x-0 opacity-100" : "-translate-x-8 opacity-0",
                 )}
             >
@@ -74,13 +74,13 @@ function MatchFaceoffHero({
             <div className="absolute inset-0 flex items-center justify-center">
                 <div
                     className={cn(
-                        "absolute h-18 w-18 rounded-full bg-blue-500/20 blur-xl transition-all duration-500",
+                        "absolute h-18 w-18 rounded-full bg-blue-500/20 blur-xl transition-all duration-300",
                         introReady ? "scale-110 opacity-100" : "scale-50 opacity-0",
                     )}
                 />
                 <div
                     className={cn(
-                        "relative z-10 flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-black tracking-[0.35em] text-white shadow-lg backdrop-blur-xl transition-all duration-500",
+                        "relative z-10 flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-black tracking-[0.35em] text-white shadow-lg backdrop-blur-xl transition-all duration-300",
                         introReady ? "scale-100 opacity-100" : "scale-75 opacity-0",
                     )}
                 >
@@ -90,7 +90,7 @@ function MatchFaceoffHero({
 
             <div
                 className={cn(
-                    "absolute right-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-500 ease-out",
+                    "absolute right-0 flex w-[44%] flex-col items-center gap-2 transition-all duration-300 ease-out",
                     introReady ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
                 )}
             >

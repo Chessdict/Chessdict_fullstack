@@ -177,6 +177,7 @@ export default function PlayPage() {
       rating: match.playerRating,
       memoji: getMemojiForAddress(address),
     });
+    useGameStore.getState().setMatchPlayerRatingBaseline(match.playerRating);
     if (!gameMode) setGameMode("online");
     setStatus("in-progress");
     setPendingMatch(null);
@@ -185,6 +186,11 @@ export default function PlayPage() {
 
   useEffect(() => {
     if (isConnected && address) {
+      const state = useGameStore.getState();
+      if (state.status === "matched" || state.status === "in-progress") {
+        return;
+      }
+
       loginWithWallet(address)
         .then((result) => {
           if (result.success && result.user) {
@@ -351,6 +357,7 @@ export default function PlayPage() {
         setPlayerColor(data.color as "white" | "black");
         setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
         if (address) setPlayer({ address, username: data.playerName ?? null, rating: data.playerRating, memoji: getMemojiForAddress(address) });
+        useGameStore.getState().setMatchPlayerRatingBaseline(data.playerRating);
         if (!gameMode) setGameMode("online");
         setStatus("matched");
         toast.info(
@@ -372,6 +379,7 @@ export default function PlayPage() {
       setPlayerColor(data.color as "white" | "black");
       setOpponent({ address: data.opponentAddress, username: data.opponentName ?? null, rating: data.opponentRating, memoji: getMemojiForAddress(data.opponentAddress) });
       if (address) setPlayer({ address, username: data.playerName ?? null, rating: data.playerRating, memoji: getMemojiForAddress(address) });
+      useGameStore.getState().setMatchPlayerRatingBaseline(data.playerRating);
       setWhiteTime(Math.min(data.whiteTime, initialSeconds));
       setBlackTime(Math.min(data.blackTime, initialSeconds));
       setRejoinData(data.fen, data.moves);

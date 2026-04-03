@@ -564,8 +564,7 @@ app.prepare().then(async () => {
 
     for (const activeGame of activeGamesInDb) {
       const liveState = await getStoredGameState(activeGame.id);
-      const hasLiveMoves = Array.isArray(liveState?.moves) && liveState.moves.length > 0;
-      if (hasLiveMoves) continue;
+      if (await hasRegularGameStarted(activeGame.id, liveState)) continue;
 
       const abortWindowMs = getFirstMoveAbortWindowMs(activeGame.timeControl);
       const ageMs = Date.now() - new Date(activeGame.createdAt).getTime();
@@ -683,6 +682,11 @@ app.prepare().then(async () => {
     });
 
     if (!freshGame || freshGame.status !== "IN_PROGRESS" || !freshGame.whitePlayer || !freshGame.blackPlayer) {
+      await clearDisconnectGraceState(roomId);
+      return;
+    }
+
+    if (!(await hasRegularGameStarted(roomId))) {
       await clearDisconnectGraceState(roomId);
       return;
     }
@@ -1250,6 +1254,33 @@ app.prepare().then(async () => {
     return createdAtDate.getTime() + getFirstMoveAbortWindowMs(timeControl);
   }
 
+  async function hasRegularGameStarted(roomId, liveState = null) {
+    const effectiveLiveState = liveState ?? await getStoredGameState(roomId);
+    if (Array.isArray(effectiveLiveState?.moves) && effectiveLiveState.moves.length > 0) {
+      return true;
+    }
+
+    const game = await prisma.game.findUnique({
+      where: { id: roomId },
+      select: {
+        fen: true,
+        pgn: true,
+        startedAt: true,
+      },
+    });
+
+    if (!game) return false;
+
+    return Boolean(
+      game.startedAt ||
+        (typeof game.pgn === "string" && game.pgn.trim()) ||
+        (typeof game.fen === "string" &&
+          game.fen &&
+          game.fen !== "start" &&
+          game.fen !== INITIAL_BOARD_FEN),
+    );
+  }
+
   function clearFirstMoveAbortTimer(roomId) {
     const timeoutHandle = firstMoveAbortTimers.get(roomId);
     if (timeoutHandle) {
@@ -1273,8 +1304,7 @@ app.prepare().then(async () => {
       if (game.onChainGameId || game.stakeToken || game.wagerAmount != null) return;
 
       const liveState = await getStoredGameState(roomId);
-      const hasLiveMoves = Array.isArray(liveState?.moves) && liveState.moves.length > 0;
-      if (hasLiveMoves) return;
+      if (await hasRegularGameStarted(roomId, liveState)) return;
 
       await prisma.game.update({
         where: { id: roomId },
@@ -4643,6 +4673,14 @@ app.prepare().then(async () => {
                 }
 
                 if (game && game.status === "IN_PROGRESS") {
+                  if (!(await hasRegularGameStarted(activeRoomId))) {
+                    console.log(
+                      `[DISCONNECT] ${activeRoomId} disconnected before first move — leaving auto-abort timer in control`,
+                    );
+                    await clearDisconnectGraceState(activeRoomId, { emitCleared: false });
+                    return;
+                  }
+
                   // Race condition guard: check if player already reconnected during the async DB wait
                   const currentSocketId = userSocketMap.get(disconnectedUserId);
                   if (currentSocketId && currentSocketId !== socket.id) {
