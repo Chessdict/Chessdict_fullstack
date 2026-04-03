@@ -282,6 +282,7 @@ export function GameBoard() {
     isMultiplayer &&
     !isStakedMatch;
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
+  const boardAnimationsEnabled = !(isMobileViewport && useCustomPiecesOnMobile);
 
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
@@ -1737,8 +1738,8 @@ export function GameBoard() {
               id: chessboardId,
               position: displayFen,
               boardOrientation: orientation,
-              showAnimations: true,
-              animationDurationInMs: MOVE_ANIMATION_DURATION_MS,
+              showAnimations: boardAnimationsEnabled,
+              animationDurationInMs: boardAnimationsEnabled ? MOVE_ANIMATION_DURATION_MS : 0,
               dragActivationDistance: isMobileViewport ? 8 : 1,
               allowDragOffBoard: false,
               allowDragging:

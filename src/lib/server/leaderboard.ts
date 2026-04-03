@@ -12,11 +12,11 @@ export const EVENT_LEADERBOARD_WINDOW = {
   label: "March 29, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
-export const MARCH_31_2026_STAKED_LEADERBOARD_WINDOW = {
-  // 7:55 PM to 10:05 PM WAT on March 31, 2026. WAT is UTC+1.
-  startUtc: new Date("2026-03-31T18:55:00.000Z"),
-  endUtc: new Date("2026-03-31T21:05:00.000Z"),
-  label: "March 31, 2026 · 7:55 PM - 10:05 PM WAT",
+export const APRIL_3_2026_STAKED_LEADERBOARD_WINDOW = {
+  // 7:30 PM to 9:30 PM WAT on April 3, 2026. WAT is UTC+1.
+  startUtc: new Date("2026-04-03T18:30:00.000Z"),
+  endUtc: new Date("2026-04-03T20:30:00.000Z"),
+  label: "April 3, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
 type LeaderboardPlayer = {
@@ -332,15 +332,15 @@ export async function getEventLeaderboard() {
   };
 }
 
-export async function getMarch31StakedLeaderboard() {
+export async function getApril3StakedLeaderboard() {
   const games = await prisma.game.findMany({
     where: {
       status: {
         in: ["COMPLETED", "DRAW"],
       },
       updatedAt: {
-        gte: MARCH_31_2026_STAKED_LEADERBOARD_WINDOW.startUtc,
-        lt: MARCH_31_2026_STAKED_LEADERBOARD_WINDOW.endUtc,
+        gte: APRIL_3_2026_STAKED_LEADERBOARD_WINDOW.startUtc,
+        lt: APRIL_3_2026_STAKED_LEADERBOARD_WINDOW.endUtc,
       },
       OR: [
         { onChainGameId: { not: null } },
@@ -392,7 +392,7 @@ export async function getMarch31StakedLeaderboard() {
   );
 
   return {
-    window: MARCH_31_2026_STAKED_LEADERBOARD_WINDOW,
+    window: APRIL_3_2026_STAKED_LEADERBOARD_WINDOW,
     totalGames: games.length,
     totalPlayers: leaderboard.length,
     entries: leaderboard,
