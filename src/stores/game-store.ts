@@ -29,6 +29,7 @@ type GameState = {
   stakeAmountRaw: string | null;
   player?: Player;
   opponent?: Player;
+  matchPlayerRatingBaseline: number | null;
   setGameMode: (
     mode: "online" | "computer" | "friend" | "tournament" | null,
   ) => void;
@@ -40,6 +41,7 @@ type GameState = {
   setStakeAmountRaw: (amount: string | null) => void;
   setPlayer: (player: Player) => void;
   setOpponent: (opponent: Player) => void;
+  setMatchPlayerRatingBaseline: (rating: number | null) => void;
   roomId?: string;
   playerColor?: "white" | "black";
   setRoomId: (id: string) => void;
@@ -127,6 +129,7 @@ const initialState = {
   stakeAmountRaw: null as string | null,
   player: undefined,
   opponent: undefined,
+  matchPlayerRatingBaseline: null,
   moves: [] as MoveRecord[],
   viewMoveIndex: null as number | null,
   isOpponentConnected: false,
@@ -157,6 +160,7 @@ export const useGameStore = create<GameState>((set) => ({
   setStakeAmountRaw: (amount) => set({ stakeAmountRaw: amount }),
   setPlayer: (player) => set({ player }),
   setOpponent: (opponent) => set({ opponent }),
+  setMatchPlayerRatingBaseline: (rating) => set({ matchPlayerRatingBaseline: rating }),
   setRoomId: (roomId) => set({ roomId }),
   setPlayerColor: (playerColor) => set({ playerColor }),
   addMove: (move) => set((state) => ({ moves: [...state.moves, move], viewMoveIndex: null })),
@@ -198,6 +202,7 @@ export const useGameStore = create<GameState>((set) => ({
       stakeToken: null,
       stakeAmountRaw: null,
       opponent: undefined,
+      matchPlayerRatingBaseline: null,
       roomId: undefined,
       playerColor: undefined,
       moves: [],
@@ -232,6 +237,7 @@ export const useGameStore = create<GameState>((set) => ({
       onChainGameId: null,
       stakeToken: null,
       stakeAmountRaw: null,
+      matchPlayerRatingBaseline: null,
       rejoinFen: null,
       rejoinMoves: [],
       rejoinChatMessages: [],

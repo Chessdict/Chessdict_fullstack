@@ -168,6 +168,7 @@ export function GameBoard() {
     playerColor,
     player,
     opponent,
+    matchPlayerRatingBaseline,
     setStatus,
     addMove,
     clearMoves,
@@ -204,6 +205,7 @@ export function GameBoard() {
     setOpponentDisconnectDeadline,
     setSelfDisconnectDeadline,
     setAutoAbortDeadline,
+    setPlayer,
     // On-chain state
     onChainGameId,
     stakeToken,
@@ -218,6 +220,7 @@ export function GameBoard() {
   const [opponentPing, setOpponentPing] = useState<number>(0);
   const [showResignModal, setShowResignModal] = useState(false);
   const [ratingChange, setRatingChange] = useState<number | null>(null);
+  const [finalPlayerRating, setFinalPlayerRating] = useState<number | null>(null);
   const [checkFlash, setCheckFlash] = useState<Record<string, React.CSSProperties>>({});
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null);
   const [selfDisconnectCountdown, setSelfDisconnectCountdown] = useState<number | null>(null);
@@ -721,15 +724,12 @@ export function GameBoard() {
     const tick = () => {
       const remaining = Math.max(0, Math.ceil((autoAbortDeadline - Date.now()) / 1000));
       setAutoAbortCountdown(remaining);
-      if (remaining <= 0) {
-        setAutoAbortDeadline(null);
-      }
     };
 
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [autoAbortDeadline, isStakedMatch, setAutoAbortDeadline, status, storeMoves.length]);
+  }, [autoAbortDeadline, isStakedMatch, status, storeMoves.length]);
 
   useEffect(() => {
     if (!isMultiplayer || status !== "in-progress" || gameOver) return;
@@ -958,6 +958,11 @@ export function GameBoard() {
     setRematchRequestPending(false);
   }, [roomId, status]);
 
+  useEffect(() => {
+    setRatingChange(null);
+    setFinalPlayerRating(null);
+  }, [roomId]);
+
   // Track opponent connection status and Game Over events
   useEffect(() => {
     const isMultiplayer = gameMode === 'online' || gameMode === 'friend';
@@ -983,9 +988,16 @@ export function GameBoard() {
       }
       if (ratings && address) {
         const newRating = ratings[address];
-        const oldRating = player?.rating;
+        const oldRating = matchPlayerRatingBaseline ?? player?.rating;
         if (newRating !== undefined && oldRating !== undefined) {
           setRatingChange(newRating - oldRating);
+          setFinalPlayerRating(newRating);
+          if (player) {
+            setPlayer({
+              ...player,
+              rating: newRating,
+            });
+          }
         }
       }
     };
@@ -1186,7 +1198,7 @@ export function GameBoard() {
       socket.off('disconnectGraceState', handleDisconnectGraceState);
       socket.off('disconnectGraceCleared', handleDisconnectGraceCleared);
     };
-  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, player?.rating, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setAutoAbortDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState, clearPendingSnapshotRequest, requestGameSnapshot, setRejoinData]);
+  }, [socket, gameMode, roomId, opponent, setOpponentConnected, setGameOver, setStatus, setDrawOfferReceived, setDrawOfferSent, playGameOver, address, matchPlayerRatingBaseline, player, setPlayer, setWhiteTime, setBlackTime, setOpponentDisconnectDeadline, setSelfDisconnectDeadline, setAutoAbortDeadline, setGameResultModalDismissed, setClockConfig, game, applyDisconnectGraceState, clearPendingSnapshotRequest, requestGameSnapshot, setRejoinData]);
 
   useEffect(() => {
     if (!socket || !roomId || !canRequestRematch) return;
@@ -1596,6 +1608,9 @@ export function GameBoard() {
         : ratingField === "rapidRating"
           ? "Rapid"
           : "Blitz";
+  const ratingDisplayBase = matchPlayerRatingBaseline ?? player?.rating ?? 1200;
+  const ratingDisplayFinal =
+    finalPlayerRating ?? (ratingChange !== null ? ratingDisplayBase + ratingChange : ratingDisplayBase);
   const playerNetworkStatus =
     isMultiplayer && status === "in-progress"
       ? selfDisconnectCountdown && selfDisconnectCountdown > 0
@@ -1820,7 +1835,7 @@ export function GameBoard() {
 
                     {ratingChange !== null && (
                       <div className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-bold border ${ratingChange > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : ratingChange < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}`}>
-                        {ratingCategoryLabel} rating: {player?.rating ?? 1200} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {(player?.rating ?? 1200) + ratingChange}
+                        {ratingCategoryLabel} rating: {ratingDisplayBase} {ratingChange > 0 ? `+${ratingChange}` : ratingChange === 0 ? '+0' : ratingChange} → {ratingDisplayFinal}
                       </div>
                     )}
 
