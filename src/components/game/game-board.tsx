@@ -78,7 +78,7 @@ const pieceSymbols: Record<string, { w: string; b: string }> = {
 };
 
 type SelectionMode = "move" | "premove" | null;
-const MOVE_ANIMATION_DURATION_MS = 200;
+const MOVE_ANIMATION_DURATION_MS = 120;
 const INITIAL_BOARD_FEN = new Chess().fen();
 
 function isPromotionDestination(square: string, color: "w" | "b") {
@@ -282,7 +282,7 @@ export function GameBoard() {
     isMultiplayer &&
     !isStakedMatch;
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
-  const boardAnimationsEnabled = !(isMobileViewport && useCustomPiecesOnMobile);
+  const boardAnimationsEnabled = true;
 
   // Diagnostic state to show in UI
   const [lastMove, setLastMove] = useState<Move | null>(null);
@@ -292,16 +292,19 @@ export function GameBoard() {
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(null);
   const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
+  const [skipNextAnimation, setSkipNextAnimation] = useState(false);
   const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   // State for last move highlighting (persists between moves)
   const [lastMoveSquares, setLastMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
+  const queuedPremoveRef = useRef<Premove | null>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
   const dragInteractionRef = useRef(false);
   const dragStartedAtRef = useRef(0);
   const lastSnapshotRequestAtRef = useRef(0);
   const pendingSnapshotRequestRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLocalTurnAdvanceAtRef = useRef(0);
   const [boardKey, setBoardKey] = useState(0);
 
   const resetBoardInteraction = useCallback(() => {
@@ -332,6 +335,16 @@ export function GameBoard() {
     console.warn(`[CLIENT] Requesting game snapshot for ${roomId}: ${reason}`);
     socket.emit("requestGameSnapshot", { roomId, reason });
   }, [isMultiplayer, roomId, socket]);
+
+  const recoverLikelyTurnDesync = useCallback((reason: string) => {
+    if (!isMultiplayer || status !== "in-progress" || !playerTurnCode) return;
+
+    const localTurn = normalizeClockTurn(game.turn());
+    if (localTurn === playerTurnCode) return;
+    if (timerTurn !== playerTurnCode) return;
+
+    requestGameSnapshot(reason);
+  }, [game, isMultiplayer, playerTurnCode, requestGameSnapshot, status, timerTurn]);
 
   const hasBrokenDragInteraction = useCallback(() => {
     if (!dragInteractionRef.current) return false;
@@ -413,10 +426,21 @@ export function GameBoard() {
     selectionModeRef.current = selectionMode;
   }, [sourceSquare, selectionMode]);
 
+  useEffect(() => {
+    queuedPremoveRef.current = queuedPremove;
+  }, [queuedPremove]);
+
+  useEffect(() => {
+    if (skipNextAnimation) {
+      setSkipNextAnimation(false);
+    }
+  }, [fen, skipNextAnimation]);
+
   const safeMove = useCallback((move: any, options?: { preserveSelection?: boolean; resetBoardInteraction?: boolean; soundPerspective?: "self" | "opponent" }) => {
     try {
       const result = game.move(move);
       if (result) {
+        const nextTurn = normalizeClockTurn(game.turn());
         syncState();
         setLastMove(result);
         // Record move in store for move history display
@@ -447,6 +471,27 @@ export function GameBoard() {
         }
         clearDragInteraction();
 
+        if (isMultiplayer && status === "in-progress" && !gameOver) {
+          let frozenWhiteTime = whiteTime;
+          let frozenBlackTime = blackTime;
+
+          if (storeMoves.length > 0) {
+            const elapsedSeconds = Math.max(0, (Date.now() - timerSyncedAtMs) / 1000);
+            if (timerTurn === "w") {
+              frozenWhiteTime = Math.max(0, whiteTime - elapsedSeconds);
+            } else {
+              frozenBlackTime = Math.max(0, blackTime - elapsedSeconds);
+            }
+          }
+
+          setWhiteTime(frozenWhiteTime);
+          setBlackTime(frozenBlackTime);
+          setTimerTurn(nextTurn);
+          setTimerSyncedAtMs(Date.now());
+          setClockNowMs(Date.now());
+          lastLocalTurnAdvanceAtRef.current = Date.now();
+        }
+
         // Play sound based on move type
         playMoveSound(result, options?.soundPerspective ?? "self");
 
@@ -456,7 +501,7 @@ export function GameBoard() {
       console.error(e);
     }
     return null;
-  }, [game, syncState, addMove, clearSelection, playMoveSound, resetBoardInteraction, clearDragInteraction, hasBrokenDragInteraction]);
+  }, [addMove, blackTime, clearDragInteraction, clearSelection, game, gameOver, hasBrokenDragInteraction, isMultiplayer, playMoveSound, resetBoardInteraction, setBlackTime, setWhiteTime, status, storeMoves.length, syncState, timerSyncedAtMs, timerTurn, whiteTime]);
 
   const emitPlayerMove = useCallback((move: Premove, result: Move) => {
     if (!isMultiplayer || !roomId) return;
@@ -483,6 +528,20 @@ export function GameBoard() {
     emitPlayerMove(move, result);
     return result;
   }, [emitPlayerMove, safeMove]);
+
+  const flushQueuedPremove = useCallback(() => {
+    const pendingMove = queuedPremoveRef.current;
+    if (!pendingMove || status !== "in-progress" || game.isGameOver() || !playerTurnCode) {
+      return false;
+    }
+
+    if (game.turn() !== playerTurnCode) return false;
+
+    queuedPremoveRef.current = null;
+    setQueuedPremove(null);
+    setSkipNextAnimation(true);
+    return !!playPlayerMove(pendingMove);
+  }, [game, playerTurnCode, playPlayerMove, status]);
 
   const queuePremove = useCallback((move: Premove) => {
     setQueuedPremove((current) =>
@@ -768,14 +827,12 @@ export function GameBoard() {
     const currentTurn = normalizeClockTurn(game.turn());
     if (currentTurn === timerTurn) return;
 
-    // Freeze the elapsed time on the side that just moved, then start the new turn
-    // from a fresh synchronized local baseline until the next server timeSync arrives.
-    setWhiteTime(displayedTimes.whiteTime);
-    setBlackTime(displayedTimes.blackTime);
-    setTimerTurn(currentTurn);
-    setTimerSyncedAtMs(Date.now());
-    setClockNowMs(Date.now());
-  }, [displayedTimes.blackTime, displayedTimes.whiteTime, game, gameOver, isMultiplayer, status, timerTurn, fen, setBlackTime, setWhiteTime]);
+    if (Date.now() - lastLocalTurnAdvanceAtRef.current < 1200) {
+      return;
+    }
+
+    requestGameSnapshot(`turn-desync:${currentTurn}->${timerTurn}`);
+  }, [fen, game, gameOver, isMultiplayer, requestGameSnapshot, status, timerTurn]);
 
   // Timer countdown logic
   useEffect(() => {
@@ -936,24 +993,19 @@ export function GameBoard() {
         normalizeClockTurn(payload.turn) !== normalizeClockTurn(game.turn())
       ) {
         requestGameSnapshot("turn-mismatch-after-opponent-move");
+        return;
       }
+
+      flushQueuedPremove();
     };
 
     socket.on('opponentMove', handleOpponentMove);
     return () => { socket.off('opponentMove', handleOpponentMove); };
-  }, [socket, gameMode, roomId, safeMove, requestGameSnapshot, clearPendingSnapshotRequest, game]);
+  }, [socket, gameMode, roomId, safeMove, requestGameSnapshot, clearPendingSnapshotRequest, game, flushQueuedPremove]);
 
   useEffect(() => {
-    if (!queuedPremove || status !== "in-progress" || game.isGameOver() || !playerTurnCode) {
-      return;
-    }
-
-    if (game.turn() !== playerTurnCode) return;
-
-    const pendingMove = queuedPremove;
-    setQueuedPremove(null);
-    playPlayerMove(pendingMove);
-  }, [fen, game, playerTurnCode, playPlayerMove, queuedPremove, status]);
+    flushQueuedPremove();
+  }, [fen, flushQueuedPremove]);
 
   useEffect(() => {
     setRematchRequestPending(false);
@@ -1080,9 +1132,14 @@ export function GameBoard() {
       if (syncedInitialTime > currentInitialTime || newBlack <= curBlack) {
         setBlackTime(newBlack);
       }
-      setTimerTurn(normalizeClockTurn(data.turn ?? game.turn()));
+      const incomingTurn = normalizeClockTurn(data.turn ?? game.turn());
+      setTimerTurn(incomingTurn);
       setTimerSyncedAtMs(Date.now());
       setClockNowMs(Date.now());
+
+      if (incomingTurn !== normalizeClockTurn(game.turn())) {
+        requestGameSnapshot(`time-sync-turn-mismatch:${normalizeClockTurn(game.turn())}->${incomingTurn}`);
+      }
     };
 
     const handleGameSnapshot = (data: {
@@ -1397,6 +1454,9 @@ export function GameBoard() {
     if (status !== "in-progress" || !playerTurnCode || promotionSelection) return;
 
     const isPlayersTurn = game.turn() === playerTurnCode;
+    if (!isPlayersTurn) {
+      recoverLikelyTurnDesync("square-click-turn-desync");
+    }
 
     if (!isPlayersTurn && queuedPremove) {
       clearQueuedPremove();
@@ -1467,6 +1527,7 @@ export function GameBoard() {
     }
 
     if (game.turn() !== playerTurnCode) {
+      recoverLikelyTurnDesync("drop-turn-desync");
       if (queuedPremove) {
         clearQueuedPremove();
         clearDragInteraction();
@@ -1487,7 +1548,7 @@ export function GameBoard() {
       clearDragInteraction();
     }
     return !!result;
-  }, [clearQueuedPremove, clearDragInteraction, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, requestPromotion, status, tryQueuePremove]);
+  }, [clearQueuedPremove, clearDragInteraction, game, playerTurnCode, playPlayerMove, promotionSelection, queuedPremove, recoverLikelyTurnDesync, requestPromotion, status, tryQueuePremove]);
 
   // UI Helpers
   // For multiplayer: use the assigned color. For computer: default to white if not set.
@@ -1681,23 +1742,6 @@ export function GameBoard() {
         </div>
       </div>
 
-      {/* Opponent Disconnect Countdown Banner */}
-      {disconnectCountdown !== null && disconnectCountdown > 0 && (
-        <div className="flex items-center gap-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20 px-4 py-2.5 animate-pulse">
-          <div className="h-8 w-8 shrink-0 rounded-full bg-yellow-500/20 flex items-center justify-center">
-            <span className="text-xs font-bold text-yellow-400">{disconnectCountdown}</span>
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-yellow-300">
-              Opponent disconnected
-              <span className="ml-1 text-xs font-semibold text-yellow-400/80">
-                {disconnectCountdown}s left
-              </span>
-            </p>
-          </div>
-        </div>
-      )}
-
       {mobileMovePairs.length > 0 && (
         <div className="sm:hidden">
           <div className="overflow-x-auto px-1 pb-1 pt-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
@@ -1730,6 +1774,11 @@ export function GameBoard() {
 	              Auto abort in {autoAbortCountdown}s
 	            </div>
 	          ) : null}
+            {disconnectCountdown !== null && disconnectCountdown > 0 ? (
+              <div className="pointer-events-none absolute right-2 top-2 z-20 rounded-full border border-yellow-400/20 bg-black/45 px-2 py-0.5 text-[10px] font-medium tracking-wide text-yellow-200 backdrop-blur-sm sm:right-3 sm:top-3 sm:px-2.5 sm:text-[11px]">
+                Opp. off {disconnectCountdown}s
+              </div>
+            ) : null}
 	          <Chessboard
             key={`board-${boardKey}-${orientation}`}
             options={{
@@ -1737,7 +1786,8 @@ export function GameBoard() {
               position: displayFen,
               boardOrientation: orientation,
               showAnimations: boardAnimationsEnabled,
-              animationDurationInMs: boardAnimationsEnabled ? MOVE_ANIMATION_DURATION_MS : 0,
+              animationDurationInMs:
+                boardAnimationsEnabled ? (skipNextAnimation ? 0 : MOVE_ANIMATION_DURATION_MS) : 0,
               dragActivationDistance: isMobileViewport ? 8 : 1,
               allowDragOffBoard: false,
               allowDragging:

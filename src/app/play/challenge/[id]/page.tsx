@@ -4,6 +4,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { X } from "lucide-react";
 import { useAccount } from "wagmi";
 import { parseUnits } from "viem";
 import { toast } from "sonner";
@@ -17,6 +18,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { useGameStore } from "@/stores/game-store";
 import { getMemojiForAddress } from "@/lib/memoji";
 import { getTimeControlDisplay } from "@/lib/time-control";
+import { formatWalletAddress } from "@/lib/utils";
 
 type ChallengeDetails = {
   id: string;
@@ -341,6 +343,11 @@ export default function OpenChallengePage({
     challenge.gameStatus === "WAITING" &&
     isChallengePlayer;
   const stakeTokenLabel = (stakeTokenSymbol as string) ?? "USDC";
+  const isBusy = isAccepting || isCancelling;
+  const handleDismiss = useCallback(() => {
+    if (isBusy) return;
+    router.replace("/play");
+  }, [isBusy, router]);
 
   const handleCopyLink = async () => {
     try {
@@ -452,17 +459,30 @@ export default function OpenChallengePage({
   return (
     <main className="flex min-h-screen flex-col bg-black text-white selection:bg-white/20">
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,var(--tw-gradient-stops))] from-white/5 via-black to-black pointer-events-none" />
+      <div
+        className="fixed inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={handleDismiss}
+      />
 
-      <div className="container relative mx-auto flex flex-1 items-center justify-center px-4 py-10">
-        <div className="w-full max-w-xl">
-          <GlassBg className="p-6 sm:p-8" height="auto">
+      <div className="container relative mx-auto flex flex-1 items-center justify-center px-4 py-5">
+        <div className="w-full max-w-[320px]" onClick={(event) => event.stopPropagation()}>
+          <GlassBg className="relative p-3.5 sm:p-4" height="auto">
+            <button
+              type="button"
+              onClick={handleDismiss}
+              disabled={isBusy}
+              className="absolute right-2.5 top-2.5 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/25 text-white/65 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Close challenge"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
             {isLoading ? (
-              <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <div className="flex flex-col items-center gap-3 py-8 text-center">
                 <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-white animate-spin" />
                 <p className="text-sm text-white/60">Loading challenge…</p>
               </div>
             ) : !challenge ? (
-              <div className="flex flex-col items-center gap-4 py-10 text-center">
+              <div className="flex flex-col items-center gap-4 py-8 text-center">
                 <h1 className="text-xl font-semibold text-white">Challenge unavailable</h1>
                 <p className="max-w-sm text-sm text-white/55">
                   This challenge link could not be loaded. It may have expired or been removed.
@@ -472,8 +492,8 @@ export default function OpenChallengePage({
                 </Link>
               </div>
             ) : (
-              <div className="flex flex-col gap-6">
-                {shouldShowStakedSetup ? (
+                <div className="flex flex-col gap-3">
+                  {shouldShowStakedSetup ? (
                   <MatchFoundModal
                     opponent={
                       isCreator
@@ -495,79 +515,89 @@ export default function OpenChallengePage({
                   />
                 ) : null}
 
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                  <div className="flex flex-col items-center gap-2.5 text-center">
+                    <div className="flex items-center gap-2.5">
+                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
                       {creatorMemoji ? (
-                        <Image src={creatorMemoji} alt="Creator" width={80} height={80} className="h-full w-full object-contain" />
+                        <Image src={creatorMemoji} alt="Creator" width={48} height={48} className="h-full w-full object-contain" />
                       ) : null}
                     </div>
-                    <div className="text-2xl font-semibold text-white/70">VS</div>
-                    <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
+                    <div className="text-base font-semibold text-white/55">VS</div>
+                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5">
                       {joinerMemoji ? (
-                        <Image src={joinerMemoji} alt="Joiner" width={80} height={80} className="h-full w-full object-contain" />
+                        <Image src={joinerMemoji} alt="Joiner" width={48} height={48} className="h-full w-full object-contain" />
                       ) : (
-                        <span className="text-xs uppercase tracking-[0.3em] text-white/35">Open</span>
+                        <span className="text-[10px] uppercase tracking-[0.22em] text-white/35">Open</span>
                       )}
+                    </div>
+                    </div>
+
+                    <div>
+                      <h1 className="text-base font-semibold text-white">Open challenge</h1>
+                      <p className="mt-1 text-xs text-white/55">
+                        From {formatWalletAddress(challenge.creatorAddress)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center justify-center gap-1 text-[9px] font-medium uppercase tracking-[0.14em]">
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-green-300/80">
+                          {getTimeControlDisplay(challenge.timeControl)}
+                        </span>
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-white/70">
+                          {challenge.staked ? "Staked" : "Friendly"}
+                        </span>
+                        {challenge.staked && challenge.stakeAmount ? (
+                          <span className="rounded-full border border-green-400/20 bg-green-400/10 px-2 py-0.5 text-green-300/85">
+                            {challenge.stakeAmount} {stakeTokenLabel}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
 
-                  <div>
-                    <h1 className="text-xl font-semibold text-white">Open challenge</h1>
-                    <p className="mt-2 text-sm text-white/55">
-                      {challenge.creatorAddress} created a {challenge.staked ? "staked" : "non-staked"} challenge link.
-                    </p>
-                    <p className="mt-3 text-[11px] font-medium uppercase tracking-[0.3em] text-green-300/80">
-                      {getTimeControlDisplay(challenge.timeControl)}
-                    </p>
-                    {challenge.staked && challenge.stakeAmount ? (
-                      <p className="mt-2 text-xs font-medium text-green-300/80">
-                        Stake: {challenge.stakeAmount} {stakeTokenLabel}
-                      </p>
-                    ) : null}
+                <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-white/[0.04] p-2.5 text-[11px] text-white/65">
+                  <div className="rounded-xl border border-white/5 bg-black/20 px-2.5 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/35">Status</p>
+                    <p className="mt-1 font-medium text-white">{challenge.status}</p>
                   </div>
-                </div>
-
-                <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/65">
-                  <div className="flex items-center justify-between gap-4">
-                    <span>Status</span>
-                    <span className="font-medium text-white">{challenge.status}</span>
-                  </div>
-                  <div className="mt-3 flex items-center justify-between gap-4">
-                    <span>Expires</span>
-                    <span className="font-medium text-white">
-                      {new Date(challenge.expiresAt).toLocaleString()}
-                    </span>
+                  <div className="rounded-xl border border-white/5 bg-black/20 px-2.5 py-2">
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-white/35">Expires</p>
+                    <p className="mt-1 font-medium text-white">
+                      {new Date(challenge.expiresAt).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </p>
                   </div>
                   {challenge.acceptedByAddress ? (
-                    <div className="mt-3 flex items-center justify-between gap-4">
-                      <span>Accepted by</span>
-                      <span className="font-medium text-white">{challenge.acceptedByAddress}</span>
+                    <div className="rounded-xl border border-white/5 bg-black/20 px-2.5 py-2">
+                      <p className="text-[9px] uppercase tracking-[0.14em] text-white/35">Accepted by</p>
+                      <p className="mt-1 font-medium text-white">{formatWalletAddress(challenge.acceptedByAddress)}</p>
                     </div>
                   ) : null}
                   {challenge.staked ? (
-                    <div className="mt-3 flex items-center justify-between gap-4">
-                      <span>Setup</span>
-                      <span className="font-medium text-white">
+                    <div className="rounded-xl border border-white/5 bg-black/20 px-2.5 py-2">
+                      <p className="text-[9px] uppercase tracking-[0.14em] text-white/35">Setup</p>
+                      <p className="mt-1 font-medium text-white">
                         {challenge.gameStatus === "WAITING"
                           ? "Waiting for both stake steps"
                           : challenge.gameStatus === "IN_PROGRESS"
                             ? "Ready"
                             : challenge.gameStatus ?? "Pending"}
-                      </span>
+                      </p>
                     </div>
                   ) : null}
                 </div>
 
                 {!isConnected ? (
-                  <div className="flex flex-col items-center gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-5 text-center">
-                    <p className="text-sm text-white/60">
+                  <div className="flex flex-col items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3.5 text-center">
+                    <p className="text-xs text-white/60">
                       Connect a wallet to accept this challenge.
                     </p>
                     <ConnectWallet />
                   </div>
                 ) : challenge.status === "OPEN" && isCreator ? (
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-2.5">
                     <GlassButton className="w-full" onClick={handleCopyLink}>
                       Copy challenge link
                     </GlassButton>
@@ -575,18 +605,18 @@ export default function OpenChallengePage({
                       type="button"
                       onClick={handleCancel}
                       disabled={isCancelling}
-                      className="rounded-full border border-white/10 px-5 py-3 text-sm text-white/70 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-full border border-white/10 px-4 py-2.5 text-xs text-white/70 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isCancelling ? "Cancelling…" : "Cancel challenge"}
                     </button>
-                    <p className="text-center text-xs text-white/40">
+                    <p className="text-center text-[11px] text-white/40">
                       {challenge.staked
-                        ? "Share this link with a friend. The on-chain game is only created after they join and both of you complete the stake steps."
-                        : "Share this link with a friend. When they accept, both of you will be taken into the game."}
+                        ? "Share with a friend. Setup starts after they join."
+                        : "Share with a friend to start the game."}
                     </p>
                   </div>
                 ) : challenge.status === "OPEN" ? (
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-2.5">
                     <GlassButton className="w-full" onClick={handleAccept}>
                       {isAccepting
                         ? challenge.staked
@@ -596,14 +626,21 @@ export default function OpenChallengePage({
                           ? "Approve & accept challenge"
                           : "Accept challenge"}
                     </GlassButton>
-                    <p className="text-center text-xs text-white/40">
+                    <button
+                      type="button"
+                      onClick={handleDismiss}
+                      className="rounded-full border border-white/10 px-4 py-2.5 text-xs text-white/70 transition hover:bg-white/5 hover:text-white"
+                    >
+                      Not now
+                    </button>
+                    <p className="text-center text-[11px] text-white/40">
                       {challenge.staked
-                        ? "You may be asked to approve token spend for the Chessdict contract before the game is created."
-                        : "This challenge is non-staked for now."}
+                        ? "Approval may be needed before the game starts."
+                        : "Accept to jump straight into the game."}
                     </p>
                   </div>
                 ) : challenge.status === "ACCEPTED" && (isCreator || isAcceptedPlayer) && challenge.roomId ? (
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-2.5">
                     {challenge.staked && challenge.gameStatus === "ABORTED" ? (
                       <p className="text-center text-xs text-white/40">
                         This staked setup was cancelled before the game could start. Create a new link from the play page.
@@ -624,8 +661,8 @@ export default function OpenChallengePage({
                     )}
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center gap-3 rounded-3xl border border-white/10 bg-white/[0.04] p-5 text-center">
-                    <p className="text-sm text-white/60">
+                  <div className="flex flex-col items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3.5 text-center">
+                    <p className="text-xs text-white/60">
                       {challenge.status === "CANCELLED"
                         ? "This challenge was cancelled by its creator."
                         : challenge.status === "EXPIRED"
@@ -634,7 +671,7 @@ export default function OpenChallengePage({
                             ? "This staked challenge setup was cancelled before the game could start."
                           : "This challenge has already been claimed."}
                     </p>
-                    <Link href="/play" className="text-sm text-green-300 hover:text-green-200">
+                    <Link href="/play" className="text-xs text-green-300 hover:text-green-200">
                       Return to play
                     </Link>
                   </div>

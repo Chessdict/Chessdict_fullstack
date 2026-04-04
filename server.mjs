@@ -743,13 +743,15 @@ app.prepare().then(async () => {
       setTimeout(() => recentlyCompletedGames.delete(roomId), 10000);
 
       const gameOverPayload = { winner: winnerColor, reason: "disconnection", ratings: newRatings };
-      const opponentWallet =
-        normalizeWalletAddress(freshGame.whitePlayer.walletAddress) === normalizeWalletAddress(forfeitingWallet)
-          ? freshGame.blackPlayer.walletAddress
-          : freshGame.whitePlayer.walletAddress;
-      const opponentSid = getSocketIdForWallet(opponentWallet);
-      if (opponentSid) {
-        io.to(opponentSid).emit("gameOver", gameOverPayload);
+      io.to(roomId).emit("gameOver", gameOverPayload);
+
+      const whiteSocketId = getSocketIdForWallet(freshGame.whitePlayer.walletAddress);
+      const blackSocketId = getSocketIdForWallet(freshGame.blackPlayer.walletAddress);
+      if (whiteSocketId) {
+        io.to(whiteSocketId).emit("gameOver", gameOverPayload);
+      }
+      if (blackSocketId) {
+        io.to(blackSocketId).emit("gameOver", gameOverPayload);
       }
 
       emitToSpectators(roomId, "spectatorGameOver", {
@@ -1416,6 +1418,19 @@ app.prepare().then(async () => {
     return null;
   }
 
+  function clearActiveGameForWallet(walletAddress) {
+    if (!walletAddress) return;
+
+    const normalizedWallet = normalizeWalletAddress(walletAddress);
+    for (const storedWallet of Array.from(userActiveGames.keys())) {
+      if (normalizeWalletAddress(storedWallet) === normalizedWallet) {
+        userActiveGames.delete(storedWallet);
+      }
+    }
+
+    deleteUserActiveGame(walletAddress).catch(() => { });
+  }
+
   async function resolveActiveGameForRoom(walletAddress, roomId) {
     const cached = await hydrateActiveGame(walletAddress);
     if (cached?.roomId === roomId) {
@@ -1587,6 +1602,9 @@ app.prepare().then(async () => {
     });
 
     if (!liveGame) {
+      if (!skipCache && tx === prisma) {
+        clearActiveGameForWallet(user.walletAddress);
+      }
       return null;
     }
 

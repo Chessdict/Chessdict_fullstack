@@ -34,7 +34,7 @@ interface TournamentGameBoardProps {
 }
 
 type SelectionMode = "move" | "premove" | null;
-const MOVE_ANIMATION_DURATION_MS = 200;
+const MOVE_ANIMATION_DURATION_MS = 120;
 
 function isPromotionDestination(square: string, color: "w" | "b") {
   const rank = square[1];
@@ -75,11 +75,13 @@ export function TournamentGameBoard({
   const [sourceSquare, setSourceSquare] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(null);
   const [queuedPremove, setQueuedPremove] = useState<Premove | null>(null);
+  const [skipNextAnimation, setSkipNextAnimation] = useState(false);
   const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
+  const queuedPremoveRef = useRef<Premove | null>(null);
   const revalidateSelectionRef = useRef<(() => void) | null>(null);
   const dragInteractionRef = useRef(false);
   const dragStartedAtRef = useRef(0);
@@ -158,6 +160,16 @@ export function TournamentGameBoard({
     selectionModeRef.current = selectionMode;
   }, [sourceSquare, selectionMode]);
 
+  useEffect(() => {
+    queuedPremoveRef.current = queuedPremove;
+  }, [queuedPremove]);
+
+  useEffect(() => {
+    if (skipNextAnimation) {
+      setSkipNextAnimation(false);
+    }
+  }, [fen, skipNextAnimation]);
+
   // Reset game when gameId changes
   useEffect(() => {
     game.reset();
@@ -216,6 +228,17 @@ export function TournamentGameBoard({
     return result;
   }, [gameId, safeMove, socket]);
 
+  const flushQueuedPremove = useCallback(() => {
+    const pendingMove = queuedPremoveRef.current;
+    if (!pendingMove || gameResult || game.isGameOver() || !playerTurnCode) return false;
+    if (game.turn() !== playerTurnCode) return false;
+
+    queuedPremoveRef.current = null;
+    setQueuedPremove(null);
+    setSkipNextAnimation(true);
+    return !!playPlayerMove(pendingMove);
+  }, [game, gameResult, playPlayerMove, playerTurnCode]);
+
   const queuePremove = useCallback((move: Premove) => {
     setQueuedPremove((current) =>
       current && current.from === move.from && current.to === move.to ? null : move,
@@ -273,7 +296,7 @@ export function TournamentGameBoard({
     return `${sourcePiece.color}${promotedPiece.toUpperCase()}`;
   }, [fen, game, queuedPremove]);
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
-  const boardAnimationsEnabled = !(isMobileViewport && useCustomPiecesOnMobile);
+  const boardAnimationsEnabled = true;
 
   // Timer countdown
   useEffect(() => {
@@ -334,22 +357,18 @@ export function TournamentGameBoard({
       move: any;
     }) => {
       safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
+      flushQueuedPremove();
     };
 
     socket.on("tournament:opponentMove", handleOpponentMove);
     return () => {
       socket.off("tournament:opponentMove", handleOpponentMove);
     };
-  }, [socket, gameId, safeMove]);
+  }, [socket, gameId, safeMove, flushQueuedPremove]);
 
   useEffect(() => {
-    if (!queuedPremove || gameResult || game.isGameOver() || !playerTurnCode) return;
-    if (game.turn() !== playerTurnCode) return;
-
-    const pendingMove = queuedPremove;
-    setQueuedPremove(null);
-    playPlayerMove(pendingMove);
-  }, [fen, game, gameResult, playPlayerMove, playerTurnCode, queuedPremove]);
+    flushQueuedPremove();
+  }, [fen, flushQueuedPremove]);
 
   // Listen for force end
   useEffect(() => {
@@ -727,7 +746,8 @@ export function TournamentGameBoard({
               position: fen,
               boardOrientation: orientation,
               showAnimations: boardAnimationsEnabled,
-              animationDurationInMs: boardAnimationsEnabled ? MOVE_ANIMATION_DURATION_MS : 0,
+              animationDurationInMs:
+                boardAnimationsEnabled ? (skipNextAnimation ? 0 : MOVE_ANIMATION_DURATION_MS) : 0,
               allowDragOffBoard: false,
               allowDragging: !gameResult && !promotionSelection,
               boardStyle: { borderRadius: "4px" },
