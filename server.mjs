@@ -271,9 +271,7 @@ app.prepare().then(async () => {
   const STAKED_LINK_CONFIRM_TIMEOUT_MS = 90000;
   const REMATCH_REQUEST_TTL_MS = 120000;
   const REGULAR_GAME_DISCONNECT_GRACE_MS = 30000;
-  const BULLET_FIRST_MOVE_ABORT_MS = 15000;
-  const BLITZ_FIRST_MOVE_ABORT_MS = 20000;
-  const RAPID_FIRST_MOVE_ABORT_MS = 60000;
+  const FIRST_MOVE_ABORT_MS = 15000;
   const SPECTATOR_JOIN_WINDOW_MS = 10000;
   const SPECTATOR_JOIN_LIMIT = 12;
   const SPECTATOR_ROOM_PREFIX = "spectators:";
@@ -1248,10 +1246,8 @@ app.prepare().then(async () => {
   }
 
   function getFirstMoveAbortWindowMs(timeControl) {
-    const normalizedTimeControl = normalizeQueueTimeControl(timeControl);
-    if (normalizedTimeControl <= 2) return BULLET_FIRST_MOVE_ABORT_MS;
-    if (normalizedTimeControl <= 5) return BLITZ_FIRST_MOVE_ABORT_MS;
-    return RAPID_FIRST_MOVE_ABORT_MS;
+    normalizeQueueTimeControl(timeControl);
+    return FIRST_MOVE_ABORT_MS;
   }
 
   function getFirstMoveAbortDeadline(timeControl, createdAt = new Date()) {

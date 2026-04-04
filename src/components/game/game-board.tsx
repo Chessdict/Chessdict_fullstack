@@ -1653,12 +1653,10 @@ export function GameBoard() {
                   : ''}
             </p>
             {opponentMaterialDisplay ? (
-              <div className="hidden sm:block">
-                <MaterialBalanceStrip
-                  advantage={opponentMaterialDisplay.advantage}
-                  capturedPieces={opponentMaterialDisplay.capturedPieces}
-                />
-              </div>
+              <MaterialBalanceStrip
+                advantage={opponentMaterialDisplay.advantage}
+                capturedPieces={opponentMaterialDisplay.capturedPieces}
+              />
             ) : null}
           </div>
         </div>
@@ -1932,12 +1930,10 @@ export function GameBoard() {
               ) : null}
             </div>
             {playerMaterialDisplay ? (
-              <div className="hidden sm:block">
-                <MaterialBalanceStrip
-                  advantage={playerMaterialDisplay.advantage}
-                  capturedPieces={playerMaterialDisplay.capturedPieces}
-                />
-              </div>
+              <MaterialBalanceStrip
+                advantage={playerMaterialDisplay.advantage}
+                capturedPieces={playerMaterialDisplay.capturedPieces}
+              />
             ) : null}
           </div>
         </div>
