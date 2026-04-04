@@ -54,7 +54,7 @@ const INITIAL_BOARD_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 function formatClock(seconds: number) {
-  const safeSeconds = Math.max(0, Math.round(seconds));
+  const safeSeconds = Math.max(0, Math.ceil(seconds - 1e-9));
   const mins = Math.floor(safeSeconds / 60);
   const secs = safeSeconds % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;

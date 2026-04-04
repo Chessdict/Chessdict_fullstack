@@ -23,8 +23,9 @@ import { type Socket } from "socket.io-client";
 import { SignalStrength } from "@/components/game/signal-strength";
 
 function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
+  const displaySeconds = Math.max(0, Math.ceil(seconds - 1e-9));
+  const mins = Math.floor(displaySeconds / 60);
+  const secs = displaySeconds % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 

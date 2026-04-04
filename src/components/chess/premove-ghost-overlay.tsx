@@ -8,6 +8,7 @@ const PREMOVE_SOURCE_RING = "rgba(22, 101, 52, 0.28)";
 const PREMOVE_TARGET_RING = "rgba(22, 101, 52, 0.46)";
 const PREMOVE_TARGET_FILL = "#74C987";
 const PREMOVE_GHOST_OPACITY = 0.96;
+const CUSTOM_GHOST_SCALE = 0.9;
 
 function getSquarePosition(square: string, orientation: "white" | "black") {
   const file = square.charCodeAt(0) - 97;
@@ -77,12 +78,21 @@ export function PremoveGhostOverlay({
           placeItems: "center",
         }}
       >
-        {renderPiece({
-          svgStyle: {
-            opacity: PREMOVE_GHOST_OPACITY,
-            filter: "saturate(1.02) brightness(1.04)",
-          },
-        })}
+        <div
+          style={{
+            width: useDefaultPieces ? "100%" : `${CUSTOM_GHOST_SCALE * 100}%`,
+            height: useDefaultPieces ? "100%" : `${CUSTOM_GHOST_SCALE * 100}%`,
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
+          {renderPiece({
+            svgStyle: {
+              opacity: PREMOVE_GHOST_OPACITY,
+              filter: "saturate(1.02) brightness(1.04)",
+            },
+          })}
+        </div>
       </div>
     </div>
   );

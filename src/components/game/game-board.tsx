@@ -43,10 +43,10 @@ const LOW_TIME_SOUND_THRESHOLD_SECONDS = 10;
 // Helper to format time as MM:SS, with tenths under 10 seconds.
 function formatTime(seconds: number): string {
   const safeSeconds = Math.max(0, seconds);
-  const mins = Math.floor(safeSeconds / 60);
-  const secs = Math.floor(safeSeconds % 60);
 
   if (safeSeconds > 0 && safeSeconds <= 10) {
+    const mins = Math.floor(safeSeconds / 60);
+    const secs = Math.floor(safeSeconds % 60);
     const tenths = Math.min(
       9,
       Math.floor((safeSeconds - Math.floor(safeSeconds)) * 10 + 1e-6),
@@ -54,7 +54,10 @@ function formatTime(seconds: number): string {
     return `${mins}:${secs.toString().padStart(2, "0")}.${tenths}`;
   }
 
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const displaySeconds = Math.max(0, Math.ceil(safeSeconds - 1e-9));
+  const mins = Math.floor(displaySeconds / 60);
+  const secs = displaySeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 // Check if time is critically low (30s for 1-min games, 60s for others)
