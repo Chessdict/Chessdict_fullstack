@@ -249,7 +249,7 @@ export function PublicGameSpectator({
   const { playMoveSound } = useChessSounds();
   const { socket, isConnected } = useSocket(address ?? undefined);
   const boardPieces = isMobileViewport && !useCustomPiecesOnMobile ? defaultPieces : customPieces;
-  const boardAnimationsEnabled = !(isMobileViewport && useCustomPiecesOnMobile);
+  const boardAnimationsEnabled = true;
   const [reviewMoveIndex, setReviewMoveIndex] = useState<number>(() =>
     initialGame.status === "IN_PROGRESS" || initialGame.moves.length === 0
       ? -1

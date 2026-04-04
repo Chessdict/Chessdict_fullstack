@@ -31,7 +31,7 @@ export function formatGameReason(
 
   switch (reason) {
     case "disconnection":
-      return "Opponent Disconnected";
+      return didPlayerWin ? "Game Abandoned" : "You Disconnected";
     case "resignation":
       return didPlayerWin ? "Opponent Resigned" : "You Resigned";
     case "timeout":

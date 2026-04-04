@@ -16,6 +16,13 @@ const SOUND_PATHS = {
   timeOut: "/sounds/time-out.mp3",
 } as const;
 
+const LOW_LATENCY_SOUND_PATHS = [
+  SOUND_PATHS.move,
+  SOUND_PATHS.opponentMove,
+  SOUND_PATHS.capture,
+  SOUND_PATHS.check,
+] as const;
+
 const decodedAssetCache = new Map<string, AudioBuffer | null>();
 const decodedAssetPromiseCache = new Map<string, Promise<AudioBuffer | null>>();
 let hasPrimedLowLatencyAssets = false;
@@ -131,11 +138,22 @@ export function useChessSounds() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    const ctx = getCtx();
+    void Promise.all(LOW_LATENCY_SOUND_PATHS.map((src) => loadDecodedAsset(ctx, src)));
+
+    for (const src of LOW_LATENCY_SOUND_PATHS) {
+      if (!audioCacheRef.current.has(src)) {
+        const audio = new Audio(src);
+        audio.preload = "auto";
+        audio.load();
+        audioCacheRef.current.set(src, audio);
+      }
+    }
+
     const primeAssets = () => {
       if (hasPrimedLowLatencyAssets) return;
       hasPrimedLowLatencyAssets = true;
 
-      const ctx = getCtx();
       void Promise.all([
         loadDecodedAsset(ctx, SOUND_PATHS.move),
         loadDecodedAsset(ctx, SOUND_PATHS.opponentMove),
