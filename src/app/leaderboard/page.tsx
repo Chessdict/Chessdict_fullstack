@@ -1,7 +1,7 @@
 import Image from "next/image";
 import { Crown, Medal, Trophy } from "lucide-react";
 import {
-  getApril3Leaderboard,
+  getTodayLeaderboard,
 } from "@/lib/server/leaderboard";
 import { formatWalletAddress } from "@/lib/utils";
 
@@ -20,7 +20,7 @@ function RankIcon({ rank }: { rank: number }) {
 }
 
 export default async function LeaderboardPage() {
-  const leaderboard = await getApril3Leaderboard();
+  const leaderboard = await getTodayLeaderboard();
   const loser = leaderboard.loser;
 
   return (
@@ -33,10 +33,10 @@ export default async function LeaderboardPage() {
                 Event Leaderboard
               </p>
               <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                April 3 Window
+                April 5 Window
               </h1>
               <p className="max-w-2xl text-sm text-white/65 sm:text-base">
-                Ranked by standard points from completed games between 7:30 PM and 9:30 PM WAT on April 3, 2026.
+                Ranked by standard points from completed games between 7:30 PM and 9:30 PM WAT on April 5, 2026.
                 Wins count as 1 point and draws count as 0.5. The staked column still shows performance in staked games inside the same window.
               </p>
             </div>

@@ -12,11 +12,11 @@ export const EVENT_LEADERBOARD_WINDOW = {
   label: "March 29, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
-export const APRIL_3_2026_LEADERBOARD_WINDOW = {
-  // 7:30 PM to 9:30 PM WAT on April 3, 2026. WAT is UTC+1.
-  startUtc: new Date("2026-04-03T18:30:00.000Z"),
-  endUtc: new Date("2026-04-03T20:30:00.000Z"),
-  label: "April 3, 2026 · 7:30 PM - 9:30 PM WAT",
+export const TODAY_LEADERBOARD_WINDOW = {
+  // 7:30 PM to 9:30 PM WAT on April 5, 2026. WAT is UTC+1.
+  startUtc: new Date("2026-04-05T18:30:00.000Z"),
+  endUtc: new Date("2026-04-05T20:30:00.000Z"),
+  label: "April 5, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
 type LeaderboardPlayer = {
@@ -332,15 +332,15 @@ export async function getEventLeaderboard() {
   };
 }
 
-export async function getApril3Leaderboard() {
+export async function getTodayLeaderboard() {
   const games = await prisma.game.findMany({
     where: {
       status: {
         in: ["COMPLETED", "DRAW"],
       },
       updatedAt: {
-        gte: APRIL_3_2026_LEADERBOARD_WINDOW.startUtc,
-        lt: APRIL_3_2026_LEADERBOARD_WINDOW.endUtc,
+        gte: TODAY_LEADERBOARD_WINDOW.startUtc,
+        lt: TODAY_LEADERBOARD_WINDOW.endUtc,
       },
     },
     orderBy: {
@@ -387,7 +387,7 @@ export async function getApril3Leaderboard() {
   );
 
   return {
-    window: APRIL_3_2026_LEADERBOARD_WINDOW,
+    window: TODAY_LEADERBOARD_WINDOW,
     totalGames: games.length,
     totalPlayers: leaderboard.length,
     entries: leaderboard,
