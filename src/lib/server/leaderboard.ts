@@ -12,12 +12,33 @@ export const EVENT_LEADERBOARD_WINDOW = {
   label: "March 29, 2026 · 7:30 PM - 9:30 PM WAT",
 } as const;
 
-export const TODAY_LEADERBOARD_WINDOW = {
-  // 7:30 PM to 9:30 PM WAT on April 5, 2026. WAT is UTC+1.
-  startUtc: new Date("2026-04-05T18:30:00.000Z"),
-  endUtc: new Date("2026-04-05T20:30:00.000Z"),
-  label: "April 5, 2026 · 7:30 PM - 9:30 PM WAT",
-} as const;
+function getTodayLeaderboardWindow(timeZone = EVENT_LEADERBOARD_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+
+  const startUtc = new Date(Date.UTC(year, month - 1, day, 18, 30, 0, 0));
+  const endUtc = new Date(Date.UTC(year, month - 1, day, 20, 30, 0, 0));
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(startUtc);
+
+  return {
+    startUtc,
+    endUtc,
+    label: `${dateLabel} · 7:30 PM - 9:30 PM WAT`,
+  } as const;
+}
 
 type LeaderboardPlayer = {
   id: number;
@@ -333,14 +354,15 @@ export async function getEventLeaderboard() {
 }
 
 export async function getTodayLeaderboard() {
+  const todayWindow = getTodayLeaderboardWindow();
   const games = await prisma.game.findMany({
     where: {
       status: {
         in: ["COMPLETED", "DRAW"],
       },
       updatedAt: {
-        gte: TODAY_LEADERBOARD_WINDOW.startUtc,
-        lt: TODAY_LEADERBOARD_WINDOW.endUtc,
+        gte: todayWindow.startUtc,
+        lt: todayWindow.endUtc,
       },
     },
     orderBy: {
@@ -387,7 +409,7 @@ export async function getTodayLeaderboard() {
   );
 
   return {
-    window: TODAY_LEADERBOARD_WINDOW,
+    window: todayWindow,
     totalGames: games.length,
     totalPlayers: leaderboard.length,
     entries: leaderboard,
