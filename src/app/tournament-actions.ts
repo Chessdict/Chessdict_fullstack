@@ -20,6 +20,7 @@ export type TournamentListItem = {
   id: string;
   name: string;
   status: string;
+  tournamentType: string;
   entryFee: number;
   prizePool: number;
   maxPlayers: number;
@@ -32,6 +33,11 @@ export type TournamentListItem = {
   createdBy: string;
   playerCount: number;
   winner: string | null;
+  // Arena-specific fields
+  durationMinutes?: number | null;
+  minRating?: number | null;
+  maxRating?: number | null;
+  endTime?: string | null;
 };
 
 // ─── List tournaments ───
@@ -64,23 +70,31 @@ export async function getTournaments(
       orderBy: { createdAt: "desc" },
     });
 
-    const data: TournamentListItem[] = tournaments.map((t) => ({
-      id: t.id,
-      name: t.name,
-      status: t.status,
-      entryFee: t.entryFee,
-      prizePool: t.prizePool,
-      maxPlayers: t.maxPlayers,
-      timeControl: t.timeControl,
-      startsAt: t.startsAt.toISOString(),
-      token: t.token,
-      isSponsored: t.isSponsored,
-      sponsoredAmount: t.sponsoredAmount,
-      sponsorAddress: t.sponsorAddress,
-      createdBy: t.creator.walletAddress ?? "",
-      playerCount: t._count.participants,
-      winner: t.participants.find((p: any) => p.placement === 1)?.user?.walletAddress ?? null,
-    }));
+    const data: TournamentListItem[] = tournaments.map((t) => {
+      console.log(`[SERVER] Tournament ${t.id}: tournamentType=${t.tournamentType}, durationMinutes=${t.durationMinutes}`);
+      return {
+        id: t.id,
+        name: t.name,
+        status: t.status,
+        tournamentType: t.tournamentType,
+        entryFee: t.entryFee,
+        prizePool: t.prizePool,
+        maxPlayers: t.maxPlayers,
+        timeControl: t.timeControl,
+        startsAt: t.startsAt.toISOString(),
+        token: t.token,
+        isSponsored: t.isSponsored,
+        sponsoredAmount: t.sponsoredAmount,
+        sponsorAddress: t.sponsorAddress,
+        createdBy: t.creator.walletAddress ?? "",
+        playerCount: t._count.participants,
+        winner: t.participants.find((p: any) => p.placement === 1)?.user?.walletAddress ?? null,
+        durationMinutes: t.durationMinutes,
+        minRating: t.minRating,
+        maxRating: t.maxRating,
+        endTime: t.endTime?.toISOString() ?? null,
+      };
+    });
 
     return { success: true, data };
   } catch (error) {
@@ -146,6 +160,7 @@ export async function getTournamentById(
       id: t.id,
       name: t.name,
       status: t.status,
+      tournamentType: t.tournamentType,
       entryFee: t.entryFee,
       prizePool: t.prizePool,
       maxPlayers: t.maxPlayers,
@@ -158,6 +173,10 @@ export async function getTournamentById(
       createdBy: t.creator.walletAddress ?? "",
       playerCount: t._count.participants,
       winner: t.participants.find((p) => p.placement === 1)?.user?.walletAddress ?? null,
+      durationMinutes: t.durationMinutes,
+      minRating: t.minRating,
+      maxRating: t.maxRating,
+      endTime: t.endTime?.toISOString() ?? null,
       participants: t.participants.map((p) => ({
         id: p.id,
         walletAddress: p.user.walletAddress ?? "",
@@ -471,5 +490,277 @@ export async function canStartTournament(
   } catch (error) {
     console.error("Error checking tournament start:", error);
     return { success: false, error: "Failed to check tournament" };
+  }
+}
+
+// ─── Arena Tournament Actions ───
+
+export async function createArenaTournament(input: {
+  name: string;
+  durationMinutes: number;
+  timeControl: number;
+  entryFee?: number;
+  token?: string;
+  minRating?: number;
+  maxRating?: number;
+  startsAt: Date;
+  walletAddress: string;
+}): Promise<ActionResult<{ tournamentId: string }>> {
+  const {
+    name,
+    durationMinutes,
+    timeControl,
+    entryFee = 0,
+    token,
+    minRating,
+    maxRating,
+    startsAt,
+    walletAddress,
+  } = input;
+
+  if (!walletAddress) {
+    return { success: false, error: "Wallet not connected" };
+  }
+
+  if (name.length < 2 || name.length > 40) {
+    return { success: false, error: "Tournament name must be 2-40 characters" };
+  }
+
+  if (containsProfanity(name)) {
+    return { success: false, error: "Tournament name contains inappropriate language" };
+  }
+
+  if (durationMinutes < 30 || durationMinutes > 240) {
+    return { success: false, error: "Duration must be between 30-240 minutes" };
+  }
+
+  if (minRating != null && maxRating != null && minRating >= maxRating) {
+    return { success: false, error: "Min rating must be less than max rating" };
+  }
+
+  if (new Date(startsAt) <= new Date()) {
+    return { success: false, error: "Start time must be in the future" };
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { walletAddress },
+    });
+
+    if (!user) {
+      return { success: false, error: "User not found" };
+    }
+
+    const tournament = await prisma.tournament.create({
+      data: {
+        name,
+        tournamentType: "ARENA",
+        status: "PENDING",
+        timeControl,
+        entryFee,
+        prizePool: 0,
+        maxPlayers: 999,
+        durationMinutes,
+        minRating: minRating ?? null,
+        maxRating: maxRating ?? null,
+        token: token ?? null,
+        startsAt: new Date(startsAt),
+        creatorId: user.id,
+      },
+    });
+
+    return { success: true, data: { tournamentId: tournament.id } };
+  } catch (error) {
+    console.error("Error creating arena tournament:", error);
+    return { success: false, error: "Failed to create tournament" };
+  } finally {
+    emitTournamentListChanged();
+  }
+}
+
+export async function joinArenaTournament(
+  tournamentId: string,
+  walletAddress: string
+): Promise<ActionResult> {
+  if (!walletAddress) {
+    return { success: false, error: "Wallet not connected" };
+  }
+
+  try {
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        participants: {
+          include: { user: { select: { walletAddress: true } } },
+        },
+      },
+    });
+
+    if (!tournament) {
+      return { success: false, error: "Tournament not found" };
+    }
+
+    if (tournament.tournamentType !== "ARENA") {
+      return { success: false, error: "Not an arena tournament" };
+    }
+
+    if (tournament.status !== "PENDING" && tournament.status !== "IN_PROGRESS") {
+      return { success: false, error: "Tournament not accepting players" };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { walletAddress },
+    });
+
+    if (!user) {
+      return { success: false, error: "User not found" };
+    }
+
+    // Check rating restrictions
+    if (tournament.minRating != null && user.rating < tournament.minRating) {
+      return { success: false, error: `Rating must be at least ${tournament.minRating}` };
+    }
+
+    if (tournament.maxRating != null && user.rating > tournament.maxRating) {
+      return { success: false, error: `Rating must be at most ${tournament.maxRating}` };
+    }
+
+    const alreadyJoined = tournament.participants.some(
+      (p) => p.user.walletAddress === walletAddress
+    );
+
+    if (alreadyJoined) {
+      return { success: false, error: "Already joined this tournament" };
+    }
+
+    await prisma.tournamentParticipant.create({
+      data: {
+        tournamentId,
+        userId: user.id,
+      },
+    });
+
+    return { success: true, data: undefined };
+  } catch (error) {
+    console.error("Error joining arena tournament:", error);
+    return { success: false, error: "Failed to join tournament" };
+  } finally {
+    emitTournamentListChanged();
+  }
+}
+
+export async function getArenaStandings(tournamentId: string): Promise<
+  ActionResult<{
+    rank: number;
+    userId: number;
+    walletAddress: string;
+    points: number;
+    gamesPlayed: number;
+    wins: number;
+    draws: number;
+    losses: number;
+    buchholzScore: number;
+  }[]>
+> {
+  try {
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        participants: {
+          include: { user: { select: { walletAddress: true } } },
+        },
+      },
+    });
+
+    if (!tournament || tournament.tournamentType !== "ARENA") {
+      return { success: false, error: "Arena tournament not found" };
+    }
+
+    const standings = tournament.participants
+      .map((p) => ({
+        rank: 0,
+        userId: p.userId,
+        walletAddress: p.user.walletAddress ?? "",
+        points: p.points,
+        gamesPlayed: p.gamesPlayed,
+        wins: p.wins,
+        draws: p.draws,
+        losses: p.losses,
+        buchholzScore: p.buchholzScore,
+      }))
+      .sort((a, b) => {
+        if (a.points !== b.points) return b.points - a.points;
+        if (a.buchholzScore !== b.buchholzScore)
+          return b.buchholzScore - a.buchholzScore;
+        if (a.wins !== b.wins) return b.wins - a.wins;
+        return 0;
+      })
+      .map((p, i) => ({ ...p, rank: i + 1 }));
+
+    return { success: true, data: standings };
+  } catch (error) {
+    console.error("Error getting arena standings:", error);
+    return { success: false, error: "Failed to get standings" };
+  }
+}
+
+export async function getOngoingArenaGames(tournamentId: string): Promise<
+  ActionResult<{
+    id: string;
+    whitePlayerAddress: string;
+    blackPlayerAddress: string;
+    whiteRating: number;
+    blackRating: number;
+  }[]>
+> {
+  try {
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        participants: {
+          include: {
+            user: { select: { id: true, walletAddress: true, rating: true } },
+          },
+        },
+      },
+    });
+
+    if (!tournament || tournament.tournamentType !== "ARENA") {
+      return { success: false, error: "Arena tournament not found" };
+    }
+
+    const games = await prisma.game.findMany({
+      where: {
+        status: "IN_PROGRESS",
+        OR: tournament.participants.map((p) => ({
+          whitePlayerId: p.userId,
+        })),
+      },
+      include: {
+        whitePlayer: { select: { walletAddress: true, rating: true } },
+        blackPlayer: { select: { walletAddress: true, rating: true } },
+      },
+    });
+
+    const data = games
+      .filter(
+        (g) =>
+          g.whitePlayer &&
+          g.blackPlayer &&
+          tournament.participants.some((p) => p.userId === g.whitePlayerId) &&
+          tournament.participants.some((p) => p.userId === g.blackPlayerId)
+      )
+      .map((g) => ({
+        id: g.id,
+        whitePlayerAddress: g.whitePlayer?.walletAddress ?? "",
+        blackPlayerAddress: g.blackPlayer?.walletAddress ?? "",
+        whiteRating: g.whitePlayer?.rating ?? 1200,
+        blackRating: g.blackPlayer?.rating ?? 1200,
+      }));
+
+    return { success: true, data };
+  } catch (error) {
+    console.error("Error getting ongoing arena games:", error);
+    return { success: false, error: "Failed to get games" };
   }
 }

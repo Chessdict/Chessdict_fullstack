@@ -15,7 +15,8 @@ function isPlayManagedPath(pathname: string) {
     pathname === "/play" ||
     pathname.startsWith("/play/game/") ||
     pathname.startsWith("/play/challenge/") ||
-    pathname.startsWith("/play/tournament/")
+    pathname.startsWith("/play/tournament/") ||
+    pathname.startsWith("/tournaments/") // Arena tournaments - don't auto-redirect
   );
 }
 

@@ -10,11 +10,14 @@ import {
   joinTournament,
   exitTournament,
   canStartTournament,
+  createArenaTournament,
+  joinArenaTournament,
   type TournamentListItem,
   type TournamentDetail,
 } from "@/app/tournament-actions";
 import { useSocket } from "@/hooks/useSocket";
 import { useRouter } from "next/navigation";
+import { TournamentTypeSelector } from "./tournament-type-selector";
 
 export type TournamentStatus = "upcoming" | "in-progress" | "completed" | "cancelled";
 
@@ -113,6 +116,7 @@ export function TournamentPanel() {
   const [isPending, startTransition] = useTransition();
 
   // Create form state
+  const [tournamentType, setTournamentType] = useState<"round-robin" | "arena">("round-robin");
   const [name, setName] = useState("");
   const [maxPlayers, setMaxPlayers] = useState("3");
   const [timeControl, setTimeControl] = useState("10");
@@ -122,6 +126,10 @@ export function TournamentPanel() {
   const [sponsorAmount, setSponsorAmount] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [joinAsPlayer, setJoinAsPlayer] = useState(true);
+  // Arena-specific fields
+  const [durationMinutes, setDurationMinutes] = useState("60");
+  const [minRating, setMinRating] = useState("");
+  const [maxRating, setMaxRating] = useState("");
 
   // Fetch tournament list
   const fetchList = useCallback(() => {
@@ -188,23 +196,41 @@ export function TournamentPanel() {
   // Handlers
   const handleCreate = () => {
     startTransition(async () => {
-      const result = await createTournament({
-        walletAddress: address ?? "",
-        name,
-        maxPlayers: parseInt(maxPlayers) || 8,
-        timeControl: parseInt(timeControl) || 10,
-        entryFee: parseFloat(entryFee) || 0,
-        token,
-        isSponsored,
-        sponsoredAmount: isSponsored ? parseFloat(sponsorAmount) || 0 : 0,
-        startsAt: new Date(startsAt).toISOString(),
-        joinAsPlayer,
-      });
+      let result;
+
+      if (tournamentType === "arena") {
+        result = await createArenaTournament({
+          walletAddress: address ?? "",
+          name,
+          durationMinutes: parseInt(durationMinutes) || 60,
+          timeControl: parseInt(timeControl) || 10,
+          entryFee: parseFloat(entryFee) || 0,
+          token,
+          minRating: minRating ? parseInt(minRating) : undefined,
+          maxRating: maxRating ? parseInt(maxRating) : undefined,
+          startsAt: new Date(startsAt),
+        });
+      } else {
+        result = await createTournament({
+          walletAddress: address ?? "",
+          name,
+          maxPlayers: parseInt(maxPlayers) || 8,
+          timeControl: parseInt(timeControl) || 10,
+          entryFee: parseFloat(entryFee) || 0,
+          token,
+          isSponsored,
+          sponsoredAmount: isSponsored ? parseFloat(sponsorAmount) || 0 : 0,
+          startsAt: new Date(startsAt).toISOString(),
+          joinAsPlayer,
+        });
+      }
+
       if (result.success) {
         // Reset form & go back to list
         setName(""); setMaxPlayers("8"); setTimeControl("10"); setEntryFee("");
         setToken("USDC"); setIsSponsored(false); setSponsorAmount("");
         setStartsAt(""); setJoinAsPlayer(true);
+        setDurationMinutes("60"); setMinRating(""); setMaxRating("");
         setPanelView("list");
         fetchList();
       } else {
@@ -556,7 +582,10 @@ export function TournamentPanel() {
               if (socket) {
                 socket.emit("tournament:start", { tournamentId: t.id });
               }
-              router.push(`/play/tournament/${t.id}`);
+              const route = t.tournamentType === "ARENA"
+                ? `/tournaments/${t.id}`
+                : `/play/tournament/${t.id}`;
+              router.push(route);
             }}
             disabled={isPending}
             className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-3.5 transition-transform active:scale-95 disabled:opacity-50"
@@ -571,7 +600,14 @@ export function TournamentPanel() {
         {/* Enter Tournament — shown when tournament is in progress or ready */}
         {!canStart && (uiStatus === "in-progress" || t.status === "READY") && (
           <button
-            onClick={() => router.push(`/play/tournament/${t.id}`)}
+            onClick={() => {
+              console.log("Tournament Type:", t.tournamentType, "ID:", t.id);
+              const route = t.tournamentType === "ARENA"
+                ? `/tournaments/${t.id}`
+                : `/play/tournament/${t.id}`;
+              console.log("Routing to:", route);
+              router.push(route);
+            }}
             className="group relative flex w-full items-center justify-center overflow-hidden rounded-full py-3.5 transition-transform active:scale-95"
           >
             <div className="absolute inset-0 bg-gradient-to-r from-green-600 to-blue-600 opacity-90 rounded-full" />
@@ -659,6 +695,9 @@ export function TournamentPanel() {
 
       <h3 className="text-base font-semibold text-white">Create tournament</h3>
 
+      {/* Tournament Type Selector */}
+      <TournamentTypeSelector value={tournamentType} onChange={setTournamentType} />
+
       {/* Name */}
       <div className="flex flex-col gap-1">
         <label className="text-xs font-medium text-white/60">Name</label>
@@ -672,21 +711,82 @@ export function TournamentPanel() {
         />
       </div>
 
-      {/* Number of players */}
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-white/60">Number of players (min 3)</label>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={maxPlayers}
-          onChange={(e) => {
-            const val = e.target.value;
-            if (/^\d*$/.test(val)) setMaxPlayers(val);
-          }}
-          placeholder="8"
-          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/20 hover:bg-white/10 focus:border-white/20"
-        />
-      </div>
+      {/* Conditional fields based on tournament type */}
+      {tournamentType === "round-robin" ? (
+        <>
+          {/* Number of players */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-white/60">Number of players (min 3)</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={maxPlayers}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (/^\d*$/.test(val)) setMaxPlayers(val);
+              }}
+              placeholder="8"
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/20 hover:bg-white/10 focus:border-white/20"
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Duration */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-white/60">Duration</label>
+            <div className="relative">
+              <select
+                value={durationMinutes}
+                onChange={(e) => setDurationMinutes(e.target.value)}
+                className="w-full appearance-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition hover:bg-white/10 focus:border-white/20"
+              >
+                <option value="30" className="bg-[#0A0A0A]">30 minutes</option>
+                <option value="60" className="bg-[#0A0A0A]">1 hour</option>
+                <option value="120" className="bg-[#0A0A0A]">2 hours</option>
+                <option value="180" className="bg-[#0A0A0A]">3 hours</option>
+              </select>
+              <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/40">
+                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M1.41 0.589996L6 5.17L10.59 0.589996L12 2L6 8L0 2L1.41 0.589996Z" fill="currentColor" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          {/* Min Rating (optional) */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-white/60">Min Rating (optional)</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={minRating}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (/^\d*$/.test(val)) setMinRating(val);
+              }}
+              placeholder="e.g. 1200"
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/20 hover:bg-white/10 focus:border-white/20"
+            />
+          </div>
+
+          {/* Max Rating (optional) */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-white/60">Max Rating (optional)</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={maxRating}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (/^\d*$/.test(val)) setMaxRating(val);
+              }}
+              placeholder="e.g. 1800"
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/20 hover:bg-white/10 focus:border-white/20"
+            />
+          </div>
+        </>
+      )}
 
       {/* Time control */}
       <div className="flex flex-col gap-1">
@@ -757,48 +857,51 @@ export function TournamentPanel() {
         />
       </div>
 
-      {/* Sponsored toggle */}
-      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-        <div className="flex flex-col">
-          <span className="text-sm font-medium text-white">Sponsored tournament</span>
-          <span className="text-[10px] text-white/40">Add extra prize pool from your wallet</span>
-        </div>
-        <button
-          onClick={() => setIsSponsored(!isSponsored)}
-          className={cn(
-            "relative h-6 w-11 shrink-0 rounded-full transition-colors",
-            isSponsored ? "bg-amber-500" : "bg-white/20"
+      {/* Round-Robin only: Sponsored toggle and Join as Player */}
+      {tournamentType === "round-robin" && (
+        <>
+          {/* Sponsored toggle */}
+          <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-white">Sponsored tournament</span>
+              <span className="text-[10px] text-white/40">Add extra prize pool from your wallet</span>
+            </div>
+            <button
+              onClick={() => setIsSponsored(!isSponsored)}
+              className={cn(
+                "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+                isSponsored ? "bg-amber-500" : "bg-white/20"
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform",
+                  isSponsored && "translate-x-5"
+                )}
+              />
+            </button>
+          </div>
+
+          {/* Sponsored amount */}
+          {isSponsored && (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-white/60">Sponsor prize ({token})</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={sponsorAmount}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (/^\d*\.?\d*$/.test(val)) setSponsorAmount(val);
+                }}
+                placeholder="0.00"
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/20 hover:bg-white/10 focus:border-white/20"
+              />
+            </div>
           )}
-        >
-          <span
-            className={cn(
-              "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform",
-              isSponsored && "translate-x-5"
-            )}
-          />
-        </button>
-      </div>
 
-      {/* Sponsored amount */}
-      {isSponsored && (
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-white/60">Sponsor prize ({token})</label>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={sponsorAmount}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (/^\d*\.?\d*$/.test(val)) setSponsorAmount(val);
-            }}
-            placeholder="0.00"
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/20 hover:bg-white/10 focus:border-white/20"
-          />
-        </div>
-      )}
-
-      {/* Join as player toggle — only relevant for sponsored tournaments */}
-      {isSponsored && (
+          {/* Join as player toggle — only relevant for sponsored tournaments */}
+          {isSponsored && (
         <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
           <div className="flex flex-col">
             <span className="text-sm font-medium text-white">Join as player</span>
@@ -819,6 +922,8 @@ export function TournamentPanel() {
             />
           </button>
         </div>
+          )}
+        </>
       )}
 
       {/* Submit */}

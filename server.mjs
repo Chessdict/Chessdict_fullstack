@@ -1880,6 +1880,11 @@ app.prepare().then(async () => {
   const activeTournaments = new Map(); // tournamentId -> tournament state
   const playerTournamentMap = new Map(); // walletAddress -> tournamentId (tracks which tournament a player is in)
 
+  // ─── Arena Tournament State ───
+  const arenaMatchmakingQueues = new Map(); // tournamentId -> { queue: Set<userId>, lastRun: timestamp }
+  const arenaGameTracking = new Map(); // gameId -> { tournamentId, whiteUserId, blackUserId, startedAt }
+  const arenaEndTimers = new Map(); // tournamentId -> timeoutId for tournament end
+
   function normalizeWalletAddress(walletAddress) {
     return String(walletAddress || "").toLowerCase();
   }
@@ -2729,6 +2734,574 @@ app.prepare().then(async () => {
     activeTournaments.delete(tournamentId);
   }
 
+  // ─── Arena Tournament Functions ───
+
+  function calculateBuchholzScore(participant, state) {
+    // Buchholz = sum of points of all opponents faced
+    const opponentIds = JSON.parse(participant.lastOpponentIds || "[]");
+    let buchholz = 0;
+    for (const oppId of opponentIds) {
+      const opponent = state.participants.find(p => p.userId === oppId);
+      if (opponent) buchholz += opponent.points;
+    }
+    return buchholz;
+  }
+
+  function getArenaStandings(state) {
+    // Recalculate Buchholz for all participants
+    for (const p of state.participants) {
+      p.buchholzScore = calculateBuchholzScore(p, state);
+    }
+
+    return [...state.participants].sort((a, b) => {
+      if (a.points !== b.points) return b.points - a.points;
+      if (a.buchholzScore !== b.buchholzScore) return b.buchholzScore - a.buchholzScore;
+      if (a.wins !== b.wins) return b.wins - a.wins;
+      return b.rating - a.rating;
+    }).map((p, i) => ({
+      rank: i + 1,
+      userId: p.userId,
+      walletAddress: p.walletAddress,
+      points: p.points,
+      gamesPlayed: p.gamesPlayed,
+      wins: p.wins,
+      draws: p.draws,
+      losses: p.losses,
+      buchholzScore: p.buchholzScore,
+      rating: p.rating,
+    }));
+  }
+
+  async function updateArenaStandings(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state || state.tournamentType !== "ARENA") return;
+
+    const standings = getArenaStandings(state);
+
+    // Also send ongoing games
+    const ongoingGames = [];
+    for (const gameId of state.activeGames) {
+      const gameInfo = arenaGameTracking.get(gameId);
+      if (gameInfo) {
+        const whitePart = state.participants.find(p => p.userId === gameInfo.whiteUserId);
+        const blackPart = state.participants.find(p => p.userId === gameInfo.blackUserId);
+        if (whitePart && blackPart) {
+          ongoingGames.push({
+            id: gameId,
+            whitePlayerAddress: whitePart.walletAddress,
+            blackPlayerAddress: blackPart.walletAddress,
+            whiteRating: whitePart.rating,
+            blackRating: blackPart.rating,
+          });
+        }
+      }
+    }
+
+    const roomName = `tournament:${tournamentId}`;
+    console.log(`[ARENA] Emitting standingsUpdate to room ${roomName}. Standings:`, standings.map(s => ({ wallet: s.walletAddress, points: s.points, wins: s.wins, draws: s.draws, losses: s.losses })));
+    console.log(`[ARENA] Ongoing games for tournament ${tournamentId}:`, ongoingGames.length);
+    io.to(roomName).emit("arena:standingsUpdate", { standings, ongoingGames });
+  }
+
+  function isInActiveArenaGame(userId, state) {
+    for (const [gameId, game] of arenaGameTracking.entries()) {
+      if (game.tournamentId === state.id &&
+          (game.whiteUserId === userId || game.blackUserId === userId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function getRecentOpponents(participant) {
+    return JSON.parse(participant.lastOpponentIds || "[]");
+  }
+
+  function addRecentOpponent(participant, opponentId) {
+    const recent = getRecentOpponents(participant);
+    recent.push(opponentId);
+    if (recent.length > 3) recent.shift(); // Keep last 3
+    participant.lastOpponentIds = JSON.stringify(recent);
+  }
+
+  function balanceColors(player1, player2) {
+    const p1Balance = player1.whiteGames - player1.blackGames;
+    const p2Balance = player2.whiteGames - player2.blackGames;
+
+    if (p1Balance < p2Balance) {
+      return { white: player1, black: player2 };
+    } else if (p2Balance < p1Balance) {
+      return { white: player2, black: player1 };
+    } else {
+      return player1.points >= player2.points
+        ? { white: player1, black: player2 }
+        : { white: player2, black: player1 };
+    }
+  }
+
+  function findBestArenaOpponent(player, candidates, state) {
+    const RATING_TOLERANCE = 200;
+    const MAX_TOLERANCE = 400;
+    const minRating = state.minRating ?? 0;
+    const maxRating = state.maxRating ?? 3000;
+    const recentOpponents = getRecentOpponents(player);
+
+    let tolerance = RATING_TOLERANCE;
+
+    // First try: Find opponents excluding recent opponents
+    while (tolerance <= MAX_TOLERANCE) {
+      const eligible = candidates.filter(c =>
+        c.userId !== player.userId &&
+        !isInActiveArenaGame(c.userId, state) &&
+        c.rating >= minRating &&
+        c.rating <= maxRating &&
+        Math.abs(c.rating - player.rating) <= tolerance &&
+        !recentOpponents.includes(c.userId)
+      );
+
+      if (eligible.length > 0) {
+        return eligible.reduce((best, curr) => {
+          const bestScoreDiff = Math.abs(best.points - player.points);
+          const currScoreDiff = Math.abs(curr.points - player.points);
+          return currScoreDiff < bestScoreDiff ? curr : best;
+        });
+      }
+
+      tolerance += 100;
+    }
+
+    // Fallback: If no opponents found (e.g., only 2 players testing), allow recent opponents
+    console.log(`[ARENA] No non-recent opponents found for player ${player.userId}, allowing rematch`);
+    const fallbackEligible = candidates.filter(c =>
+      c.userId !== player.userId &&
+      !isInActiveArenaGame(c.userId, state) &&
+      c.rating >= minRating &&
+      c.rating <= maxRating
+    );
+
+    if (fallbackEligible.length > 0) {
+      return fallbackEligible.reduce((best, curr) => {
+        const bestScoreDiff = Math.abs(best.points - player.points);
+        const currScoreDiff = Math.abs(curr.points - player.points);
+        return currScoreDiff < bestScoreDiff ? curr : best;
+      });
+    }
+
+    return null;
+  }
+
+  async function runArenaMatchmaking(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state || state.tournamentType !== "ARENA" || !state.matchmakingActive) {
+      console.log(`[ARENA] Matchmaking skipped for ${tournamentId}: state=${!!state}, type=${state?.tournamentType}, active=${state?.matchmakingActive}`);
+      return;
+    }
+
+    const queue = state.participants.filter(p =>
+      p.isActive && !isInActiveArenaGame(p.userId, state)
+    );
+
+    console.log(`[ARENA] Running matchmaking for tournament ${tournamentId}. Queue size: ${queue.length}, Active players: ${state.participants.filter(p => p.isActive).length}`);
+
+    if (queue.length < 2) {
+      console.log(`[ARENA] Not enough players in queue (need 2, have ${queue.length})`);
+      return;
+    }
+
+    queue.sort((a, b) => {
+      if (a.points !== b.points) return b.points - a.points;
+      if (a.buchholzScore !== b.buchholzScore) return b.buchholzScore - a.buchholzScore;
+      return b.rating - a.rating;
+    });
+
+    const paired = new Set();
+    const pairings = [];
+
+    for (let i = 0; i < queue.length; i++) {
+      if (paired.has(queue[i].userId)) continue;
+
+      const player = queue[i];
+      const candidates = queue.slice(i + 1).filter(c => !paired.has(c.userId));
+      const opponent = findBestArenaOpponent(player, candidates, state);
+
+      if (opponent) {
+        paired.add(player.userId);
+        paired.add(opponent.userId);
+
+        const { white, black } = balanceColors(player, opponent);
+        pairings.push({ white, black });
+      }
+    }
+
+    for (const pairing of pairings) {
+      await createArenaGame(tournamentId, pairing.white, pairing.black);
+    }
+  }
+
+  async function createArenaGame(tournamentId, whiteParticipant, blackParticipant) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state) return;
+
+    const game = await prisma.game.create({
+      data: {
+        whitePlayerId: whiteParticipant.userId,
+        blackPlayerId: blackParticipant.userId,
+        fen: "start",
+        status: "IN_PROGRESS",
+        timeControl: state.timeControl,
+      },
+    });
+
+    // Initialize game state in Redis and memory cache
+    const initialState = {
+      fen: INITIAL_BOARD_FEN,
+      moves: [],
+      chatMessages: [],
+    };
+    gameStateStore.set(game.id, initialState);
+    await setGameState(game.id, initialState);
+
+    // Initialize game timer (convert minutes to seconds)
+    const timeInSeconds = state.timeControl * 60;
+    initGameTimer(game.id, timeInSeconds);
+
+    arenaGameTracking.set(game.id, {
+      tournamentId,
+      whiteUserId: whiteParticipant.userId,
+      blackUserId: blackParticipant.userId,
+      whiteWallet: whiteParticipant.walletAddress,
+      blackWallet: blackParticipant.walletAddress,
+      startedAt: Date.now(),
+    });
+
+    state.activeGames.add(game.id);
+
+    whiteParticipant.whiteGames++;
+    whiteParticipant.gamesPlayed++;
+    whiteParticipant.isActive = false;
+
+    blackParticipant.blackGames++;
+    blackParticipant.gamesPlayed++;
+    blackParticipant.isActive = false;
+
+    addRecentOpponent(whiteParticipant, blackParticipant.userId);
+    addRecentOpponent(blackParticipant, whiteParticipant.userId);
+
+    // Add arena game to active games tracking so players can rejoin and make moves
+    const whiteGameData = {
+      roomId: game.id,
+      color: 'white',
+      opponentWallet: blackParticipant.walletAddress,
+      playerRating: whiteParticipant.rating,
+      opponentRating: blackParticipant.rating,
+      playerName: null,
+      opponentName: null,
+      timeControl: state.timeControl,
+    };
+    const blackGameData = {
+      roomId: game.id,
+      color: 'black',
+      opponentWallet: whiteParticipant.walletAddress,
+      playerRating: blackParticipant.rating,
+      opponentRating: whiteParticipant.rating,
+      playerName: null,
+      opponentName: null,
+      timeControl: state.timeControl,
+    };
+    userActiveGames.set(whiteParticipant.walletAddress, whiteGameData);
+    userActiveGames.set(blackParticipant.walletAddress, blackGameData);
+    // Persist to Redis for reconnection
+    setUserActiveGame(whiteParticipant.walletAddress, whiteGameData).catch(() => {});
+    setUserActiveGame(blackParticipant.walletAddress, blackGameData).catch(() => {});
+
+    const whiteSocketId = getSocketIdForWallet(whiteParticipant.walletAddress);
+    const blackSocketId = getSocketIdForWallet(blackParticipant.walletAddress);
+
+    // Join players to game room and track in activeGames map
+    if (whiteSocketId) {
+      const whiteSocket = io.sockets.sockets.get(whiteSocketId);
+      if (whiteSocket) {
+        whiteSocket.join(game.id);
+        activeGames.set(whiteSocketId, game.id);
+        console.log(`[ARENA] White player socket ${whiteSocketId} joined room ${game.id}`);
+      }
+    }
+
+    if (blackSocketId) {
+      const blackSocket = io.sockets.sockets.get(blackSocketId);
+      if (blackSocket) {
+        blackSocket.join(game.id);
+        activeGames.set(blackSocketId, game.id);
+        console.log(`[ARENA] Black player socket ${blackSocketId} joined room ${game.id}`);
+      }
+    }
+
+    // Emit pairing found events
+    if (whiteSocketId) {
+      io.to(whiteSocketId).emit("arena:pairingFound", {
+        gameId: game.id,
+        opponentAddress: blackParticipant.walletAddress,
+        opponentRating: blackParticipant.rating,
+        color: "white",
+        timeControl: state.timeControl,
+      });
+    }
+
+    if (blackSocketId) {
+      io.to(blackSocketId).emit("arena:pairingFound", {
+        gameId: game.id,
+        opponentAddress: whiteParticipant.walletAddress,
+        opponentRating: whiteParticipant.rating,
+        color: "black",
+        timeControl: state.timeControl,
+      });
+    }
+
+    console.log(`[ARENA] Created game ${game.id} for tournament ${tournamentId}: ${whiteParticipant.walletAddress} (white) vs ${blackParticipant.walletAddress} (black)`);
+  }
+
+  async function handleArenaGameEnd(tournamentId, gameId, winnerId, isDraw) {
+    console.log(`[ARENA] handleArenaGameEnd called: tournamentId=${tournamentId}, gameId=${gameId}, winnerId=${winnerId}, isDraw=${isDraw}`);
+
+    const state = activeTournaments.get(tournamentId);
+    if (!state || state.tournamentType !== "ARENA") {
+      console.log(`[ARENA] Tournament ${tournamentId} not found or not ARENA type`);
+      return;
+    }
+
+    const gameInfo = arenaGameTracking.get(gameId);
+    if (!gameInfo || gameInfo.tournamentId !== tournamentId) {
+      console.log(`[ARENA] Game ${gameId} not found in tracking or tournament mismatch`);
+      return;
+    }
+
+    const whiteParticipant = state.participants.find(p => p.userId === gameInfo.whiteUserId);
+    const blackParticipant = state.participants.find(p => p.userId === gameInfo.blackUserId);
+
+    if (!whiteParticipant || !blackParticipant) {
+      console.log(`[ARENA] Participants not found for game ${gameId}`);
+      return;
+    }
+
+    console.log(`[ARENA] Before points update - White: ${whiteParticipant.points}, Black: ${blackParticipant.points}`);
+
+    if (isDraw) {
+      whiteParticipant.points += 0.5;
+      whiteParticipant.draws++;
+      blackParticipant.points += 0.5;
+      blackParticipant.draws++;
+      console.log(`[ARENA] Draw - both players get 0.5 points`);
+    } else if (winnerId === gameInfo.whiteUserId) {
+      whiteParticipant.points += 1;
+      whiteParticipant.wins++;
+      blackParticipant.losses++;
+      console.log(`[ARENA] White wins - White +1 point, Black loses`);
+    } else if (winnerId === gameInfo.blackUserId) {
+      blackParticipant.points += 1;
+      blackParticipant.wins++;
+      whiteParticipant.losses++;
+      console.log(`[ARENA] Black wins - Black +1 point, White loses`);
+    }
+
+    console.log(`[ARENA] After points update - White: ${whiteParticipant.points}, Black: ${blackParticipant.points}`);
+
+    state.activeGames.delete(gameId);
+    arenaGameTracking.delete(gameId);
+
+    // Clean up active games tracking for both players
+    userActiveGames.delete(whiteParticipant.walletAddress);
+    userActiveGames.delete(blackParticipant.walletAddress);
+    deleteUserActiveGame(whiteParticipant.walletAddress).catch(() => { });
+    deleteUserActiveGame(blackParticipant.walletAddress).catch(() => { });
+
+    // Clean up socket tracking in activeGames map
+    const whiteSocketId = getSocketIdForWallet(whiteParticipant.walletAddress);
+    const blackSocketId = getSocketIdForWallet(blackParticipant.walletAddress);
+    if (whiteSocketId) {
+      activeGames.delete(whiteSocketId);
+      console.log(`[ARENA] Removed white player socket ${whiteSocketId} from activeGames`);
+    }
+    if (blackSocketId) {
+      activeGames.delete(blackSocketId);
+      console.log(`[ARENA] Removed black player socket ${blackSocketId} from activeGames`);
+    }
+
+    // Clean up game state
+    gameStateStore.delete(gameId);
+    deleteGameState(gameId).catch(() => { });
+    deleteGameTimer(gameId).catch(() => { });
+
+    await updateArenaStandings(tournamentId);
+
+    // Update white player stats
+    await prisma.tournamentParticipant.update({
+      where: {
+        tournamentId_userId: {
+          tournamentId,
+          userId: whiteParticipant.userId,
+        },
+      },
+      data: {
+        points: whiteParticipant.points,
+        wins: whiteParticipant.wins,
+        draws: whiteParticipant.draws,
+        losses: whiteParticipant.losses,
+        gamesPlayed: whiteParticipant.gamesPlayed,
+        lastOpponentIds: whiteParticipant.lastOpponentIds,
+        whiteGames: whiteParticipant.whiteGames,
+        blackGames: whiteParticipant.blackGames,
+      },
+    }).catch(e => console.error(`[ARENA] Error updating white participant:`, e));
+
+    // Update black player stats
+    await prisma.tournamentParticipant.update({
+      where: {
+        tournamentId_userId: {
+          tournamentId,
+          userId: blackParticipant.userId,
+        },
+      },
+      data: {
+        points: blackParticipant.points,
+        wins: blackParticipant.wins,
+        draws: blackParticipant.draws,
+        losses: blackParticipant.losses,
+        gamesPlayed: blackParticipant.gamesPlayed,
+        lastOpponentIds: blackParticipant.lastOpponentIds,
+        whiteGames: blackParticipant.whiteGames,
+        blackGames: blackParticipant.blackGames,
+      },
+    }).catch(e => console.error(`[ARENA] Error updating black participant:`, e));
+
+    console.log(`[ARENA] Game ${gameId} ended for tournament ${tournamentId}`);
+  }
+
+  async function startArenaTournament(tournamentId) {
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        participants: {
+          include: { user: { select: { id: true, walletAddress: true, rating: true } } },
+        },
+      },
+    });
+
+    if (!tournament || tournament.tournamentType !== "ARENA") {
+      console.log(`[ARENA] Cannot start tournament ${tournamentId}, not an arena tournament`);
+      return;
+    }
+
+    const now = new Date();
+    const endTime = new Date(now.getTime() + (tournament.durationMinutes * 60 * 1000));
+
+    await prisma.tournament.update({
+      where: { id: tournamentId },
+      data: {
+        status: "IN_PROGRESS",
+        actualStartTime: now,
+        endTime,
+      },
+    });
+
+    const arenaState = {
+      id: tournamentId,
+      tournamentType: "ARENA",
+      participants: tournament.participants.map(p => ({
+        participantDbId: p.id,
+        userId: p.userId,
+        walletAddress: p.user.walletAddress,
+        rating: p.user.rating ?? 1200,
+        points: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        gamesPlayed: 0,
+        buchholzScore: 0,
+        lastOpponentIds: "[]",
+        isActive: false,
+        whiteGames: 0,
+        blackGames: 0,
+      })),
+      timeControl: tournament.timeControl,
+      minRating: tournament.minRating,
+      maxRating: tournament.maxRating,
+      endTime: endTime.getTime(),
+      activeGames: new Set(),
+      matchmakingActive: true,
+      connectedPlayers: new Set(),
+      lastActivityTime: Date.now(),
+    };
+
+    activeTournaments.set(tournamentId, arenaState);
+
+    for (const p of arenaState.participants) {
+      playerTournamentMap.set(p.walletAddress, tournamentId);
+    }
+
+    const roomName = `tournament:${tournamentId}`;
+    io.to(roomName).emit("arena:started", {
+      endTime: endTime.toISOString(),
+      durationMs: tournament.durationMinutes * 60 * 1000,
+    });
+
+    console.log(`[ARENA] Started tournament ${tournamentId}, ends at ${endTime.toISOString()}`);
+
+    const timeoutId = setTimeout(async () => {
+      await endArenaTournament(tournamentId);
+    }, tournament.durationMinutes * 60 * 1000);
+
+    arenaEndTimers.set(tournamentId, timeoutId);
+  }
+
+  async function endArenaTournament(tournamentId) {
+    const state = activeTournaments.get(tournamentId);
+    if (!state || state.tournamentType !== "ARENA") return;
+
+    state.matchmakingActive = false;
+
+    const timeoutId = arenaEndTimers.get(tournamentId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      arenaEndTimers.delete(tournamentId);
+    }
+
+    const standings = getArenaStandings(state);
+
+    await prisma.tournament.update({
+      where: { id: tournamentId },
+      data: { status: "COMPLETED" },
+    });
+
+    for (let i = 0; i < standings.length; i++) {
+      await prisma.tournamentParticipant.updateMany({
+        where: {
+          tournamentId,
+          userId: standings[i].userId,
+        },
+        data: {
+          placement: standings[i].rank,
+        },
+      });
+    }
+
+    const roomName = `tournament:${tournamentId}`;
+    io.to(roomName).emit("arena:ended", {
+      finalStandings: standings,
+      winner: standings.length > 0 ? {
+        userId: standings[0].userId,
+        walletAddress: standings[0].walletAddress,
+        points: standings[0].points,
+      } : null,
+    });
+
+    for (const p of state.participants) {
+      playerTournamentMap.delete(p.walletAddress);
+    }
+
+    activeTournaments.delete(tournamentId);
+    console.log(`[ARENA] Tournament ${tournamentId} ended`);
+  }
+
   // ─── Matchmaking (extracted module) ───
   async function createMatchedGame(p1, p2, stakeInfo) {
     const isStaked = !!stakeInfo;
@@ -3529,11 +4102,16 @@ app.prepare().then(async () => {
     });
 
     socket.on("movePiece", async ({ roomId, move, fen, moveRecord }) => {
+      console.log(`[MOVE] Received movePiece from socket ${socket.id} for room ${roomId}`, { move, userId });
       const activeGame = await requireActivePlayerInRoom(socket, roomId, "movePiece");
-      if (!activeGame) return;
+      if (!activeGame) {
+        console.log(`[MOVE] No active game found for socket ${socket.id} in room ${roomId}`);
+        return;
+      }
 
-      console.log(`Move in ${activeGame.roomId}:`, move);
+      console.log(`[MOVE] Move in ${activeGame.roomId}:`, move, `by ${userId}`);
       const opponentSocketId = getSocketIdForWallet(activeGame.opponentWallet);
+      console.log(`[MOVE] Opponent socket: ${opponentSocketId}, room members:`, io.sockets.adapter.rooms.get(roomId));
 
       // Persist the new authoritative room state before emitting live events.
       // That way a fast reload/rejoin cannot race ahead and fetch the pre-move snapshot.
@@ -3818,7 +4396,7 @@ app.prepare().then(async () => {
 
       console.log(`[SERVER] Resignation received from ${userId} in room ${activeGame.roomId}`);
       console.log(`[SERVER] Socket ${socket.id} rooms:`, Array.from(socket.rooms));
-      cleanupRegularGame(activeGame.roomId);
+
       try {
         const game = await prisma.game.findUnique({ where: { id: activeGame.roomId } });
         console.log(`[SERVER] Game found:`, game ? { id: game.id, status: game.status, whitePlayerId: game.whitePlayerId, blackPlayerId: game.blackPlayerId } : null);
@@ -3833,6 +4411,10 @@ app.prepare().then(async () => {
           socket.emit("resignError", { error: "Game is not in progress" });
           return;
         }
+
+        // Check if this is an arena tournament game
+        const arenaInfo = arenaGameTracking.get(activeGame.roomId);
+        const isArenaGame = !!arenaInfo;
 
         // Determine winner
         const whitePlayer = await prisma.user.findUnique({ where: { id: game.whitePlayerId } });
@@ -3866,6 +4448,46 @@ app.prepare().then(async () => {
             ...finishedData,
           }
         });
+
+        // Handle arena tournament games differently
+        if (isArenaGame) {
+          console.log(`[ARENA] Resignation in arena game ${activeGame.roomId}. Winner: ${winnerColor}`);
+
+          // Call arena game end handler to update standings
+          await handleArenaGameEnd(arenaInfo.tournamentId, activeGame.roomId, winnerId, false);
+
+          // Emit arena-specific game over event
+          io.to(activeGame.roomId).emit("arena:gameOver", {
+            winner: winnerColor,
+            reason: "resignation",
+          });
+
+          console.log(`[ARENA] Arena game ${activeGame.roomId} ended by resignation. Standings updated.`);
+
+          // Re-activate players for matchmaking
+          const state = activeTournaments.get(arenaInfo.tournamentId);
+          if (state && state.matchmakingActive) {
+            const whiteParticipant = state.participants.find(p => p.userId === arenaInfo.whiteUserId);
+            const blackParticipant = state.participants.find(p => p.userId === arenaInfo.blackUserId);
+
+            if (whiteParticipant) {
+              whiteParticipant.isActive = true;
+              console.log(`[ARENA] Set white player ${whiteParticipant.walletAddress} back to active`);
+            }
+            if (blackParticipant) {
+              blackParticipant.isActive = true;
+              console.log(`[ARENA] Set black player ${blackParticipant.walletAddress} back to active`);
+            }
+
+            // Trigger matchmaking after resignation
+            setTimeout(() => runArenaMatchmaking(arenaInfo.tournamentId), 2000);
+          }
+
+          return; // Early return for arena games
+        }
+
+        // Regular game handling (non-arena)
+        cleanupRegularGame(activeGame.roomId);
 
         // Update ELO ratings
         const updatedGame = { ...game, winnerId };
@@ -4594,6 +5216,245 @@ app.prepare().then(async () => {
       }
     });
 
+    // ─── Arena Tournament Socket Events ───
+
+    socket.on("arena:register", async ({ tournamentId }) => {
+      if (!userId || !tournamentId) return;
+
+      const state = activeTournaments.get(tournamentId);
+      if (!state || state.tournamentType !== "ARENA") return;
+
+      const participant = state.participants.find(p =>
+        normalizeWalletAddress(p.walletAddress) === normalizeWalletAddress(userId)
+      );
+
+      if (!participant) return;
+
+      socket.join(`tournament:${tournamentId}`);
+      addConnectedTournamentPlayer(state, userId);
+
+      console.log(`[ARENA] ${userId} registered for tournament ${tournamentId}`);
+
+      const standings = getArenaStandings(state);
+      const ongoingGames = [];
+      for (const gameId of state.activeGames) {
+        const gameInfo = arenaGameTracking.get(gameId);
+        if (gameInfo) {
+          const whitePart = state.participants.find(p => p.userId === gameInfo.whiteUserId);
+          const blackPart = state.participants.find(p => p.userId === gameInfo.blackUserId);
+          if (whitePart && blackPart) {
+            ongoingGames.push({
+              id: gameId,
+              whitePlayerAddress: whitePart.walletAddress,
+              blackPlayerAddress: blackPart.walletAddress,
+              whiteRating: whitePart.rating,
+              blackRating: blackPart.rating,
+            });
+          }
+        }
+      }
+
+      socket.emit("arena:state", {
+        phase: participant.isActive ? "queue" : "lobby",
+        standings,
+        ongoingGames,
+        endTime: state.endTime,
+        timeControl: state.timeControl,
+      });
+    });
+
+    socket.on("arena:requestPairing", async ({ tournamentId }) => {
+      if (!userId || !tournamentId) return;
+
+      const state = activeTournaments.get(tournamentId);
+      if (!state || state.tournamentType !== "ARENA" || !state.matchmakingActive) return;
+
+      const participant = state.participants.find(p =>
+        normalizeWalletAddress(p.walletAddress) === normalizeWalletAddress(userId)
+      );
+
+      if (!participant) return;
+
+      participant.isActive = true;
+
+      const queue = state.participants.filter(p => p.isActive && !isInActiveArenaGame(p.userId, state));
+
+      socket.emit("arena:queuePosition", {
+        position: queue.findIndex(p => p.userId === participant.userId) + 1,
+        queueSize: queue.length,
+      });
+
+      console.log(`[ARENA] ${userId} entered queue for tournament ${tournamentId}`);
+
+      setTimeout(() => runArenaMatchmaking(tournamentId), 2000);
+    });
+
+    socket.on("arena:gameComplete", async ({ tournamentId, gameId, winner, isDraw }) => {
+      console.log(`[ARENA] Game complete: tournament=${tournamentId}, game=${gameId}, winner=${winner}, isDraw=${isDraw}`);
+
+      const gameInfo = arenaGameTracking.get(gameId);
+      if (!gameInfo || gameInfo.tournamentId !== tournamentId) return;
+
+      let winnerId = null;
+      if (!isDraw) {
+        winnerId = winner === "white" ? gameInfo.whiteUserId : gameInfo.blackUserId;
+      }
+
+      await handleArenaGameEnd(tournamentId, gameId, winnerId, isDraw);
+
+      const state = activeTournaments.get(tournamentId);
+      if (state && state.matchmakingActive) {
+        const whiteParticipant = state.participants.find(p => p.userId === gameInfo.whiteUserId);
+        const blackParticipant = state.participants.find(p => p.userId === gameInfo.blackUserId);
+
+        if (whiteParticipant) whiteParticipant.isActive = true;
+        if (blackParticipant) blackParticipant.isActive = true;
+
+        setTimeout(() => runArenaMatchmaking(tournamentId), 2000);
+      }
+    });
+
+    socket.on("arena:leaveTournament", async ({ tournamentId }) => {
+      if (!userId || !tournamentId) return;
+
+      const state = activeTournaments.get(tournamentId);
+      if (!state || state.tournamentType !== "ARENA") return;
+
+      const participant = state.participants.find(p =>
+        normalizeWalletAddress(p.walletAddress) === normalizeWalletAddress(userId)
+      );
+
+      if (participant) {
+        participant.isActive = false;
+      }
+
+      removeConnectedTournamentPlayer(state, userId);
+      socket.leave(`tournament:${tournamentId}`);
+
+      console.log(`[ARENA] ${userId} left tournament ${tournamentId}`);
+    });
+
+    // Arena draw offer handlers
+    socket.on("arena:offerDraw", async ({ gameId }) => {
+      if (!userId || !gameId) return;
+
+      const arenaInfo = arenaGameTracking.get(gameId);
+      if (!arenaInfo) {
+        console.log(`[ARENA] Draw offer attempted but game ${gameId} not found in tracking`);
+        return;
+      }
+
+      // Verify player is in this game
+      if (arenaInfo.whiteWallet !== userId && arenaInfo.blackWallet !== userId) {
+        console.log(`[ARENA] Player ${userId} attempted to offer draw in game they're not part of`);
+        return;
+      }
+
+      // Determine opponent wallet address
+      const opponentWallet = arenaInfo.whiteWallet === userId ? arenaInfo.blackWallet : arenaInfo.whiteWallet;
+      const opponentSocketId = userSocketMap.get(opponentWallet);
+
+      if (opponentSocketId) {
+        io.to(opponentSocketId).emit("arena:drawOffered");
+        console.log(`[ARENA] Draw offer sent from ${userId} to ${opponentWallet} in game ${gameId}`);
+      }
+    });
+
+    socket.on("arena:acceptDraw", async ({ gameId }) => {
+      if (!userId || !gameId) return;
+
+      const arenaInfo = arenaGameTracking.get(gameId);
+      if (!arenaInfo) {
+        console.log(`[ARENA] Draw accept attempted but game ${gameId} not found in tracking`);
+        return;
+      }
+
+      // Verify player is in this game
+      if (arenaInfo.whiteWallet !== userId && arenaInfo.blackWallet !== userId) {
+        console.log(`[ARENA] Player ${userId} attempted to accept draw in game they're not part of`);
+        return;
+      }
+
+      console.log(`[ARENA] Draw accepted in game ${gameId} by ${userId}`);
+
+      // Update game in database
+      await prisma.game.update({
+        where: { id: gameId },
+        data: {
+          status: "COMPLETED",
+          winnerId: null, // Draw has no winner
+        },
+      }).catch(e => console.error(`[ARENA] Error updating game ${gameId} for draw:`, e));
+
+      // Call arena game end handler with draw = true
+      await handleArenaGameEnd(arenaInfo.tournamentId, gameId, null, true);
+
+      // Emit to both players
+      io.to(gameId).emit("arena:drawAccepted");
+      io.to(gameId).emit("arena:gameOver", {
+        winner: null,
+        reason: "agreement",
+        isDraw: true,
+      });
+
+      // Re-activate players for matchmaking
+      const state = activeTournaments.get(arenaInfo.tournamentId);
+      if (state && state.matchmakingActive) {
+        const whiteParticipant = state.participants.find(p => p.userId === arenaInfo.whiteUserId);
+        const blackParticipant = state.participants.find(p => p.userId === arenaInfo.blackUserId);
+
+        if (whiteParticipant) {
+          whiteParticipant.isActive = true;
+          console.log(`[ARENA] Set white player ${whiteParticipant.walletAddress} back to active after draw`);
+        }
+        if (blackParticipant) {
+          blackParticipant.isActive = true;
+          console.log(`[ARENA] Set black player ${blackParticipant.walletAddress} back to active after draw`);
+        }
+
+        // Trigger matchmaking after draw
+        setTimeout(() => runArenaMatchmaking(arenaInfo.tournamentId), 2000);
+      }
+    });
+
+    socket.on("arena:declineDraw", async ({ gameId }) => {
+      if (!userId || !gameId) return;
+
+      const arenaInfo = arenaGameTracking.get(gameId);
+      if (!arenaInfo) return;
+
+      // Verify player is in this game
+      if (arenaInfo.whiteWallet !== userId && arenaInfo.blackWallet !== userId) return;
+
+      // Determine opponent who offered the draw
+      const opponentWallet = arenaInfo.whiteWallet === userId ? arenaInfo.blackWallet : arenaInfo.whiteWallet;
+      const opponentSocketId = userSocketMap.get(opponentWallet);
+
+      if (opponentSocketId) {
+        io.to(opponentSocketId).emit("arena:drawDeclined");
+        console.log(`[ARENA] Draw declined in game ${gameId}`);
+      }
+    });
+
+    socket.on("arena:cancelDraw", async ({ gameId }) => {
+      if (!userId || !gameId) return;
+
+      const arenaInfo = arenaGameTracking.get(gameId);
+      if (!arenaInfo) return;
+
+      // Verify player is in this game
+      if (arenaInfo.whiteWallet !== userId && arenaInfo.blackWallet !== userId) return;
+
+      // Determine opponent
+      const opponentWallet = arenaInfo.whiteWallet === userId ? arenaInfo.blackWallet : arenaInfo.whiteWallet;
+      const opponentSocketId = userSocketMap.get(opponentWallet);
+
+      if (opponentSocketId) {
+        io.to(opponentSocketId).emit("arena:drawCancelled");
+        console.log(`[ARENA] Draw offer cancelled in game ${gameId}`);
+      }
+    });
+
     socket.on("disconnect", () => {
       console.log("Client disconnected:", socket.id);
 
@@ -4855,5 +5716,37 @@ app.prepare().then(async () => {
     } catch (error) {
       console.error("[STARTUP] Failed to restore disconnect grace windows:", error);
     }
+
+    // ─── Arena Tournament Auto-Start Scheduler ───
+    console.log("[STARTUP] Starting arena tournament scheduler...");
+
+    // Check immediately on startup for tournaments that should start
+    const checkAndStartArenas = async () => {
+      try {
+        const now = new Date();
+        const pendingArenas = await prisma.tournament.findMany({
+          where: {
+            tournamentType: "ARENA",
+            status: "PENDING",
+            startsAt: {
+              lte: now,
+            },
+          },
+        });
+
+        for (const arena of pendingArenas) {
+          console.log(`[ARENA SCHEDULER] Auto-starting arena tournament ${arena.id} (${arena.name})`);
+          await startArenaTournament(arena.id);
+        }
+      } catch (error) {
+        console.error("[ARENA SCHEDULER] Error checking for tournaments to start:", error);
+      }
+    };
+
+    // Check immediately
+    await checkAndStartArenas();
+
+    // Then check every 30 seconds
+    setInterval(checkAndStartArenas, 30000);
   });
 });

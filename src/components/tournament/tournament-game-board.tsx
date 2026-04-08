@@ -10,6 +10,7 @@ import { PremoveGhostOverlay } from "@/components/chess/premove-ghost-overlay";
 import { MaterialBalanceStrip } from "@/components/chess/material-balance-strip";
 import { PlayerRatingBadge } from "@/components/chess/player-rating-badge";
 import { useTournamentStore } from "@/stores/tournament-store";
+import { useArenaStore } from "@/stores/arena-store";
 import {
   getPromotionSelection,
   type PromotionPiece,
@@ -32,6 +33,10 @@ function formatTime(seconds: number): string {
 interface TournamentGameBoardProps {
   socket: Socket | null;
   myAddress: string;
+  // Arena tournament props (optional)
+  gameId?: string;
+  myColor?: "white" | "black";
+  opponentAddress?: string;
 }
 
 type SelectionMode = "move" | "premove" | null;
@@ -45,14 +50,25 @@ function isPromotionDestination(square: string, color: "w" | "b") {
 export function TournamentGameBoard({
   socket,
   myAddress,
+  gameId: arenaGameId,
+  myColor: arenaMyColor,
+  opponentAddress: arenaOpponentAddress,
 }: TournamentGameBoardProps) {
   const { boardTheme } = useBoardTheme();
   const { useCustomPiecesOnMobile } = useBoardPieces();
+
+  // For round-robin tournaments, use tournament store
+  const tournamentStore = useTournamentStore();
+  const arenaStore = useArenaStore();
+
+  // Use arena props if provided, otherwise use tournament store
+  const isArenaGame = !!arenaGameId;
+  const gameId = arenaGameId || tournamentStore.gameId;
+  const playerColor = arenaMyColor || tournamentStore.playerColor;
+  const opponentAddress = arenaOpponentAddress || tournamentStore.opponentAddress;
+
   const {
     tournamentId,
-    gameId,
-    playerColor,
-    opponentAddress,
     playerRating,
     opponentRating,
     timeControl,
@@ -60,11 +76,15 @@ export function TournamentGameBoard({
     blackTime,
     decrementWhiteTime,
     decrementBlackTime,
-    setGameResult,
+    setGameResult: setTournamentGameResult,
     setPhase,
-    gameResult,
+    gameResult: tournamentGameResult,
     disconnectedPlayers,
-  } = useTournamentStore();
+  } = tournamentStore;
+
+  // Use the appropriate store based on game type
+  const setGameResult = isArenaGame ? arenaStore.setGameResult : setTournamentGameResult;
+  const gameResult = isArenaGame ? arenaStore.gameResult : tournamentGameResult;
 
   const game = useMemo(() => new Chess(), []);
   const [fen, setFen] = useState(game.fen());
@@ -79,6 +99,8 @@ export function TournamentGameBoard({
   const [skipNextAnimation, setSkipNextAnimation] = useState(false);
   const [promotionSelection, setPromotionSelection] = useState<PromotionSelection | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const [drawOffered, setDrawOffered] = useState(false); // I offered draw
+  const [drawReceived, setDrawReceived] = useState(false); // Opponent offered draw
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const sourceSquareRef = useRef<string | null>(null);
   const selectionModeRef = useRef<SelectionMode>(null);
@@ -137,6 +159,37 @@ export function TournamentGameBoard({
     return () => window.removeEventListener("resize", updateViewport);
   }, []);
 
+  // Arena game initialization - request initial game state
+  useEffect(() => {
+    if (!isArenaGame || !socket || !gameId) return;
+
+    console.log("[ARENA] Initializing arena game:", gameId);
+
+    // Request to join the game and get initial state
+    socket.emit("rejoinGame", { roomId: gameId });
+
+    const handleGameRejoined = (snapshot: any) => {
+      console.log("[ARENA] Game rejoined, snapshot received:", snapshot);
+      if (snapshot.fen) {
+        game.load(snapshot.fen);
+        setFen(snapshot.fen);
+      }
+      // Timer updates will come from tournament store
+    };
+
+    const handleRejoinError = (data: any) => {
+      console.error("[ARENA] Error joining game:", data);
+    };
+
+    socket.on("gameRejoined", handleGameRejoined);
+    socket.on("rejoinError", handleRejoinError);
+
+    return () => {
+      socket.off("gameRejoined", handleGameRejoined);
+      socket.off("rejoinError", handleRejoinError);
+    };
+  }, [isArenaGame, socket, gameId, game]);
+
   const syncState = useCallback(() => {
     setFen(game.fen());
   }, [game]);
@@ -173,12 +226,17 @@ export function TournamentGameBoard({
 
   // Reset game when gameId changes
   useEffect(() => {
+    console.log(`[GAME BOARD] GameId changed to ${gameId}, resetting game state`);
     game.reset();
     setFen(game.fen());
     clearSelection();
     setQueuedPremove(null);
     setPromotionSelection(null);
     setShowResignConfirm(false);
+    // Don't call setGameResult(null) here - it sets phase to "game-ended"!
+    // Arena store already clears gameResult in setCurrentGame
+    setDrawOffered(false); // Clear draw offer state
+    setDrawReceived(false); // Clear draw received state
     clearDragInteraction();
     resetBoardInteraction();
   }, [gameId, game, clearSelection, resetBoardInteraction, clearDragInteraction]);
@@ -223,11 +281,29 @@ export function TournamentGameBoard({
     if (!result) return null;
 
     if (socket && gameId) {
-      socket.emit("tournament:move", { gameId, move });
+      if (isArenaGame) {
+        // Arena games use regular movePiece event like standard games
+        socket.emit("movePiece", {
+          roomId: gameId,
+          move,
+          fen: game.fen(),
+          moveRecord: {
+            san: result.san,
+            from: result.from,
+            to: result.to,
+            color: result.color,
+            piece: result.piece,
+            timestamp: Date.now(),
+          },
+        });
+      } else {
+        // Round-robin tournaments use tournament:move
+        socket.emit("tournament:move", { gameId, move });
+      }
     }
 
     return result;
-  }, [gameId, safeMove, socket]);
+  }, [gameId, safeMove, socket, isArenaGame, game]);
 
   const flushQueuedPremove = useCallback(() => {
     const pendingMove = queuedPremoveRef.current;
@@ -324,15 +400,29 @@ export function TournamentGameBoard({
     if (timeLeft <= 0) {
       const winner = turn === "w" ? "black" : "white";
       setGameResult(winner, "timeout");
-      setPhase("round-waiting");
 
-      if (socket && tournamentId && gameId) {
-        socket.emit("tournament:gameComplete", {
-          tournamentId,
-          gameId,
-          winner,
-          isDraw: false,
-        });
+      // For round-robin tournaments, set phase to round-waiting
+      // For arena tournaments, setGameResult automatically sets phase to "game-ended"
+      if (!isArenaGame) {
+        setPhase("round-waiting");
+      }
+
+      if (socket && gameId) {
+        if (isArenaGame) {
+          socket.emit("arena:gameComplete", {
+            tournamentId: arenaStore.tournamentId,
+            gameId,
+            winner,
+            isDraw: false,
+          });
+        } else {
+          socket.emit("tournament:gameComplete", {
+            tournamentId,
+            gameId,
+            winner,
+            isDraw: false,
+          });
+        }
       }
     }
   }, [
@@ -345,6 +435,8 @@ export function TournamentGameBoard({
     tournamentId,
     setGameResult,
     setPhase,
+    isArenaGame,
+    arenaStore.tournamentId,
   ]);
 
   // Listen for opponent moves
@@ -354,26 +446,30 @@ export function TournamentGameBoard({
     const handleOpponentMove = ({
       move,
     }: {
-      gameId: string;
+      gameId?: string;
+      roomId?: string;
       move: any;
     }) => {
       safeMove(move, { preserveSelection: true, resetBoardInteraction: true });
       flushQueuedPremove();
     };
 
-    socket.on("tournament:opponentMove", handleOpponentMove);
+    // Arena games listen for regular opponentMove, tournament games listen for tournament:opponentMove
+    const eventName = isArenaGame ? "opponentMove" : "tournament:opponentMove";
+    socket.on(eventName, handleOpponentMove);
+
     return () => {
-      socket.off("tournament:opponentMove", handleOpponentMove);
+      socket.off(eventName, handleOpponentMove);
     };
-  }, [socket, gameId, safeMove, flushQueuedPremove]);
+  }, [socket, gameId, safeMove, flushQueuedPremove, isArenaGame]);
 
   useEffect(() => {
     flushQueuedPremove();
   }, [fen, flushQueuedPremove]);
 
-  // Listen for force end
+  // Listen for force end (round-robin only)
   useEffect(() => {
-    if (!socket || !gameId) return;
+    if (!socket || !gameId || isArenaGame) return;
 
     const handleForceEnd = () => {
       setGameResult("draw", "round_timeout");
@@ -384,7 +480,46 @@ export function TournamentGameBoard({
     return () => {
       socket.off("tournament:forceEnd", handleForceEnd);
     };
-  }, [socket, gameId, setGameResult, setPhase]);
+  }, [socket, gameId, setGameResult, setPhase, isArenaGame]);
+
+  // Listen for draw events (arena games only)
+  useEffect(() => {
+    if (!socket || !gameId || !isArenaGame) return;
+
+    const handleDrawOffered = () => {
+      console.log("[ARENA] Draw offer received from opponent");
+      setDrawReceived(true);
+    };
+
+    const handleDrawAccepted = () => {
+      console.log("[ARENA] Draw offer accepted");
+      setDrawOffered(false);
+      setDrawReceived(false);
+      setGameResult("draw", "agreement");
+    };
+
+    const handleDrawDeclined = () => {
+      console.log("[ARENA] Draw offer declined");
+      setDrawOffered(false);
+    };
+
+    const handleDrawCancelled = () => {
+      console.log("[ARENA] Draw offer cancelled by opponent");
+      setDrawReceived(false);
+    };
+
+    socket.on("arena:drawOffered", handleDrawOffered);
+    socket.on("arena:drawAccepted", handleDrawAccepted);
+    socket.on("arena:drawDeclined", handleDrawDeclined);
+    socket.on("arena:drawCancelled", handleDrawCancelled);
+
+    return () => {
+      socket.off("arena:drawOffered", handleDrawOffered);
+      socket.off("arena:drawAccepted", handleDrawAccepted);
+      socket.off("arena:drawDeclined", handleDrawDeclined);
+      socket.off("arena:drawCancelled", handleDrawCancelled);
+    };
+  }, [socket, gameId, isArenaGame, setGameResult]);
 
   // Check for checkmate/stalemate/draw
   useEffect(() => {
@@ -402,16 +537,38 @@ export function TournamentGameBoard({
       reason = getAutomaticDrawReason(game) ?? "draw";
     }
 
+    console.log(`[GAME END] Game over - winner: ${winner}, reason: ${reason}, isArenaGame: ${isArenaGame}`);
+    console.log(`[GAME END] Calling setGameResult for ${isArenaGame ? 'ARENA' : 'ROUND-ROBIN'} game`);
     setGameResult(winner, reason);
-    setPhase("round-waiting");
 
-    if (socket && tournamentId && gameId) {
-      socket.emit("tournament:gameComplete", {
-        tournamentId,
-        gameId,
-        winner,
-        isDraw: winner === "draw",
-      });
+    // For round-robin tournaments, set phase to round-waiting
+    // For arena tournaments, setGameResult automatically sets phase to "game-ended"
+    if (!isArenaGame) {
+      setPhase("round-waiting");
+      console.log("[GAME END] Round-robin: Set phase to round-waiting");
+    } else {
+      console.log("[ARENA] Game ended, arena store should now be in game-ended phase");
+      console.log("[ARENA] Current arena store state:", { phase: arenaStore.phase, gameResult: arenaStore.gameResult });
+    }
+
+    if (socket && gameId) {
+      if (isArenaGame) {
+        // Arena games use arena:gameComplete event
+        socket.emit("arena:gameComplete", {
+          tournamentId: arenaStore.tournamentId,
+          gameId,
+          winner,
+          isDraw: winner === "draw",
+        });
+      } else {
+        // Round-robin uses tournament:gameComplete
+        socket.emit("tournament:gameComplete", {
+          tournamentId,
+          gameId,
+          winner,
+          isDraw: winner === "draw",
+        });
+      }
     }
   }, [
     fen,
@@ -422,6 +579,8 @@ export function TournamentGameBoard({
     gameId,
     setGameResult,
     setPhase,
+    isArenaGame,
+    arenaStore.tournamentId,
   ]);
 
   // Move options highlighting
@@ -622,12 +781,64 @@ export function TournamentGameBoard({
   );
 
   const handleResign = () => {
-    if (!socket || !tournamentId || !gameId) return;
-    socket.emit("tournament:resign", { tournamentId, gameId });
+    if (!socket || !gameId) return;
+
     const winner = playerColor === "white" ? "black" : "white";
-    setGameResult(winner, "resignation");
-    setPhase("round-waiting");
+
+    if (isArenaGame) {
+      socket.emit("resign", { roomId: gameId });
+      setGameResult(winner, "resignation");
+      // Arena store automatically sets phase to "game-ended"
+    } else {
+      if (!tournamentId) return;
+      socket.emit("tournament:resign", { tournamentId, gameId });
+      setGameResult(winner, "resignation");
+      setPhase("round-waiting");
+    }
+
     setShowResignConfirm(false);
+  };
+
+  const handleOfferDraw = () => {
+    if (!socket || !gameId) return;
+
+    if (isArenaGame) {
+      socket.emit("arena:offerDraw", { gameId });
+      setDrawOffered(true);
+    } else {
+      // Round-robin tournaments don't support draws yet
+      console.log("[DRAW] Round-robin tournaments don't support manual draws");
+    }
+  };
+
+  const handleAcceptDraw = () => {
+    if (!socket || !gameId) return;
+
+    if (isArenaGame) {
+      socket.emit("arena:acceptDraw", { gameId });
+      setGameResult("draw", "agreement");
+    }
+
+    setDrawReceived(false);
+  };
+
+  const handleDeclineDraw = () => {
+    if (!socket || !gameId) return;
+
+    if (isArenaGame) {
+      socket.emit("arena:declineDraw", { gameId });
+    }
+
+    setDrawReceived(false);
+  };
+
+  const handleCancelDraw = () => {
+    if (!socket || !gameId) return;
+
+    if (isArenaGame) {
+      socket.emit("arena:cancelDraw", { gameId });
+      setDrawOffered(false);
+    }
   };
 
   const orientation: "white" | "black" =
@@ -840,9 +1051,79 @@ export function TournamentGameBoard({
 
      </div>
 
-      {/* Resign button */}
+      {/* Draw offer banner */}
+      {drawReceived && !gameResult && (
+        <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-blue-400">Opponent offers a draw</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAcceptDraw}
+                className="rounded-lg bg-green-500/20 px-4 py-2 text-sm font-medium text-green-400 transition hover:bg-green-500/30"
+              >
+                Accept
+              </button>
+              <button
+                onClick={handleDeclineDraw}
+                className="rounded-lg bg-red-500/20 px-4 py-2 text-sm font-medium text-red-400 transition hover:bg-red-500/30"
+              >
+                Decline
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Draw and Resign buttons */}
       {!gameResult && (
-        <div className="flex justify-center">
+        <div className="flex justify-center gap-3">
+          {/* Draw button (arena games only) */}
+          {isArenaGame && !drawOffered && (
+            <button
+              onClick={handleOfferDraw}
+              className="flex items-center gap-2 rounded-xl bg-blue-500/10 px-6 py-2.5 text-sm font-medium text-blue-400 transition hover:bg-blue-500/20"
+            >
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+                />
+              </svg>
+              Offer Draw
+            </button>
+          )}
+
+          {/* Cancel draw offer button */}
+          {isArenaGame && drawOffered && (
+            <button
+              onClick={handleCancelDraw}
+              className="flex items-center gap-2 rounded-xl bg-blue-500/20 px-6 py-2.5 text-sm font-medium text-blue-400 transition hover:bg-blue-500/30"
+            >
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+              Cancel Draw Offer
+            </button>
+          )}
+
+          {/* Resign button */}
           {!showResignConfirm ? (
             <button
               onClick={() => setShowResignConfirm(true)}

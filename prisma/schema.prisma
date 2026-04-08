@@ -154,6 +154,16 @@ model Tournament {
   maxPlayers     Int
   currentRound   Int              @default(0)
 
+  // Tournament type (round-robin or arena)
+  tournamentType TournamentType   @default(ROUND_ROBIN)
+
+  // Arena-specific fields (nullable for backward compatibility)
+  durationMinutes Int?            // Arena: 30, 60, 120, etc.
+  minRating       Int?            // Arena: minimum rating restriction
+  maxRating       Int?            // Arena: maximum rating restriction
+  actualStartTime DateTime?       // Arena: when tournament actually started
+  endTime         DateTime?       // Arena: when tournament will/did end
+
   // On-chain fields (maps to Chessdict.sol GameTournament)
   onChainGameId  Int?             @unique // contract gameId counter
   token          String?          // ERC20 token address used for staking
@@ -184,6 +194,14 @@ model TournamentParticipant {
   draws        Int      @default(0)
   losses       Int      @default(0)
   joinedAt     DateTime @default(now())
+
+  // Arena-specific fields
+  gamesPlayed     Int     @default(0)   // Count of games in arena
+  buchholzScore   Float   @default(0)   // Tiebreaker for arena
+  lastOpponentIds String? // JSON array of last 3 opponent user IDs
+  isActive        Boolean @default(false) // Currently in matchmaking queue
+  whiteGames      Int     @default(0)   // Color balance tracking
+  blackGames      Int     @default(0)
 
   tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
   user       User       @relation(fields: [userId], references: [id])
@@ -217,6 +235,11 @@ model TournamentMatch {
   updatedAt DateTime @updatedAt
 
   @@unique([tournamentId, round, matchIndex])
+}
+
+enum TournamentType {
+  ROUND_ROBIN
+  ARENA
 }
 
 enum TournamentStatus {
