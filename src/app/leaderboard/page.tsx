@@ -22,6 +22,7 @@ function RankIcon({ rank }: { rank: number }) {
 export default async function LeaderboardPage() {
   const leaderboard = await getTodayLeaderboard();
   const loser = leaderboard.loser;
+  const windowDateLabel = leaderboard.window.label.split(" · ")[0];
 
   return (
     <main className="min-h-screen bg-black px-4 pb-16 pt-28 text-white sm:px-6 lg:px-8">
@@ -33,10 +34,10 @@ export default async function LeaderboardPage() {
                 Event Leaderboard
               </p>
               <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                April 5 Window
+                {windowDateLabel} Window
               </h1>
               <p className="max-w-2xl text-sm text-white/65 sm:text-base">
-                Ranked by standard points from completed games between 7:30 PM and 9:30 PM WAT on April 5, 2026.
+                Ranked by standard points from completed games between 7:30 PM and 9:30 PM WAT on {windowDateLabel}.
                 Wins count as 1 point and draws count as 0.5. The staked column still shows performance in staked games inside the same window.
               </p>
             </div>
