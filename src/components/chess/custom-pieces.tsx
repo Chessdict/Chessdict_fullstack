@@ -1,8 +1,5 @@
-import { useId, useMemo } from "react";
-
-import { CUSTOM_PIECE_SVGS } from "./custom-piece-svg-map";
-
 const PIECE_CODES = ["K", "Q", "R", "B", "N", "P"] as const;
+const PIECE_SCALE = 1.13;
 
 type PieceCode = `w${typeof PIECE_CODES[number]}` | `b${typeof PIECE_CODES[number]}`;
 
@@ -12,69 +9,19 @@ type PieceProps = {
   svgStyle?: React.CSSProperties;
 };
 
-const PREPARED_CUSTOM_PIECE_SVGS = Object.fromEntries(
-  Object.entries(CUSTOM_PIECE_SVGS).map(([code, svg]) => [
-    code,
-    svg.replace(
-      "<svg ",
-      '<svg preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:100%;overflow:visible" ',
-    ),
-  ]),
-) as Record<PieceCode, string>;
-
 const PIECE_LAYOUT: Record<string, { width: string; height: string }> = {
-  P: { width: "60%", height: "85%" },
-  R: { width: "80%", height: "84%" },
-  N: { width: "88%", height: "88%" },
-  B: { width: "88%", height: "90%" },
-  Q: { width: "90%", height: "88%" },
-  K: { width: "88%", height: "92%" },
-  default: { width: "88%", height: "88%" },
+  P: { width: "49%", height: "70%" },
+  R: { width: "68%", height: "72%" },
+  N: { width: "74%", height: "74%" },
+  B: { width: "74%", height: "76%" },
+  Q: { width: "76%", height: "74%" },
+  K: { width: "74%", height: "78%" },
+  default: { width: "74%", height: "74%" },
 };
 
-function namespaceSvgMarkup(svgMarkup: string, prefix: string) {
-  const idMap = new Map<string, string>();
-
-  const withScopedIds = svgMarkup.replace(/\sid="([^"]+)"/g, (fullMatch, idValue) => {
-    const scopedId = `${prefix}-${idValue}`;
-    idMap.set(idValue, scopedId);
-    return fullMatch.replace(`"${idValue}"`, `"${scopedId}"`);
-  });
-
-  const replaceIdReference = (_fullMatch: string, idValue: string) => {
-    const scopedId = idMap.get(idValue) ?? `${prefix}-${idValue}`;
-    return `url(#${scopedId})`;
-  };
-
-  const replaceHrefReference = (attribute: "href" | "xlink:href") =>
-    new RegExp(`${attribute}="#([^"]+)"`, "g");
-
-  return withScopedIds
-    .replace(/url\(#([^)]+)\)/g, replaceIdReference)
-    .replace(replaceHrefReference("xlink:href"), (_fullMatch, idValue) => {
-      const scopedId = idMap.get(idValue) ?? `${prefix}-${idValue}`;
-      return `xlink:href="#${scopedId}"`;
-    })
-    .replace(replaceHrefReference("href"), (_fullMatch, idValue) => {
-      const scopedId = idMap.get(idValue) ?? `${prefix}-${idValue}`;
-      return `href="#${scopedId}"`;
-    });
-}
-
-function CustomPieceRenderer({
-  code,
-  props,
-}: {
-  code: PieceCode;
-  props?: PieceProps;
-}) {
-  const pieceInstanceId = useId().replace(/[:]/g, "");
+function renderPiece(code: PieceCode, props?: PieceProps) {
   const pieceType = code[1];
   const layout = PIECE_LAYOUT[pieceType] ?? PIECE_LAYOUT.default;
-  const svgMarkup = useMemo(
-    () => namespaceSvgMarkup(PREPARED_CUSTOM_PIECE_SVGS[code], `${code}-${pieceInstanceId}`),
-    [code, pieceInstanceId],
-  );
 
   return (
     <div
@@ -85,7 +32,6 @@ function CustomPieceRenderer({
         display: "grid",
         placeItems: "center",
         lineHeight: 0,
-        overflow: "visible",
         pointerEvents: "none",
         userSelect: "none",
       }}
@@ -94,12 +40,27 @@ function CustomPieceRenderer({
         style={{
           width: layout.width,
           height: layout.height,
-          display: "block",
-          lineHeight: 0,
-          overflow: "visible",
+          display: "grid",
+          placeItems: "center",
+          transform: `scale(${PIECE_SCALE})`,
+          transformOrigin: "center",
         }}
-        dangerouslySetInnerHTML={{ __html: svgMarkup }}
-      />
+      >
+        <img
+          src={`/pieces/${code}.svg`}
+          alt={code}
+          draggable={false}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "block",
+            objectFit: "contain",
+            objectPosition: "center",
+            pointerEvents: "none",
+            userSelect: "none",
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -107,28 +68,6 @@ function CustomPieceRenderer({
 export const customPieces: Record<string, (props?: PieceProps) => React.JSX.Element> = {};
 
 for (const code of PIECE_CODES) {
-  customPieces[`w${code}`] = (props) =>
-    (
-      <CustomPieceRenderer
-        code={`w${code}`}
-        props={{
-          ...props,
-          svgStyle: {
-            ...props?.svgStyle,
-          },
-        }}
-      />
-    );
-  customPieces[`b${code}`] = (props) =>
-    (
-      <CustomPieceRenderer
-        code={`b${code}`}
-        props={{
-          ...props,
-          svgStyle: {
-            ...props?.svgStyle,
-          },
-        }}
-      />
-    );
+  customPieces[`w${code}`] = (props) => renderPiece(`w${code}`, props);
+  customPieces[`b${code}`] = (props) => renderPiece(`b${code}`, props);
 }
