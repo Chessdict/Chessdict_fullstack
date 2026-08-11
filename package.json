@@ -17,7 +17,14 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "stress": "node stress-test/run-all.mjs",
+    "stress:connections": "node stress-test/01-connections.mjs",
+    "stress:gameplay": "node stress-test/02-gameplay.mjs",
+    "stress:flood": "node stress-test/03-event-flood.mjs",
+    "stress:reconnect": "node stress-test/04-reconnect-storm.mjs",
+    "stress:spectators": "node stress-test/05-spectators.mjs",
+    "stress:full": "node stress-test/06-full-load.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
