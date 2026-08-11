@@ -1,0 +1,39 @@
+<mxfile host="app.diagrams.net" agent="Chessdict-Architecture" version="24.7.0">
+  <diagram name="On-chain Settlement" id="settlement">
+    <mxGraphModel dx="1300" dy="820" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="980" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="On-chain Settlement — transactional outbox + idempotent worker (never lose a payout)" style="text;html=1;align=center;fontSize=16;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="300" y="12" width="900" height="30" as="geometry" /></mxCell>
+
+        <mxCell id="eng" value="game-engine-svc&#10;staked game ends,&#10;winner known" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="60" y="110" width="200" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="outbox" value="Postgres — settlement_outbox&#10;{gameId, onChainGameId, winner,&#10;isDraw, status, txHash}&#10;written in SAME tx as game finalize" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;boundedLbl=1;backgroundOutline=1;align=left;spacingLeft=12;" vertex="1" parent="1"><mxGeometry x="340" y="90" width="280" height="130" as="geometry" /></mxCell>
+
+        <mxCell id="queue" value="BullMQ settlement queue&#10;idempotencyKey = gameId&#10;concurrency = 1 per signer&#10;retry + exponential backoff" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="700" y="90" width="240" height="110" as="geometry" /></mxCell>
+
+        <mxCell id="worker" value="settlement-worker&#10;• load outbox (skip if SETTLED)&#10;• acquire signer-nonce lock (Redis)&#10;• build tx w/ managed nonce + EIP-1559 gas&#10;• on stuck tx: bump &amp; replace (same nonce)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="1010" y="80" width="320" height="130" as="geometry" /></mxCell>
+
+        <mxCell id="signer" value="Signer / redeemer key&#10;in KMS / secrets manager&#10;(NOT on web or gateway)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="1010" y="270" width="320" height="80" as="geometry" /></mxCell>
+
+        <mxCell id="chain" value="Chessdict.sol&#10;setWinnerSingle(id, winner, isDraw)&#10;onlyRedeemer · idempotent per game&#10;SafeERC20 payout" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="1010" y="400" width="320" height="100" as="geometry" /></mxCell>
+
+        <mxCell id="recon" value="reconciliation job (periodic)&#10;compare on-chain vs outbox&#10;re-enqueue stale PENDING&#10;emit settlement_pending metric → alert" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="340" y="300" width="320" height="110" as="geometry" /></mxCell>
+
+        <mxCell id="dlq" value="DEAD_LETTER + page on-call&#10;(after N failed retries)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="700" y="300" width="240" height="80" as="geometry" /></mxCell>
+
+        <mxCell id="e1" value="INSERT PENDING (same tx)" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="eng" target="outbox"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" value="enqueue settle{gameId}" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="outbox" target="queue"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" style="endArrow=block;html=1;" edge="1" parent="1" source="queue" target="worker"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" value="sign" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="worker" target="signer"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" value="send tx" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="signer" target="chain"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" value="receipt → UPDATE SETTLED, txHash" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="worker" target="outbox"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e7" value="scan PENDING" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="recon" target="outbox"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e8" value="re-enqueue" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="recon" target="queue"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e9" value="give up" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="queue" target="dlq"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="note" value="Guarantee: the outbox row (Postgres) is the durable 'payout owed' truth. Even if Redis is wiped or RPC is down for hours, reconciliation re-drives it. A payout can be delayed but never lost, and never sent twice (app + tx + contract idempotency)." style="text;html=1;align=left;verticalAlign=top;fontSize=11;fillColor=#f5f5f5;strokeColor=#cccccc;spacing=6;" vertex="1" parent="1"><mxGeometry x="60" y="540" width="1270" height="60" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

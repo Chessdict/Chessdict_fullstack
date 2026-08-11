@@ -1,0 +1,113 @@
+<mxfile host="app.diagrams.net" agent="Chessdict-Architecture" version="24.7.0">
+  <diagram name="Container Architecture" id="container-architecture">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Chessdict — Target Container Architecture (C4 Level 2). Every box scales horizontally." style="text;html=1;align=center;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="380" y="15" width="840" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Clients -->
+        <mxCell id="clients" value="Clients (browser + wallet)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;verticalAlign=top;spacingTop=8" vertex="1" parent="1">
+          <mxGeometry x="60" y="90" width="220" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="clients2" value="Next.js UI · Zustand · TanStack Query&#10;socket.io-client · wagmi/viem" style="text;html=1;align=left;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="130" width="200" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Edge plane -->
+        <mxCell id="edge" value="EDGE PLANE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;fontStyle=1;spacingTop=6;dashed=1;fillOpacity=20" vertex="1" parent="1">
+          <mxGeometry x="340" y="80" width="300" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="cdn" value="CDN&#10;(static/_next assets, images)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="360" y="115" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="lb" value="Load Balancer / Ingress&#10;TLS termination · sticky WS (ip/cookie)&#10;WAF · global rate-limit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="360" y="195" width="260" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- App tier -->
+        <mxCell id="apptier" value="STATELESS APP TIER (autoscaled)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontStyle=1;spacingTop=6;fillOpacity=20" vertex="1" parent="1">
+          <mxGeometry x="700" y="80" width="340" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="web" value="web (Next.js)&#10;RSC/SSR · route handlers/REST&#10;server actions · auth (SIWE)&#10;replicas: 3–4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="720" y="115" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="gw" value="realtime-gateway (Socket.IO)&#10;transport only, NO game logic&#10;Redis Streams adapter · sticky&#10;replicas: 2–3 (→5 burst)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="720" y="205" width="300" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Workers -->
+        <mxCell id="workers" value="WORKERS (stateless, queue/stream driven, autoscaled)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontStyle=1;spacingTop=6;fillOpacity=20" vertex="1" parent="1">
+          <mxGeometry x="700" y="330" width="820" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="mm" value="matchmaking-svc&#10;Redis ZSET pools + Lua pop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="720" y="370" width="185" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="eng" value="game-engine-svc&#10;chess.js validate + clock&#10;authoritative state in Redis" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="925" y="370" width="185" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sch" value="scheduler&#10;clock timeouts · abort ·&#10;disconnect grace · expiry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="370" width="185" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="settle" value="settlement-worker&#10;on-chain setWinner (idempotent,&#10;nonce-serialized, retry/backoff)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1335" y="370" width="165" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="rat" value="rating-worker&#10;Glicko-2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="720" y="465" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="persist" value="persistence-worker&#10;write finished games → PG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="925" y="465" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="notify" value="notify-worker&#10;in-app / email / push" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="465" width="185" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="tourn" value="tournament-svc&#10;bracket/round-robin engine" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1335" y="465" width="165" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Backing services -->
+        <mxCell id="backing" value="BACKING SERVICES (stateful)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontStyle=1;spacingTop=6;fillOpacity=20" vertex="1" parent="1">
+          <mxGeometry x="340" y="600" width="1180" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="redis" value="Redis / Dragonfly&#10;&#10;live game state (hash)&#10;presence · matchmaking ZSETs&#10;pub/sub · BullMQ queues · locks&#10;1 primary + replica → cluster" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;boundedLbl=1;backgroundOutline=1;" vertex="1" parent="1">
+          <mxGeometry x="380" y="640" width="220" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="pg" value="PostgreSQL (Prisma)&#10;&#10;users · finished games&#10;ratings · tournaments&#10;1 primary + read replicas" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;boundedLbl=1;backgroundOutline=1;" vertex="1" parent="1">
+          <mxGeometry x="660" y="640" width="220" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="obs" value="Observability&#10;&#10;OpenTelemetry Collector&#10;Prometheus · Loki · Tempo&#10;Grafana · Sentry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="940" y="655" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="chainbox" value="EVM RPC&#10;Chessdict.sol" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="655" width="260" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="c-cdn" value="assets" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="clients" target="cdn"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c-lb" value="HTTPS/WSS" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="clients" target="lb"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="lb-web" value="HTTP" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="lb" target="web"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="lb-gw" value="WS (sticky)" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="lb" target="gw"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="web-pg" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="web" target="pg"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="web-redis" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="web" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="gw-redis" value="pub/sub + enqueue" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="gw" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="mm-redis" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="mm" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eng-redis" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="eng" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="sch-redis" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="sch" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eng-pg" value="game-end persist (via queue)" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="persist" target="pg"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="rat-pg" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="rat" target="pg"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="settle-chain" value="setWinnerSingle" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="settle" target="chainbox"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="settle-redis" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="settle" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="rat-redis" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="rat" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="notify-redis" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="notify" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="tourn-redis" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="tourn" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="legendc" value="Solid = synchronous / stream   Dashed = async via BullMQ queue   Cylinders = durable stores&#10;All services export OTLP traces/metrics/logs to the Observability stack." style="text;html=1;align=left;verticalAlign=top;fontSize=11;fillColor=#f5f5f5;strokeColor=#cccccc;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="60" y="830" width="900" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

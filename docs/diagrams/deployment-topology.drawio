@@ -1,0 +1,47 @@
+<mxfile host="app.diagrams.net" agent="Chessdict-Architecture" version="24.7.0">
+  <diagram name="Deployment Topology" id="deployment-topology">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Deployment Topology — Fly.io/Railway containers + Neon + Upstash/Dragonfly (target 10k CCU, 20k burst)" style="text;html=1;align=center;fontSize=16;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="280" y="12" width="1000" height="30" as="geometry" /></mxCell>
+
+        <mxCell id="users" value="Users worldwide (browser + wallet)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1"><mxGeometry x="620" y="70" width="320" height="50" as="geometry" /></mxCell>
+        <mxCell id="cf" value="Cloudflare — CDN · WAF · edge rate-limit · TLS&#10;caches _next/static, images, public pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="580" y="150" width="400" height="60" as="geometry" /></mxCell>
+        <mxCell id="lb" value="Platform Load Balancer / Ingress — TLS · STICKY WebSocket" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="560" y="240" width="440" height="50" as="geometry" /></mxCell>
+
+        <mxCell id="region" value="PRIMARY REGION (private network) — all services + Redis + Postgres primary colocated" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontStyle=1;spacingTop=6;fillOpacity=10;dashed=1" vertex="1" parent="1"><mxGeometry x="80" y="330" width="1440" height="640" as="geometry" /></mxCell>
+
+        <mxCell id="web" value="web ×3–4&#10;Next.js RSC/SSR/REST&#10;1 vCPU / 1 GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="120" y="380" width="200" height="90" as="geometry" /></mxCell>
+        <mxCell id="gw" value="realtime-gateway ×2–3 (→5 burst)&#10;Socket.IO · sticky · Streams adapter&#10;2 vCPU / 2 GB · high fd limit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="360" y="380" width="260" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="eng" value="game-engine ×2&#10;2 vCPU / 2 GB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="120" y="500" width="150" height="70" as="geometry" /></mxCell>
+        <mxCell id="mm" value="matchmaking ×2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="290" y="500" width="150" height="70" as="geometry" /></mxCell>
+        <mxCell id="sch" value="scheduler ×2 (HA)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="460" y="500" width="160" height="70" as="geometry" /></mxCell>
+        <mxCell id="work" value="workers ×2 each&#10;rating · persist · notify · settlement · tournament" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="120" y="600" width="500" height="70" as="geometry" /></mxCell>
+
+        <mxCell id="redis" value="Redis / Dragonfly&#10;primary + replica&#10;(Upstash → dedicated)&#10;live state · queues · locks · pub/sub" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;boundedLbl=1;backgroundOutline=1;" vertex="1" parent="1"><mxGeometry x="720" y="380" width="240" height="150" as="geometry" /></mxCell>
+        <mxCell id="pool" value="PgBouncer / pooler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="1020" y="380" width="200" height="50" as="geometry" /></mxCell>
+        <mxCell id="pg" value="Postgres primary (Neon)&#10;writes" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;boundedLbl=1;backgroundOutline=1;" vertex="1" parent="1"><mxGeometry x="1020" y="460" width="200" height="90" as="geometry" /></mxCell>
+        <mxCell id="rr" value="read replicas ×1–2" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;boundedLbl=1;backgroundOutline=1;" vertex="1" parent="1"><mxGeometry x="1280" y="460" width="180" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="kms" value="KMS / Secrets Manager&#10;redeemer key (worker only)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="720" y="600" width="240" height="70" as="geometry" /></mxCell>
+        <mxCell id="rpc" value="EVM RPC (Alchemy/Infura)&#10;Chessdict.sol" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="1020" y="600" width="240" height="70" as="geometry" /></mxCell>
+        <mxCell id="obs" value="Observability — Grafana Cloud / LGTM + Sentry (OTLP from every service)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="120" y="720" width="1340" height="50" as="geometry" /></mxCell>
+
+        <mxCell id="ea" style="endArrow=block;html=1;" edge="1" parent="1" source="users" target="cf"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eb" style="endArrow=block;html=1;" edge="1" parent="1" source="cf" target="lb"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ec" value="HTTP" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="lb" target="web"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ed" value="WSS sticky" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="lb" target="gw"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee" style="endArrow=block;startArrow=block;html=1;" edge="1" parent="1" source="gw" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ef" style="endArrow=block;startArrow=block;html=1;" edge="1" parent="1" source="eng" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eg" style="endArrow=block;startArrow=block;html=1;" edge="1" parent="1" source="work" target="redis"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="eh" style="endArrow=block;html=1;" edge="1" parent="1" source="web" target="pool"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ei" style="endArrow=block;html=1;" edge="1" parent="1" source="pool" target="pg"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ej" style="endArrow=block;html=1;dashed=1;" edge="1" parent="1" source="pg" target="rr"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ek" value="sign" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="work" target="kms"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="el" value="settle tx" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="work" target="rpc"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

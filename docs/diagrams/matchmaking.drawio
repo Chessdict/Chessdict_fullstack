@@ -1,0 +1,32 @@
+<mxfile host="app.diagrams.net" agent="Chessdict-Architecture" version="24.7.0">
+  <diagram name="Matchmaking" id="matchmaking">
+    <mxGraphModel dx="1300" dy="820" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Matchmaking — Redis sorted-set pools + atomic Lua pop (rating-banded, horizontally scalable)" style="text;html=1;align=center;fontSize=16;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="260" y="15" width="980" height="30" as="geometry" /></mxCell>
+
+        <mxCell id="p1" value="Player enqueues&#10;joinQueue{mode,tc,rating,stake?}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="60" y="120" width="200" height="70" as="geometry" /></mxCell>
+        <mxCell id="gw" value="gateway&#10;(Zod validate + authz)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="60" y="230" width="200" height="60" as="geometry" /></mxCell>
+
+        <mxCell id="pools" value="Redis Sorted-Set Pools&#10;&#10;mm:casual:1   mm:casual:2&#10;mm:casual:3   mm:casual:10&#10;mm:staked:{token}:{tc}&#10;&#10;score = player rating&#10;member = userId&#10;mm:meta:{userId} = {socket, enqueuedAt, band, stake}" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;boundedLbl=1;backgroundOutline=1;align=left;spacingLeft=14;" vertex="1" parent="1"><mxGeometry x="360" y="110" width="320" height="230" as="geometry" /></mxCell>
+
+        <mxCell id="mm1" value="matchmaking-svc #1&#10;• ticker ~1s: widen bands&#10;• ZRANGEBYSCORE rating±band&#10;• Lua: atomic ZREM both" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="780" y="110" width="240" height="100" as="geometry" /></mxCell>
+        <mxCell id="mm2" value="matchmaking-svc #2&#10;(HA — Lua pop is safe under concurrency)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="780" y="230" width="240" height="80" as="geometry" /></mxCell>
+
+        <mxCell id="game" value="Create game hash in Redis&#10;game:{id} = {fen,players,clock,state}&#10;publish matchFound → both sockets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="1080" y="110" width="290" height="100" as="geometry" /></mxCell>
+
+        <mxCell id="stake" value="Staked only: state machine&#10;AWAITING_STAKE → STAKE_READY → LIVE | CANCELLED&#10;deadlines in Redis, fired by scheduler&#10;createGameSingle on-chain (see settlement doc)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="1080" y="250" width="290" height="110" as="geometry" /></mxCell>
+
+        <mxCell id="e1" style="endArrow=block;html=1;" edge="1" parent="1" source="p1" target="gw"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" value="ZADD + HSET" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="gw" target="pools"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" value="range query + atomic pop" style="endArrow=block;startArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="pools" target="mm1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" style="endArrow=block;startArrow=block;html=1;" edge="1" parent="1" source="pools" target="mm2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" value="matched pair" style="endArrow=block;html=1;fontSize=10;" edge="1" parent="1" source="mm1" target="game"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" value="if staked" style="endArrow=block;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="game" target="stake"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="note" value="Old design: O(n²) nested scan over in-memory arrays in ONE process → single-instance, degrades with pool size.&#10;New design: O(log n) sorted-set range queries + atomic Lua pop → many instances, fair rating-banded pairing, no double-match." style="text;html=1;align=left;verticalAlign=top;fontSize=11;fillColor=#f5f5f5;strokeColor=#cccccc;spacing=6;" vertex="1" parent="1"><mxGeometry x="60" y="420" width="1310" height="60" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

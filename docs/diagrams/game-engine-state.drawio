@@ -1,0 +1,41 @@
+<mxfile host="app.diagrams.net" agent="Chessdict-Architecture" version="24.7.0">
+  <diagram name="Game Engine and Clock" id="game-engine-state">
+    <mxGraphModel dx="1300" dy="820" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="1050" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Game Engine — authoritative move validation + deadline-based clock (sequence)" style="text;html=1;align=center;fontSize=16;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="330" y="12" width="840" height="30" as="geometry" /></mxCell>
+
+        <!-- lifelines -->
+        <mxCell id="lc" value="Client" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1"><mxGeometry x="80" y="70" width="140" height="40" as="geometry" /></mxCell>
+        <mxCell id="lgw" value="gateway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="1"><mxGeometry x="320" y="70" width="140" height="40" as="geometry" /></mxCell>
+        <mxCell id="leng" value="game-engine-svc" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1" vertex="1" parent="1"><mxGeometry x="560" y="70" width="150" height="40" as="geometry" /></mxCell>
+        <mxCell id="lr" value="Redis (game:{id})" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;backgroundOutline=1;boundedLbl=1;" vertex="1" parent="1"><mxGeometry x="820" y="66" width="150" height="52" as="geometry" /></mxCell>
+        <mxCell id="lsch" value="scheduler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1" vertex="1" parent="1"><mxGeometry x="1080" y="70" width="140" height="40" as="geometry" /></mxCell>
+
+        <mxCell id="dl1" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="lc"><mxGeometry relative="1" as="geometry"><mxPoint x="150" y="960" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="dl2" style="endArrow=none;dashed=1;html=1;strokeColor=#82b366;" edge="1" parent="1" source="lgw"><mxGeometry relative="1" as="geometry"><mxPoint x="390" y="960" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="dl3" style="endArrow=none;dashed=1;html=1;strokeColor=#9673a6;" edge="1" parent="1" source="leng"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="960" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="dl4" style="endArrow=none;dashed=1;html=1;strokeColor=#d6b656;" edge="1" parent="1" source="lr"><mxGeometry relative="1" as="geometry"><mxPoint x="895" y="960" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="dl5" style="endArrow=none;dashed=1;html=1;strokeColor=#9673a6;" edge="1" parent="1" source="lsch"><mxGeometry relative="1" as="geometry"><mxPoint x="1150" y="960" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="m1" value="1. movePiece{from,to,promo}" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="150" y="150" as="sourcePoint" /><mxPoint x="390" y="150" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m2" value="2. authz (player in game?) + relay via stream" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="390" y="200" as="sourcePoint" /><mxPoint x="635" y="200" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m3" value="3. Lua: HGETALL fen+moves (lock)" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="250" as="sourcePoint" /><mxPoint x="895" y="250" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m4" value="4. chess.js: legal? whose turn? deduct clock" style="html=1;fontSize=11;align=left;" vertex="1" parent="1"><mxGeometry x="500" y="290" width="300" height="30" as="geometry" /></mxCell>
+        <mxCell id="m5" value="5. HSET fen,turn,whiteMs/blackMs,deadlineTs; RPUSH move" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="340" as="sourcePoint" /><mxPoint x="895" y="340" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m6" value="6. schedule clock-timeout @ deadlineTs (replace prior)" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="390" as="sourcePoint" /><mxPoint x="1150" y="390" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m7" value="7. PUBLISH opponentMove + timeSync" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="440" as="sourcePoint" /><mxPoint x="895" y="440" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m8" value="8. fan-out opponentMove + authoritative timeSync" style="endArrow=block;html=1;fontSize=11;dashed=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="895" y="480" as="sourcePoint" /><mxPoint x="150" y="480" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="alt" value="END CONDITION (mate / stalemate / insufficient / 50-move / repetition / flag-fall)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;dashed=1;verticalAlign=top;fontStyle=1;fontColor=#b85450;" vertex="1" parent="1"><mxGeometry x="470" y="540" width="700" height="150" as="geometry" /></mxCell>
+        <mxCell id="m9" value="9. HSET status=COMPLETED/DRAW; enqueue persist + rating + settle (idempotent)" style="endArrow=block;html=1;fontSize=11;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="590" as="sourcePoint" /><mxPoint x="895" y="590" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="m10" value="10. PUBLISH gameOver → clients" style="endArrow=block;html=1;fontSize=11;dashed=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="635" y="650" as="sourcePoint" /><mxPoint x="150" y="650" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="m11" value="ALT: illegal / not your turn → PUBLISH moveRejected → client rolls back" style="html=1;fontSize=11;align=left;fontColor=#b85450;" vertex="1" parent="1"><mxGeometry x="120" y="720" width="700" height="30" as="geometry" /></mxCell>
+
+        <mxCell id="note" value="Clock rule: remaining[mover] -= (now - lastMoveTs); deadlineTs = now + remaining[opponent]. Display counts down to deadlineTs; timeSync corrects drift.&#10;Deadlines are absolute timestamps in Redis → a redeploy/crash loses NO clocks (scheduler re-reads pending deadlines)." style="text;html=1;align=left;verticalAlign=top;fontSize=11;fillColor=#f5f5f5;strokeColor=#cccccc;spacing=6;" vertex="1" parent="1"><mxGeometry x="80" y="800" width="1140" height="60" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
